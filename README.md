@@ -117,29 +117,43 @@ Una cartella per grado, con esattamente questi nomi: `M`, `NM`, `VG+`, `VG`,
 copertina.
 
 In ogni cartella metti **una foto del retro per disco**, numerata in modo
-progressivo. Il numero è lo stesso che scrivi sulla busta del disco. Se un
-disco è difficile, aggiungi una **seconda foto facoltativa** con lo stesso nome
-più `_2`: viene usata solo se la prima non basta.
+progressivo. Il numero è lo stesso che scrivi sulla busta del disco. Le foto
+che iniziano con lo stesso numero sono lo stesso disco:
+
+| Nome della foto | Significato |
+| --- | --- |
+| `0001.jpg` | disco 0001, 1 copia |
+| `0002_x3.jpg` | disco 0002, **3 copie** dello stesso grado |
+| `0004_2.jpg` | **seconda foto facoltativa** del disco 0004 (es. l'etichetta), usata solo se la prima non basta |
+| `0002_x3_2.jpg` oppure `0002_2.jpg` | seconda foto del disco 0002 (la quantità basta scriverla una volta) |
 
 ```
 Dischi/
   NM/
     0001.jpg
-    0002.jpg
+    0002_x3.jpg     ← 3 copie NM
   VG+/
     0003.jpg
     0004.jpg
-    0004_2.jpg      ← seconda foto facoltativa del disco 0004
+    0004_2.jpg      ← seconda foto del disco 0004
   VG/
     0005.heic       ← vanno bene anche le foto HEIC dell'iPhone
+    0006.jpg        ← un'altra copia dello stesso disco ma VG: foto separata, numero suo
 ```
 
-- I numeri non devono ripetersi tra cartelle diverse. Se succede, lo script si
-  ferma subito e ti dice quali sono.
-- Anche una cartella con un nome che non è un grado blocca l'avvio.
-- Il numero della foto (senza estensione) diventa l'`external_id`
-  dell'annuncio. È un campo privato su Discogs: quando un disco si vende, ti
-  dice quale busta prendere.
+- Copie di gradi diversi vanno come foto separate, ognuna con il proprio
+  numero, nella cartella del proprio grado.
+- Il numero della foto, senza `_x3` e senza estensione, diventa
+  l'`external_id` dell'annuncio. È un campo privato su Discogs: quando un disco
+  si vende, ti dice quale busta prendere.
+- **Controlli all'avvio.** Lo script si ferma subito, prima di fare qualsiasi
+  cosa, e ti elenca i problemi se trova:
+  - un nome che non segue lo schema (es. `IMG_1234.jpg`);
+  - lo stesso numero in due cartelle;
+  - due foto principali per lo stesso numero (es. `0002.jpg` e `0002_x3.jpg`);
+  - quantità diverse per lo stesso disco;
+  - una seconda foto senza foto principale;
+  - una cartella che non è un grado.
 
 ### Cosa fa, disco per disco
 
@@ -157,10 +171,12 @@ Dischi/
    release, quindi le altre copie della stessa release riusano il prezzo senza
    nuove chiamate.
 6. **Uscita:**
-   - trovato **in locale** → riga nel CSV di inventario, con al massimo 1.000
-     dischi per file;
+   - trovato **in locale** → **una riga** nel CSV di inventario, con
+     `quantity` = numero di copie;
    - trovato **solo via API** → annuncio creato direttamente via API
-     (`For Sale`).
+     (`For Sale`). L'API di Discogs non ha un campo quantità: con più copie lo
+     script crea un annuncio per copia, con external_id `0002-1`, `0002-2`,
+     `0002-3`. Con una sola copia l'external_id resta `0002`.
 
 Nessun modello AI e nessun servizio a pagamento: barcode e OCR sono librerie
 gratuite che girano sul Mac, e l'API di Discogs è gratuita con il token
@@ -234,18 +250,20 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --ricarico 15
 impone il limite dell'API. Con 10.000 dischi conta diverse ore. Puoi
 interromperlo quando vuoi con **Ctrl+C**: rilanciando lo stesso comando
 riparte da dove era. I dischi già fatti non vengono rianalizzati e gli annunci
-già pubblicati non vengono mai ripubblicati.
+già pubblicati non vengono mai ripubblicati. Se si interrompe a metà delle
+copie di un disco (es. dopo `0002-1`), alla ripresa crea solo quelle mancanti.
 
 ### I risultati (cartella `risultati/`)
 
 | File | Cosa contiene |
 | --- | --- |
-| `inventario_001.csv`, `inventario_002.csv`… | Dischi trovati in locale, al massimo 1.000 per file, da caricare su Discogs |
-| `annunci_pubblicati_api.csv` | Annunci pubblicati via API, con link |
-| `da_controllare.csv` | Dischi da sistemare a mano: nome della foto, motivo e candidati |
+| `inventario_001.csv`, `inventario_002.csv`… | Dischi trovati in locale, al massimo 1.000 dischi per file (le copie contano), da caricare su Discogs |
+| `annunci_pubblicati_api.csv` | Annunci pubblicati via API, uno per copia, con numero del disco e link |
+| `da_controllare.csv` | Dischi da sistemare a mano: numero, foto, cartella, quantità, motivo e candidati |
 
 I CSV di inventario hanno le colonne `release_id`, `price`, `media_condition`,
-`sleeve_condition`, `status` (`For Sale`) ed `external_id`.
+`sleeve_condition`, `quantity`, `external_id` e `status` (`FOR_SALE`, il
+valore indicato dalla guida di Discogs per il caricamento CSV).
 
 - Un disco scritto in un file **resta sempre in quel file**, e i dischi delle
   esecuzioni successive vanno in file nuovi.
@@ -255,9 +273,12 @@ Si caricano dalla pagina di caricamento dell'inventario di Discogs
 ([discogs.com/sell/upload](https://www.discogs.com/sell/upload)).
 
 > **Al primo caricamento prova con un file piccolo** (per esempio quello
-> prodotto con `--limite 20`). I nomi delle colonne seguono la documentazione
-> di Discogs ma non ho potuto provarli con un caricamento reale. Se Discogs
-> segnala una colonna non valida, dimmelo e la correggo.
+> prodotto con `--limite 20`), che contenga anche un disco con più copie. Le
+> colonne e il valore `FOR_SALE` seguono la guida
+> [Import and Export Your Inventory (CSV)](https://support.discogs.com/hc/en-us/articles/360007622373-Import-and-Export-Your-Inventory-CSV),
+> ma non ho potuto provarli con un caricamento reale. Controlla che la
+> quantità risulti giusta. Se Discogs segnala una colonna non valida, dimmelo e
+> la correggo.
 
 Motivi possibili in `da_controllare.csv`:
 
@@ -270,8 +291,12 @@ Motivi possibili in `da_controllare.csv`:
 - **nessun prezzo suggerito da Discogs**.
 - **pubblicazione non confermata**: lo script si è interrotto proprio durante
   la pubblicazione e non è riuscito a verificare se l'annuncio esiste.
-  Controlla su Discogs cercando l'`external_id`.
+  Controlla su Discogs cercando l'`external_id` (es. `0002-2`).
 - **Discogs ha rifiutato l'annuncio**, con il messaggio di Discogs.
+- **quantità cambiata dopo la messa in vendita**: hai rinominato, per esempio,
+  `0002_x3` in `0002_x4` dopo che il disco era già nel CSV o pubblicato. Lo
+  script non modifica gli annunci esistenti: aggiorna la quantità a mano su
+  Discogs.
 
 Hai aggiunto una foto `_2` a un disco finito da controllare? Al prossimo lancio
 viene rianalizzato da solo. Per rianalizzare tutti i dischi da controllare:
