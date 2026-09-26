@@ -175,8 +175,8 @@ Dischi/
      `quantity` = numero di copie;
    - trovato **solo via API** → annuncio creato direttamente via API
      (`For Sale`). L'API di Discogs non ha un campo quantità: con più copie lo
-     script crea un annuncio per copia, con external_id `0002-1`, `0002-2`,
-     `0002-3`. Con una sola copia l'external_id resta `0002`.
+     script crea un annuncio per copia, con external_id sempre numerato:
+     `0002-1`, `0002-2`, `0002-3`. Anche con una copia sola diventa `0002-1`.
 
 Nessun modello AI e nessun servizio a pagamento: barcode e OCR sono librerie
 gratuite che girano sul Mac, e l'API di Discogs è gratuita con il token

@@ -16,8 +16,8 @@ Per ogni disco:
   4. chiede il prezzo suggerito a Discogs e aggiunge il ricarico;
   5. se trovato in locale -> una riga nel CSV di caricamento inventario con
      quantity = N (max 1.000 dischi per file); se trovato solo via API ->
-     annuncio via API. L'API non ha un campo quantità: con N copie crea N
-     annunci con external_id 0002-1, 0002-2...
+     annuncio via API. L'API non ha un campo quantità: crea un annuncio per
+     copia con external_id numerato 0002-1, 0002-2... (anche con una copia sola)
 
 Tutto lo stato è salvato in data/vendita_stato.sqlite: se lo script si
 interrompe, rilanciando lo stesso comando riparte da dove era, senza annunci doppi.
@@ -105,9 +105,7 @@ class Disc:
     quantity: int = 1         # copie dello stesso grado (_xN nel nome)
 
     def listing_ids(self):
-        """external_id degli annunci via API: '0002' con una copia, '0002-1'... con più copie."""
-        if self.quantity == 1:
-            return [self.external_id]
+        """external_id degli annunci via API, sempre numerati: '0002-1', '0002-2'..."""
         return [f"{self.external_id}-{i}" for i in range(1, self.quantity + 1)]
 
     def fingerprint(self):
@@ -588,7 +586,7 @@ CREATE TABLE IF NOT EXISTS csv_righe (   -- dischi già assegnati a un file CSV
     quantita    INTEGER DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS annunci (     -- annunci creati via API, uno per copia
-    external_id TEXT PRIMARY KEY,   -- external_id dell'annuncio: 0002, oppure 0002-1, 0002-2...
+    external_id TEXT PRIMARY KEY,   -- external_id dell'annuncio: 0002-1, 0002-2...
     release_id  INTEGER,
     price       REAL,
     media       TEXT,
