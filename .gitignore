@@ -1,0 +1,14 @@
+# Database e dump di Discogs: sono enormi e si rigenerano con lo script
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite.new
+*.xml.gz
+*.xml.gz.part
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
