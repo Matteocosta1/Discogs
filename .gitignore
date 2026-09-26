@@ -1,4 +1,4 @@
-# Database e dump di Discogs: sono enormi e si rigenerano con lo script
+# Database, stato e dump di Discogs: sono enormi o personali e si rigenerano con gli script
 data/
 *.sqlite
 *.sqlite-journal
@@ -6,9 +6,16 @@ data/
 *.xml.gz
 *.xml.gz.part
 
+# Token di Discogs: MAI nella repository
+.env
+
+# Risultati generati da vendi.py
+risultati/
+
 # Python
 __pycache__/
 *.pyc
+.venv/
 
 # macOS
 .DS_Store

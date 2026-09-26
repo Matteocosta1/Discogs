@@ -50,6 +50,8 @@ FILE_URLS = [
 
 RELEASES_RE = re.compile(r"discogs_(\d{8})_releases\.xml\.gz")
 BATCH_SIZE = 5000
+# Aumentare quando cambia lo schema: un database più vecchio viene reimportato.
+SCHEMA_VERSION = 2
 
 
 # --------------------------------------------------------------------------
@@ -194,6 +196,12 @@ CREATE TABLE releases (
     status       TEXT,
     data_quality TEXT
 );
+CREATE TABLE catnos (
+    release_id INTEGER NOT NULL,
+    label      TEXT,              -- nome dell'etichetta
+    catno      TEXT NOT NULL,     -- valore originale
+    catno_norm TEXT NOT NULL      -- solo cifre/lettere, maiuscole (per la ricerca)
+);
 CREATE TABLE barcodes (
     release_id   INTEGER NOT NULL,
     barcode      TEXT NOT NULL,   -- valore originale
@@ -206,10 +214,15 @@ INDEXES = """
 CREATE INDEX idx_barcodes_norm    ON barcodes(barcode_norm);
 CREATE INDEX idx_barcodes_release ON barcodes(release_id);
 CREATE INDEX idx_releases_master  ON releases(master_id);
+CREATE INDEX idx_catnos_norm      ON catnos(catno_norm);
 """
 
 
 def normalize_barcode(value):
+    return re.sub(r"[^0-9A-Za-z]", "", value or "").upper()
+
+
+def normalize_catno(value):
     return re.sub(r"[^0-9A-Za-z]", "", value or "").upper()
 
 
@@ -266,6 +279,14 @@ def parse_release(el):
         el.get("status", ""),
         text_of(el, "data_quality"),
     )
+    catno_rows = []
+    seen = set()
+    for l in labels:
+        norm = normalize_catno(l.get("catno"))
+        if norm and norm != "NONE" and (norm, l.get("name")) not in seen:
+            seen.add((norm, l.get("name")))
+            catno_rows.append((rid, l.get("name", ""), l.get("catno", ""), norm))
+
     barcode_rows = []
     for ident in el.findall("identifiers/identifier"):
         if ident.get("type") == "Barcode" and ident.get("value"):
@@ -273,7 +294,7 @@ def parse_release(el):
             norm = normalize_barcode(value)
             if norm:
                 barcode_rows.append((rid, value, norm, ident.get("description", "")))
-    return release_row, barcode_rows
+    return release_row, barcode_rows, catno_rows
 
 
 def build_database(dump_path, db_path, dump_date):
@@ -288,7 +309,7 @@ def build_database(dump_path, db_path, dump_date):
     con.executescript("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA cache_size=-200000;")
     con.executescript(SCHEMA)
 
-    releases, barcodes = [], []
+    releases, barcodes, catnos = [], [], []
     count = 0
     t0 = time.time()
     print(f"Importo {dump_path.name} (può richiedere qualche ora)...")
@@ -296,9 +317,11 @@ def build_database(dump_path, db_path, dump_date):
     def flush():
         con.executemany("INSERT OR REPLACE INTO releases VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", releases)
         con.executemany("INSERT INTO barcodes VALUES (?,?,?,?)", barcodes)
+        con.executemany("INSERT INTO catnos VALUES (?,?,?,?)", catnos)
         con.commit()
         releases.clear()
         barcodes.clear()
+        catnos.clear()
 
     with gzip.open(dump_path, "rb") as f:
         context = ET.iterparse(f, events=("start", "end"))
@@ -312,12 +335,13 @@ def build_database(dump_path, db_path, dump_date):
             if depth != 1 or el.tag != "release":
                 continue
             try:
-                rel, bcs = parse_release(el)
+                rel, bcs, cats = parse_release(el)
             except (TypeError, ValueError) as e:
                 print(f"\n  release saltata (id={el.get('id')}): {e}")
             else:
                 releases.append(rel)
                 barcodes.extend(bcs)
+                catnos.extend(cats)
                 count += 1
             root.clear()  # libera la memoria delle release già lette
             if len(releases) >= BATCH_SIZE:
@@ -333,6 +357,7 @@ def build_database(dump_path, db_path, dump_date):
         "INSERT INTO meta VALUES (?, ?)",
         [
             ("dump_date", dump_date),
+            ("schema_version", str(SCHEMA_VERSION)),
             ("dump_file", dump_path.name),
             ("release_count", str(count)),
             ("imported_at", dt.datetime.now().isoformat(timespec="seconds")),
@@ -346,15 +371,84 @@ def build_database(dump_path, db_path, dump_date):
     print(f"Database pronto: {db_path}")
 
 
-def current_dump_date(db_path):
+def read_meta(db_path):
     if not db_path.exists():
-        return None
+        return {}
     try:
         with sqlite3.connect(db_path) as con:
-            row = con.execute("SELECT value FROM meta WHERE key = 'dump_date'").fetchone()
-            return row[0] if row else None
+            return dict(con.execute("SELECT key, value FROM meta"))
     except sqlite3.Error:
+        return {}
+
+
+def current_dump_date(db_path):
+    """Data del dump nel database, o None se manca o ha uno schema vecchio."""
+    meta = read_meta(db_path)
+    if int(meta.get("schema_version", 1)) < SCHEMA_VERSION:
         return None
+    return meta.get("dump_date")
+
+
+# --------------------------------------------------------------------------
+# Ricerca (usata anche da vendi.py)
+# --------------------------------------------------------------------------
+
+def open_db(db_path=DEFAULT_DB):
+    """Apre il database in sola lettura, controllando che sia aggiornato allo schema attuale."""
+    db_path = Path(db_path).expanduser()
+    if not db_path.exists():
+        raise SystemExit(f"Database non trovato: {db_path}\nLancia prima: python3 discogs_dump.py aggiorna")
+    if int(read_meta(db_path).get("schema_version", 1)) < SCHEMA_VERSION:
+        raise SystemExit(
+            "Il database è in un formato vecchio (manca l'indice dei numeri di catalogo).\n"
+            "Aggiornalo con: python3 discogs_dump.py aggiorna"
+        )
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def barcode_variants(barcode):
+    """Varianti equivalenti di un barcode: UPC-A a 12 cifre ed EAN-13 con lo 0 davanti."""
+    norm = normalize_barcode(barcode)
+    variants = {norm}
+    if norm.isdigit() and len(norm) == 12:
+        variants.add("0" + norm)
+    if norm.isdigit() and len(norm) == 13 and norm.startswith("0"):
+        variants.add(norm[1:])
+    return sorted(v for v in variants if v)
+
+
+_RELEASE_COLS = "r.id, r.artists, r.title, r.labels, r.catno, r.formats, r.country, r.released"
+
+
+def search_by_barcode(con, barcode):
+    """Release con quel barcode: lista di dict (vuota se nessuna)."""
+    variants = barcode_variants(barcode)
+    if not variants:
+        return []
+    marks = ",".join("?" * len(variants))
+    rows = con.execute(
+        f"""SELECT DISTINCT {_RELEASE_COLS} FROM barcodes b JOIN releases r ON r.id = b.release_id
+            WHERE b.barcode_norm IN ({marks}) ORDER BY r.id""",
+        variants,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def search_by_catno(con, catno):
+    """Release con quel numero di catalogo: lista di dict con in più 'catno_label'
+    (l'etichetta associata a quel catno)."""
+    norm = normalize_catno(catno)
+    if not norm:
+        return []
+    rows = con.execute(
+        f"""SELECT {_RELEASE_COLS}, c.label AS catno_label
+            FROM catnos c JOIN releases r ON r.id = c.release_id
+            WHERE c.catno_norm = ? ORDER BY r.id""",
+        (norm,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # --------------------------------------------------------------------------
@@ -404,24 +498,23 @@ def cmd_cerca(args):
     db_path = Path(args.db).expanduser()
     if not db_path.exists():
         raise SystemExit("Database non trovato: lancia prima 'python3 discogs_dump.py aggiorna'.")
-    norm = normalize_barcode(args.barcode)
-    with sqlite3.connect(db_path) as con:
-        rows = con.execute(
-            """
-            SELECT DISTINCT r.id, r.artists, r.title, r.labels, r.formats, r.country, r.released
-            FROM barcodes b JOIN releases r ON r.id = b.release_id
-            WHERE b.barcode_norm = ?
-            ORDER BY r.id
-            """,
-            (norm,),
-        ).fetchall()
+    con = open_db(db_path)
+    if args.catno:
+        rows = search_by_catno(con, args.valore)
+    else:
+        rows = search_by_barcode(con, args.valore)
+    con.close()
     if not rows:
-        print(f"Nessuna release con barcode {args.barcode}")
+        print(f"Nessuna release con {'numero di catalogo' if args.catno else 'barcode'} {args.valore}")
         return
-    for rid, artists, title, labels, formats, country, released in rows:
-        print(f"{artists} - {title}")
-        print(f"  {labels} | {formats} | {country} {released}")
-        print(f"  https://www.discogs.com/release/{rid}")
+    seen = set()
+    for r in rows:
+        if r["id"] in seen:
+            continue
+        seen.add(r["id"])
+        print(f"{r['artists']} - {r['title']}")
+        print(f"  {r['labels']} | {r['formats']} | {r['country']} {r['released']}")
+        print(f"  https://www.discogs.com/release/{r['id']}")
 
 
 def cmd_info(args):
@@ -446,8 +539,9 @@ def main():
     p.add_argument("--keep-dump", action="store_true", help="non cancellare il file scaricato dopo l'importazione")
     p.set_defaults(func=cmd_aggiorna)
 
-    p = sub.add_parser("cerca", help="cerca le release per barcode")
-    p.add_argument("barcode")
+    p = sub.add_parser("cerca", help="cerca le release per barcode (o per numero di catalogo con --catno)")
+    p.add_argument("valore", help="barcode, oppure numero di catalogo se usi --catno")
+    p.add_argument("--catno", action="store_true", help="cerca per numero di catalogo invece che per barcode")
     p.set_defaults(func=cmd_cerca)
 
     p = sub.add_parser("info", help="mostra quale dump è nel database")
