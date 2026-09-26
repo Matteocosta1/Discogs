@@ -196,7 +196,8 @@ almeno 0,15 punti di distacco dalla seconda; altrimenti decide l'AI.
 **Poi, come prima:**
 - **Raggruppa** le foto con la stessa release e lo stesso grado.
 - **Prezzo suggerito** da Discogs per il grado della cartella, più il ricarico
-  (12% di default).
+  (12% di default); per i dischi **collezionistici** vale la regola descritta
+  più sotto.
 - **Uscita:**
   - trovato **nel database locale** → **una riga** nel CSV di inventario, con
     `quantity` = numero di foto ed `external_id` = nome della prima foto;
@@ -304,6 +305,63 @@ interromperlo quando vuoi con **Ctrl+C**: rilanciando lo stesso comando
 riparte da dove era. Le foto già riconosciute non vengono rianalizzate e gli
 annunci già pubblicati non vengono mai ripubblicati.
 
+### Valore collezionistico
+
+Per ogni disco riconosciuto lo script calcola un **punteggio collezionistico**
+con questi dati:
+
+| Dato | Da dove | Punti |
+| --- | --- | --- |
+| Rapporto **want/have** (quanti lo cercano / quanti lo hanno) | API Discogs della release | ≥ 3: +3 · ≥ 1,5: +2 · ≥ 0,8: +1 |
+| **Copie in vendita** | API statistiche del marketplace | nessuna: +2 · 1-3: +1 |
+| **Prezzo più basso** in vendita sopra la soglia | API statistiche del marketplace | +1 |
+| **Test Pressing** | database locale (formati) | +3 |
+| **Numbered** | database locale | +2 |
+| **Limited Edition** | database locale | +1 |
+| **Promo** (anche "White Label") | database locale | +1 |
+| **First Press** | database locale | +1 |
+| **Vinile colorato** (Red, Clear, Marbled, Splatter…) | database locale | +1 |
+| **Prezzo suggerito** per il grado sopra la soglia | già chiesto per il prezzo | +2 |
+
+- Want/have e copie in vendita contano solo se almeno 20 persone cercano il
+  disco: con numeri più piccoli non sono significativi.
+- Per i dischi che non sono nel database locale, le caratteristiche della
+  stampa vengono prese dalla release su Discogs.
+- "First Press" si trova solo quando Discogs lo scrive nei formati, cosa che
+  succede di rado.
+
+**Un disco è collezionistico se il punteggio è almeno 4** (configurabile). In
+quel caso il prezzo cambia:
+
+> prezzo = il più alto tra **prezzo suggerito per il grado** e **prezzo più
+> basso in vendita**, + **ricarico collezionistico** (25% invece del 12%)
+
+Attenzione: il prezzo più basso in vendita è quello di una copia qualsiasi, in
+qualunque grado. Per un disco collezionistico in grado basso il prezzo può
+quindi risultare alto: controllalo in `collezionistici.csv` prima di caricare
+il CSV.
+
+**I dischi collezionistici** finiscono comunque nel CSV di inventario o negli
+annunci API come gli altri, e in più sono elencati in
+**`risultati/collezionistici.csv`**, ordinati per punteggio, con i motivi (es.
+`want/have 300/50 = 6.0 (+3); nessuna copia in vendita (+2)`), il prezzo
+suggerito, il prezzo più basso in vendita, il prezzo finale e il link alla
+release.
+
+**Soglie configurabili:**
+
+```bash
+caffeinate -i python3 vendi.py ~/Pictures/Dischi --soglia-prezzo 80 --ricarico-collezionistico 30 --soglia-collezionistico 5
+```
+
+**Tempi:** servono 2 richieste in più per ogni release diversa (dati della
+release e statistiche del marketplace), sempre entro il limite di 60 al minuto.
+I dati restano in cache: ogni release viene chiesta una volta sola, anche tra
+un'esecuzione e l'altra. Conta circa il 50% di tempo in più rispetto a prima.
+Il prezzo più basso viene chiesto nella stessa valuta dei prezzi suggeriti
+(quella del tuo account venditore), e la soglia di prezzo si intende in quella
+valuta, di solito euro.
+
 ### Costi dell'AI e tetto di spesa
 
 - **Solo quando serve:** l'AI viene chiamata solo per le foto che la parte
@@ -344,6 +402,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --ai-tetto 80
 | --- | --- |
 | `inventario_001.csv`, `inventario_002.csv`… | Dischi trovati in locale, al massimo 1.000 dischi per file (le copie contano), da caricare su Discogs |
 | `inventario_foto.csv` | Per ogni riga dei CSV di inventario, tutte le foto (copie) che contiene |
+| `collezionistici.csv` | Dischi collezionistici, ordinati per punteggio, con motivi, prezzo suggerito, prezzo più basso in vendita e prezzo finale |
 | `riconoscimento.csv` | Per ogni foto: esito, metodo (es. `locale-barcode`, `ai-scelta+locale`), disco trovato, sicurezza e motivo della scelta AI, costo AI in euro |
 | `annunci_pubblicati_api.csv` | Annunci pubblicati via API, uno per foto, con link |
 | `da_controllare.csv` | Foto da sistemare a mano: nome della foto, cartella, motivo, dettagli letti e candidati |
@@ -403,6 +462,9 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | Opzione | Cosa fa |
 | --- | --- |
 | `--ricarico 15` | Ricarico in % sul prezzo suggerito (default 12) |
+| `--ricarico-collezionistico 30` | Ricarico in % per i dischi collezionistici (default 25) |
+| `--soglia-prezzo 80` | Prezzo oltre il quale un disco conta come di valore (default 50, valuta del tuo account) |
+| `--soglia-collezionistico 5` | Punteggio minimo per considerare un disco collezionistico (default 4) |
 | `--limite N` | Elabora solo le prime N foto |
 | `--simula` | Non pubblica annunci e non tocca i CSV veri; scrive in `risultati/simulazione/` |
 | `--riprova` | Rianalizza le foto finite da controllare |
@@ -414,7 +476,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 
 ### Dove sta lo stato
 
-I progressi (foto riconosciute, risultati dell'AI e relativo costo, prezzi ottenuti, righe CSV e annunci creati) sono in
+I progressi (foto riconosciute, risultati dell'AI e relativo costo, prezzi ottenuti, dati collezionistici, righe CSV e annunci creati) sono in
 `data/vendita_stato.sqlite`. È separato da `discogs.sqlite` perché quello viene
 ricostruito da zero ogni mese, e i progressi andrebbero persi.
 

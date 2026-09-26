@@ -18,7 +18,11 @@ del file senza estensione è l'external_id.
      l'AI ha un tetto di spesa totale e i suoi risultati restano in cache;
   2. raggruppa le foto della stessa release con lo stesso grado: sono copie
      dello stesso disco;
-  3. chiede il prezzo suggerito a Discogs e aggiunge il ricarico;
+  3. chiede il prezzo suggerito a Discogs e aggiunge il ricarico; calcola un
+     punteggio collezionistico (want/have, copie in vendita, prezzo più basso,
+     caratteristiche della stampa, prezzo suggerito): se il disco è
+     collezionistico usa il più alto tra suggerito e prezzo più basso in vendita,
+     con un ricarico maggiore, e lo elenca in collezionistici.csv;
   4. trovato in locale -> una riga nel CSV di caricamento inventario con
      quantity = numero di foto (max 1.000 dischi per file);
      trovato solo via API -> un annuncio via API per foto (l'API non ha un
@@ -589,6 +593,13 @@ class DiscogsAPI:
             "external_id": external_id,
         })
 
+    def release(self, release_id):
+        return self.request("GET", f"/releases/{release_id}")
+
+    def marketplace_stats(self, release_id, currency):
+        params = {"curr_abbr": currency} if currency else None
+        return self.request("GET", f"/marketplace/stats/{release_id}", params)
+
     def inventory_page(self, username, page):
         return self.request("GET", f"/users/{urllib.parse.quote(username)}/inventory", {
             "sort": "listed", "sort_order": "desc", "per_page": 100, "page": page,
@@ -976,6 +987,99 @@ def format_candidates(ranked):
 
 
 # --------------------------------------------------------------------------
+# Valore collezionistico
+# --------------------------------------------------------------------------
+
+# Caratteristiche speciali della stampa (dai formati Discogs) e punti assegnati.
+SPECIAL_FEATURES = [
+    ("Test Pressing", r"\btest pressing\b", 3),
+    ("Numbered", r"\bnumbered\b", 2),
+    ("Limited Edition", r"\blimited edition\b", 1),
+    ("Promo", r"\b(promo|white label)\b", 1),
+    ("First Press", r"\b(first|1st) press(ing)?\b", 1),
+    ("Vinile colorato", r"\b(colou?red|red|blue|green|yellow|white|clear|transparent|orange|purple|pink|gold|"
+                        r"silver|grey|gray|brown|marbled?|splatter|swirl|translucent|smoke|violet)\b", 1),
+]
+
+
+def special_features(formats):
+    """Caratteristiche speciali trovate nel testo dei formati (es. 'Vinyl, LP, Limited Edition, Red')."""
+    text = (formats or "").lower()
+    found = []
+    for name, pattern, points in SPECIAL_FEATURES:
+        # "White Label" indica una promo, non un vinile colorato
+        target = text.replace("white label", "") if name == "Vinile colorato" else text
+        if re.search(pattern, target):
+            found.append((name, points))
+    return found
+
+
+def api_formats_text(release):
+    """Formati di una release dell'API Discogs nello stesso testo del database locale."""
+    parts = []
+    for f in release.get("formats", []):
+        bits = [f.get("name", "")] + list(f.get("descriptions", []))
+        if f.get("text"):
+            bits.append(f["text"])
+        parts.append(", ".join(b for b in bits if b))
+    return "; ".join(parts)
+
+
+def get_collector_data(state, api, con, release_id, currency):
+    """Dati per il valore collezionistico di una release, dalla cache o da Discogs (2 richieste).
+    want/have dalla release, copie in vendita e prezzo più basso dalle statistiche del marketplace,
+    caratteristiche della stampa dal database locale (o dall'API se la release non c'è)."""
+    row = state.execute("SELECT dati FROM collezione WHERE release_id = ?", (release_id,)).fetchone()
+    if row:
+        return json.loads(row["dati"]), False
+    release = api.release(release_id)
+    community = release.get("community", {})
+    stats = api.marketplace_stats(release_id, currency)
+    lowest = stats.get("lowest_price") or {}
+    local = dd.get_releases(con, [release_id])
+    data = {
+        "want": community.get("want") or 0,
+        "have": community.get("have") or 0,
+        "num_for_sale": stats.get("num_for_sale") or 0,
+        "lowest_price": lowest.get("value"),
+        "lowest_currency": lowest.get("currency") or currency,
+        "formats": local[0]["formats"] if local else api_formats_text(release),
+    }
+    state.execute("INSERT OR REPLACE INTO collezione VALUES (?, ?, ?)", (release_id, json.dumps(data), now()))
+    state.commit()
+    return data, True
+
+
+def collector_score(data, suggested, price_threshold):
+    """(punteggio, motivi) del valore collezionistico."""
+    score, reasons = 0, []
+    want, have = data["want"], data["have"]
+    if want >= 20 and have:  # sotto le 20 persone il rapporto non è significativo
+        ratio = want / have
+        points = 3 if ratio >= 3 else 2 if ratio >= 1.5 else 1 if ratio >= 0.8 else 0
+        if points:
+            score += points
+            reasons.append(f"want/have {want}/{have} = {ratio:.1f} (+{points})")
+    if want >= 20:
+        n = data["num_for_sale"]
+        points = 2 if n == 0 else 1 if n <= 3 else 0
+        if points:
+            score += points
+            reasons.append(f"{'nessuna copia' if n == 0 else f'solo {n} copie'} in vendita (+{points})")
+    lowest = data.get("lowest_price")
+    if lowest and lowest >= price_threshold:
+        score += 1
+        reasons.append(f"prezzo più basso in vendita {lowest:.2f} (+1)")
+    for name, points in special_features(data.get("formats")):
+        score += points
+        reasons.append(f"{name} (+{points})")
+    if suggested >= price_threshold:
+        score += 2
+        reasons.append(f"prezzo suggerito {suggested:.2f} ≥ {price_threshold:.0f} (+2)")
+    return score, reasons
+
+
+# --------------------------------------------------------------------------
 # Stato (ripresa dopo un'interruzione)
 # --------------------------------------------------------------------------
 
@@ -998,6 +1102,26 @@ CREATE TABLE IF NOT EXISTS foto (
     ai_costo    REAL DEFAULT 0,  -- spesa AI per questa foto (euro, 1 $ = 1 €)
     ai_scelta   TEXT,     -- scelta dell'AI tra i candidati, con sicurezza e motivo
     disco       TEXT      -- artista - titolo (etichetta, paese, anno) della release trovata
+);
+CREATE TABLE IF NOT EXISTS collezione (  -- dati per il valore collezionistico, per release
+    release_id INTEGER PRIMARY KEY,
+    dati       TEXT,
+    ottenuto   TEXT
+);
+CREATE TABLE IF NOT EXISTS collezionistici (  -- dischi risultati collezionistici e messi in vendita
+    external_id TEXT PRIMARY KEY,   -- external_id della riga CSV o del primo annuncio
+    release_id  INTEGER,
+    media       TEXT,
+    quantita    INTEGER,
+    foto        TEXT,
+    disco       TEXT,
+    punteggio   INTEGER,
+    motivi      TEXT,
+    suggerito   REAL,
+    piu_basso   REAL,
+    prezzo      REAL,
+    valuta      TEXT,
+    destinazione TEXT
 );
 CREATE TABLE IF NOT EXISTS prezzi (      -- prezzi suggeriti per release, tutti i gradi
     release_id INTEGER PRIMARY KEY,
@@ -1157,7 +1281,23 @@ REASONS = {
 CHECK_HEADER = ["foto", "cartella", "motivo", "dettagli", "candidati"]
 
 
-def write_outputs(state, out_dir, simulated_csv, simulated_listings):
+COLLECTOR_HEADER = ["external_id", "release_id", "grado", "quantita", "foto", "disco", "punteggio", "motivi",
+                    "prezzo_suggerito", "prezzo_piu_basso_in_vendita", "prezzo_finale", "valuta", "destinazione", "link"]
+
+
+def collector_csv_rows(rows):
+    out = []
+    for r in rows:
+        r = list(r)
+        r[8] = f"{r[8]:.2f}"
+        r[9] = f"{r[9]:.2f}" if r[9] else ""
+        r[10] = f"{r[10]:.2f}"
+        out.append(r + [f"https://www.discogs.com/release/{r[1]}"])
+    out.sort(key=lambda r: -int(r[6]))
+    return out
+
+
+def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_collectors=()):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # CSV di inventario: ogni riga resta per sempre nella sua parte.
@@ -1212,8 +1352,12 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings):
               ["foto", "cartella", "esito", "metodo", "release_id", "disco", "sicurezza_ai", "motivo_ai", "costo_ai_eur"],
               recog)
 
-    if simulated_csv or simulated_listings:
+    write_csv(out_dir / "collezionistici.csv", COLLECTOR_HEADER,
+              collector_csv_rows(tuple(r) for r in state.execute("SELECT * FROM collezionistici")))
+
+    if simulated_csv or simulated_listings or simulated_collectors:
         sim_dir = out_dir / "simulazione"
+        write_csv(sim_dir / "collezionistici.csv", COLLECTOR_HEADER, collector_csv_rows(simulated_collectors))
         for old in sim_dir.glob("inventario_*.csv"):
             old.unlink()
         parts, alloc = {}, PartAllocator(1)
@@ -1233,6 +1377,13 @@ def main():
     parser = argparse.ArgumentParser(description="Metti in vendita su Discogs i dischi fotografati")
     parser.add_argument("cartella", help="cartella che contiene le sottocartelle dei gradi (M, NM, VG+, VG, G+, G)")
     parser.add_argument("--ricarico", type=float, default=12.0, help="ricarico in %% sul prezzo suggerito (default 12)")
+    parser.add_argument("--ricarico-collezionistico", type=float, default=25.0,
+                        help="ricarico in %% per i dischi collezionistici (default 25)")
+    parser.add_argument("--soglia-prezzo", type=float, default=50.0,
+                        help="prezzo (nella valuta del tuo account, di solito euro) oltre il quale un disco "
+                             "conta come di valore (default 50)")
+    parser.add_argument("--soglia-collezionistico", type=int, default=4,
+                        help="punteggio minimo per considerare un disco collezionistico (default 4)")
     parser.add_argument("--limite", type=int, help="elabora solo le prime N foto (prova)")
     parser.add_argument("--simula", action="store_true",
                         help="non pubblica annunci via API e non modifica i CSV veri: scrive tutto in risultati/simulazione/")
@@ -1275,8 +1426,8 @@ def main():
 
     max_part = state.execute("SELECT COALESCE(MAX(parte), 0) FROM righe_csv").fetchone()[0]
     parts = PartAllocator(max_part + 1)   # le righe nuove vanno sempre in file nuovi
-    simulated_csv, simulated_listings = [], []
-    stats = {"righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0}
+    simulated_csv, simulated_listings, simulated_collectors = [], [], []
+    stats = {"collezionistici": 0, "righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0}
     price_calls = 0
     total = len(photos)
     budget_stop = False
@@ -1365,10 +1516,41 @@ def main():
                 stats["problemi"] += len(members)
                 print(f"{label} ({names}): nessun prezzo suggerito per {media}")
                 continue
-            price = round(float(suggestion["value"]) * (1 + args.ricarico / 100), 2)
-            info = f"{label} ({names}): {price:.2f} {suggestion.get('currency', '')}"
+            suggested = float(suggestion["value"])
+            currency = suggestion.get("currency", "")
 
-            if any(is_local_source(r["fonte"]) for _, r in members):
+            # Valore collezionistico (2 richieste per release, poi in cache)
+            collector = None
+            try:
+                cdata, fetched = get_collector_data(state, api, con, release_id, currency)
+                price_calls += fetched * 2
+                score, reasons = collector_score(cdata, suggested, args.soglia_prezzo)
+                if score >= args.soglia_collezionistico:
+                    lowest = cdata.get("lowest_price") if cdata.get("lowest_currency") == currency else None
+                    collector = (score, reasons, lowest)
+            except ApiError as e:
+                print(f"{label} ({names}): dati collezionistici non disponibili ({e}), prezzo normale")
+
+            if collector:
+                base = max(suggested, collector[2] or 0)
+                price = round(base * (1 + args.ricarico_collezionistico / 100), 2)
+            else:
+                price = round(suggested * (1 + args.ricarico / 100), 2)
+            info = f"{label} ({names}): {price:.2f} {currency}" + (f" [COLLEZIONISTICO, punteggio {collector[0]}]"
+                                                                    if collector else "")
+            is_csv = any(is_local_source(r["fonte"]) for _, r in members)
+            if collector:
+                stats["collezionistici"] += 1
+                c_row = [members[0][0].external_id, release_id, media, len(members),
+                         ", ".join(p.name for p, _ in members), members[0][1]["disco"] or "", collector[0],
+                         "; ".join(collector[1]), suggested, collector[2], price, currency,
+                         "CSV" if is_csv else "API"]
+                if args.simula:
+                    simulated_collectors.append(c_row)
+                else:
+                    state.execute("INSERT OR REPLACE INTO collezionistici VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", c_row)
+
+            if is_csv:
                 # Trovato in locale: una riga nel CSV con quantity = numero di foto.
                 row_id = members[0][0].external_id
                 quantity = len(members)
@@ -1420,14 +1602,15 @@ def main():
         print("\nInterrotto. Rilancia lo stesso comando per riprendere da qui.")
     finally:
         out_dir = Path(args.uscita).expanduser()
-        to_check = write_outputs(state, out_dir, simulated_csv, simulated_listings)
+        to_check = write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_collectors)
         print()
         print("Riepilogo di questa esecuzione")
         print(f"  righe nel CSV di inventario: {stats['righe_csv']} ({stats['copie_csv']} copie)")
         print(f"  annunci via API{' (simulati)' if args.simula else ''}: {stats['api']}")
         print(f"  foto da controllare:         {stats['problemi']}")
         print(f"  foto già in vendita:         {stats['gia_fatte']}")
-        print(f"  richieste API: {api.calls} (di cui prezzi: {price_calls})")
+        print(f"  dischi collezionistici:      {stats['collezionistici']} (vedi collezionistici.csv)")
+        print(f"  richieste API: {api.calls} (di cui prezzi e dati collezionistici: {price_calls})")
         if ai:
             print(f"  spesa AI: {money(ai.spent - ai_spent_before)} in questa esecuzione, {money(ai.spent)} in totale"
                   f" (tetto {money(args.ai_tetto)})")
