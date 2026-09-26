@@ -3,3 +3,6 @@ zxing-cpp        # lettura barcode
 Pillow           # apertura delle foto
 pillow-heif      # foto HEIC dell'iPhone
 ocrmac; sys_platform == "darwin"   # OCR con il riconoscimento testo integrato in macOS
+
+# Solo per l'opzione --ai (facoltativa, a pagamento)
+anthropic

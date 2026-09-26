@@ -25,6 +25,7 @@ import re
 import sqlite3
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -51,7 +52,7 @@ FILE_URLS = [
 RELEASES_RE = re.compile(r"discogs_(\d{8})_releases\.xml\.gz")
 BATCH_SIZE = 5000
 # Aumentare quando cambia lo schema: un database più vecchio viene reimportato.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 # --------------------------------------------------------------------------
@@ -218,8 +219,24 @@ CREATE INDEX idx_catnos_norm      ON catnos(catno_norm);
 """
 
 
+# Indice di ricerca testuale su artista e titolo (SQLite FTS5), con il testo già
+# normalizzato da normalize_text. releases_vocab elenca le parole presenti e in
+# quante release compaiono.
+FTS_SCHEMA = """
+CREATE VIRTUAL TABLE releases_fts USING fts5(artists, title, content='', tokenize='unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE releases_vocab USING fts5vocab(releases_fts, 'row');
+"""
+
+
 def normalize_barcode(value):
     return re.sub(r"[^0-9A-Za-z]", "", value or "").upper()
+
+
+def normalize_text(value):
+    """Testo per la ricerca di artista e titolo: minuscole, senza accenti né punteggiatura."""
+    value = unicodedata.normalize("NFKD", value or "")
+    value = "".join(c for c in value if not unicodedata.combining(c)).lower()
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", value).split())
 
 
 def normalize_catno(value):
@@ -353,6 +370,13 @@ def build_database(dump_path, db_path, dump_date):
 
     print("Creo gli indici...")
     con.executescript(INDEXES)
+    print("Creo l'indice di ricerca per artista e titolo (può richiedere un po')...")
+    con.create_function("norm_text", 1, normalize_text, deterministic=True)
+    con.executescript(FTS_SCHEMA)
+    con.execute("INSERT INTO releases_fts (rowid, artists, title) "
+                "SELECT id, norm_text(artists), norm_text(title) FROM releases")
+    con.execute("INSERT INTO releases_fts (releases_fts) VALUES ('optimize')")
+    con.commit()
     con.executemany(
         "INSERT INTO meta VALUES (?, ?)",
         [
@@ -400,7 +424,7 @@ def open_db(db_path=DEFAULT_DB):
         raise SystemExit(f"Database non trovato: {db_path}\nLancia prima: python3 discogs_dump.py aggiorna")
     if int(read_meta(db_path).get("schema_version", 1)) < SCHEMA_VERSION:
         raise SystemExit(
-            "Il database è in un formato vecchio (manca l'indice dei numeri di catalogo).\n"
+            "Il database è in un formato vecchio (mancano gli indici per catalogo o per artista e titolo).\n"
             "Aggiornalo con: python3 discogs_dump.py aggiorna"
         )
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -449,6 +473,53 @@ def search_by_catno(con, catno):
         (norm,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _fts_group(words):
+    return "(" + " ".join('"' + w.replace('"', "") + '"' for w in words) + ")"
+
+
+def search_by_words(con, artist_words=(), title_words=(), any_words=(), limit=500):
+    """Release che contengono tutte le parole indicate (già normalizzate):
+    artist_words nell'artista, title_words nel titolo, any_words in uno dei due.
+    Restituisce (lista di id, troncata) dove troncata è True se i risultati erano più di limit."""
+    parts = []
+    if artist_words:
+        parts.append("artists : " + _fts_group(artist_words))
+    if title_words:
+        parts.append("title : " + _fts_group(title_words))
+    if any_words:
+        parts.append(_fts_group(any_words))
+    if not parts:
+        return [], False
+    rows = con.execute("SELECT rowid FROM releases_fts WHERE releases_fts MATCH ? LIMIT ?",
+                       (" AND ".join(parts), limit + 1)).fetchall()
+    return [r[0] for r in rows[:limit]], len(rows) > limit
+
+
+def word_frequency(con, word):
+    """In quante release compare la parola (0 se non esiste nel database)."""
+    row = con.execute("SELECT doc FROM releases_vocab WHERE term = ?", (word,)).fetchone()
+    return row[0] if row else 0
+
+
+def get_releases(con, ids):
+    """Dettagli delle release indicate, con le etichette e i numeri di catalogo di ognuna."""
+    ids = list(dict.fromkeys(ids))
+    out = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        marks = ",".join("?" * len(chunk))
+        for r in con.execute(f"SELECT {_RELEASE_COLS}, r.year, r.master_id FROM releases r WHERE r.id IN ({marks})",
+                             chunk):
+            out[r["id"]] = {**dict(r), "label_names": [], "catno_norms": []}
+        for c in con.execute(f"SELECT release_id, label, catno_norm FROM catnos WHERE release_id IN ({marks})", chunk):
+            d = out.get(c["release_id"])
+            if d is not None:
+                if c["label"] and c["label"] not in d["label_names"]:
+                    d["label_names"].append(c["label"])
+                d["catno_norms"].append(c["catno_norm"])
+    return [out[i] for i in ids if i in out]
 
 
 # --------------------------------------------------------------------------
@@ -500,12 +571,15 @@ def cmd_cerca(args):
         raise SystemExit("Database non trovato: lancia prima 'python3 discogs_dump.py aggiorna'.")
     con = open_db(db_path)
     if args.catno:
-        rows = search_by_catno(con, args.valore)
+        rows, kind = search_by_catno(con, args.valore), "numero di catalogo"
+    elif args.testo:
+        ids, _ = search_by_words(con, any_words=normalize_text(args.valore).split(), limit=50)
+        rows, kind = get_releases(con, ids), "artista/titolo"
     else:
-        rows = search_by_barcode(con, args.valore)
+        rows, kind = search_by_barcode(con, args.valore), "barcode"
     con.close()
     if not rows:
-        print(f"Nessuna release con {'numero di catalogo' if args.catno else 'barcode'} {args.valore}")
+        print(f"Nessuna release con {kind} {args.valore}")
         return
     seen = set()
     for r in rows:
@@ -539,9 +613,10 @@ def main():
     p.add_argument("--keep-dump", action="store_true", help="non cancellare il file scaricato dopo l'importazione")
     p.set_defaults(func=cmd_aggiorna)
 
-    p = sub.add_parser("cerca", help="cerca le release per barcode (o per numero di catalogo con --catno)")
-    p.add_argument("valore", help="barcode, oppure numero di catalogo se usi --catno")
+    p = sub.add_parser("cerca", help="cerca le release per barcode, numero di catalogo (--catno) o artista/titolo (--testo)")
+    p.add_argument("valore", help="barcode, numero di catalogo con --catno, parole di artista e titolo con --testo")
     p.add_argument("--catno", action="store_true", help="cerca per numero di catalogo invece che per barcode")
+    p.add_argument("--testo", action="store_true", help="cerca per parole di artista e titolo (es. \"pink floyd wall\")")
     p.set_defaults(func=cmd_cerca)
 
     p = sub.add_parser("info", help="mostra quale dump è nel database")

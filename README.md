@@ -4,13 +4,13 @@ Due script:
 
 - **`discogs_dump.py`**: scarica il dump mensile delle release di Discogs e lo
   importa in un database SQLite locale (`data/discogs.sqlite`), con indici su
-  barcode e numero di catalogo.
+  barcode, numero di catalogo e parole di artista e titolo.
 - **`vendi.py`**: riconosce i dischi dalle foto, chiede a Discogs il prezzo
   suggerito, aggiunge il ricarico e prepara la vendita. I dischi trovati nel
   database locale finiscono nei CSV di caricamento dell'inventario. Quelli
   trovati solo via API vengono pubblicati direttamente via API.
 
-Il database, il token (`.env`) e i risultati sono nel `.gitignore`, quindi non
+Il database, i token e le chiavi (`.env`) e i risultati sono nel `.gitignore`, quindi non
 finiscono mai nella repository.
 
 ---
@@ -59,10 +59,11 @@ caffeinate -i python3 discogs_dump.py aggiorna
 `caffeinate -i` impedisce al Mac di andare in stop mentre lo script lavora.
 Tieni il Mac collegato alla corrente.
 
-> **Se avevi già creato il database con la versione precedente:** ora il
-> database ha anche l'indice dei numeri di catalogo, che serve a `vendi.py`.
-> Lo stesso comando `aggiorna` se ne accorge da solo, riscarica il dump e lo
-> reimporta. Serve una volta sola.
+> **Se avevi già creato il database con una versione precedente:** ora il
+> database ha anche gli indici per numero di catalogo e per artista e titolo,
+> che servono a `vendi.py`. Lo stesso comando `aggiorna` se ne accorge da solo,
+> riscarica il dump e lo reimporta. Serve una volta sola. L'indice di artista
+> e titolo allunga un po' l'importazione e occupa qualche GB in più.
 
 ### 3. Cerca una release
 
@@ -70,10 +71,12 @@ Tieni il Mac collegato alla corrente.
 cd ~/Discogs
 python3 discogs_dump.py cerca 5099902987125           # per barcode
 python3 discogs_dump.py cerca --catno "SHVL 804"      # per numero di catalogo
+python3 discogs_dump.py cerca --testo "de andre buona novella"   # per parole di artista e titolo
 python3 discogs_dump.py info                          # quale dump c'è nel database
 ```
 
-Spazi e trattini vengono ignorati, quindi `5 099902 98712 5` funziona uguale.
+Spazi, trattini, maiuscole e accenti vengono ignorati, quindi
+`5 099902 98712 5` o `De André` funzionano uguale.
 
 ### Se il download automatico non funziona
 
@@ -148,30 +151,63 @@ Dischi/
 
 ### Cosa fa, foto per foto
 
-1. **Barcode** letto in locale (zxing-cpp) e cercato nel database.
-2. Se non basta, **OCR** in locale, con il riconoscimento testo di macOS.
-   Estrae i possibili numeri di catalogo e li cerca nel database. Una release
+Molti dischi non hanno codici sul retro, quindi lo script prova in quest'ordine
+e si ferma al primo metodo che funziona. I passi 1-3 sono gratuiti e girano sul
+Mac, nel database locale.
+
+1. **Barcode**, letto con zxing-cpp.
+2. **Numero di catalogo + etichetta**, letti con l'OCR di macOS. Una release
    trovata per catno viene accettata solo se anche il **nome dell'etichetta**
    compare nella foto, per evitare abbinamenti sbagliati.
-3. Se la foto **non è nel database locale**, la cerca su Discogs via API:
+3. **Artista e titolo**, letti con l'OCR da tutto il testo della foto,
+   compresa l'etichetta centrale del disco se si vede.
+   - Lo script parte dalle scritte più grandi, che di solito sono artista e
+     titolo.
+   - La ricerca è **tollerante agli errori di lettura**: ignora maiuscole,
+     accenti e punteggiatura, corregge gli scambi tipici dell'OCR (`0`/`O`,
+     `1`/`l`, `5`/`S`…) e accetta parole quasi uguali.
+4. Se il disco **non è nel database locale**, lo cerca su Discogs via API:
    prima per barcode, poi per numero di catalogo.
-4. Riconosciute tutte le foto, **raggruppa** quelle con la stessa release e lo
-   stesso grado.
-5. **Prezzo suggerito** da Discogs per il grado della cartella, più il ricarico
-   (12% di default). Una chiamata restituisce i prezzi di tutti i gradi di una
-   release, quindi gli altri gradi della stessa release riusano il prezzo senza
-   nuove chiamate.
-6. **Uscita:**
-   - trovato **in locale** → **una riga** nel CSV di inventario, con
-     `quantity` = numero di foto ed `external_id` = nome della prima foto
-     del gruppo;
-   - trovato **solo via API** → annunci creati direttamente via API
-     (`For Sale`). L'API di Discogs non ha un campo quantità, quindi lo script
-     crea **un annuncio per foto**, con external_id = nome di quella foto.
+5. Solo con l'opzione **`--ai`** (spenta di default, a pagamento), per le
+   foto ancora non riconosciute o ambigue, un modello con visione legge la foto.
+   Con i dati letti dall'AI lo script rifà i passi 1-4. Vedi più sotto.
 
-Nessun modello AI e nessun servizio a pagamento: barcode e OCR sono librerie
-gratuite che girano sul Mac, e l'API di Discogs è gratuita con il token
-personale.
+**Quando escono più release possibili** (per esempio lo stesso album stampato
+in più paesi), lo script dà un punteggio a ciascuna usando gli altri dati letti
+nella foto:
+
+| Dato letto nella foto | Punti |
+| --- | --- |
+| artista e titolo (percentuale di parole ritrovate) | fino a 1 |
+| numero di catalogo | +0,30 |
+| nome dell'etichetta | +0,15 |
+| anno (es. `℗ 1973`) | +0,10 |
+| paese (es. `Made in Italy`) | +0,05 |
+
+Accetta la prima **solo se è chiaramente la migliore**, cioè con almeno 0,15
+punti di distacco dalla seconda. Altrimenti la foto va in `da_controllare.csv`
+con i candidati ordinati per punteggio e il dettaglio dei punti. Per il passo 3
+serve inoltre che artista e titolo siano ritrovati entrambi.
+
+Poi:
+
+- Riconosciute tutte le foto, **raggruppa** quelle con la stessa release e lo
+  stesso grado.
+- **Prezzo suggerito** da Discogs per il grado della cartella, più il ricarico
+  (12% di default). Una chiamata restituisce i prezzi di tutti i gradi di una
+  release, quindi gli altri gradi della stessa release riusano il prezzo senza
+  nuove chiamate.
+- **Uscita:**
+  - trovato **in locale** → **una riga** nel CSV di inventario, con
+    `quantity` = numero di foto ed `external_id` = nome della prima foto
+    del gruppo;
+  - trovato **solo via API** → annunci creati direttamente via API
+    (`For Sale`). L'API di Discogs non ha un campo quantità, quindi lo script
+    crea **un annuncio per foto**, con external_id = nome di quella foto.
+
+Senza `--ai` non si usano modelli AI né servizi a pagamento: barcode e OCR
+sono librerie gratuite che girano sul Mac, e l'API di Discogs è gratuita con il
+token personale.
 
 ### Prima volta: installazione
 
@@ -243,6 +279,46 @@ interromperlo quando vuoi con **Ctrl+C**: rilanciando lo stesso comando
 riparte da dove era. Le foto già riconosciute non vengono rianalizzate e gli
 annunci già pubblicati non vengono mai ripubblicati.
 
+### Opzione `--ai` (facoltativa, a pagamento)
+
+Per le foto che i metodi gratuiti non riconoscono, o che restano ambigue, puoi
+far leggere la foto a un modello AI con visione (Claude di Anthropic). È spenta
+di default.
+
+1. Crea una chiave API su
+   [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+   e aggiungila al file `.env` (si apre con `open -e .env`) nella riga
+   `ANTHROPIC_API_KEY=`.
+2. Lancia con `--ai` e un **tetto di spesa** in dollari (default 5):
+
+```bash
+caffeinate -i python3 vendi.py ~/Pictures/Dischi --ai --ai-tetto 3
+```
+
+- **Quali foto:** solo quelle non riconosciute o ambigue con i metodi
+  gratuiti. Le foto già riconosciute non vengono mai inviate.
+- **Cosa viene inviato:** la foto ridotta (lato lungo 1568 pixel). Il modello
+  restituisce artista, titolo, etichetta, catno, anno, paese e barcode, e lo
+  script li cerca nel database come se li avesse letti l'OCR.
+- **Conflitto AI/OCR:** se l'AI indica un disco diverso da quello che l'OCR
+  aveva letto chiaramente, la foto va in `da_controllare.csv` con la nota "in
+  contrasto".
+- **Tetto di spesa:** vale **in totale, sommando tutte le esecuzioni**. Il
+  costo di ogni foto è registrato nello stato. Prima di ogni chiamata lo
+  script controlla che il costo massimo previsto stia sotto il tetto; se non
+  ci sta, smette di usare l'AI per il resto dell'esecuzione. Per continuare,
+  rilancia con un tetto più alto.
+- **Nessuna spesa doppia:** una foto già letta dall'AI non viene mai
+  reinviata, nemmeno con `--riprova`, a meno che tu la sostituisca con uno
+  scatto nuovo.
+- **Modello:** di default `claude-haiku-4-5`, il più economico (1 $ per
+  milione di token in ingresso, 5 $ in uscita). **Stima:** circa 0,2-0,4
+  centesimi di dollaro a foto, quindi 1.000 foto costano circa 2-4 $. Per foto
+  difficili puoi scegliere `--ai-modello claude-sonnet-5` (circa il doppio) o
+  `claude-opus-5` (circa 5 volte).
+- **Riepilogo:** a fine esecuzione mostra quanto hai speso in questa
+  esecuzione e in totale.
+
 ### I risultati (cartella `risultati/`)
 
 | File | Cosa contiene |
@@ -279,9 +355,11 @@ Motivi possibili in `da_controllare.csv`:
 - **non trovato né nel database locale né su Discogs**: le colonne `dettagli`
   e `candidati` dicono cosa è stato letto. Per esempio un catno trovato nel
   database ma senza che l'etichetta si leggesse nella foto.
-- **più release possibili**: stesso barcode per più stampe che non si sono
-  potute distinguere. Nella colonna `candidati` trovi i link: scegli quella
-  giusta su Discogs.
+- **più release possibili**: più stampe (o più dischi) compatibili che non si
+  sono potute distinguere. Nella colonna `candidati` trovi i link ordinati per
+  punteggio, con i dati che hanno dato punti (es. `artista 100%, titolo 100%,
+  paese`): scegli quella giusta su Discogs. Se la nota dice "in contrasto",
+  l'AI e l'OCR hanno letto dischi diversi.
 - **nessun prezzo suggerito da Discogs**.
 - **pubblicazione non confermata**: lo script si è interrotto proprio durante
   la pubblicazione e non è riuscito a verificare se l'annuncio esiste.
@@ -304,12 +382,15 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | `--limite N` | Elabora solo le prime N foto |
 | `--simula` | Non pubblica annunci e non tocca i CSV veri; scrive in `risultati/simulazione/` |
 | `--riprova` | Rianalizza le foto finite da controllare |
+| `--ai` | Usa un modello AI con visione solo per le foto non riconosciute (a pagamento) |
+| `--ai-tetto 3` | Spesa AI massima in dollari, sommando tutte le esecuzioni (default 5) |
+| `--ai-modello NOME` | `claude-haiku-4-5` (default), `claude-sonnet-5` o `claude-opus-5` |
 | `--uscita PERCORSO` | Cartella dei risultati (default `risultati/`) |
 | `--db PERCORSO` | Database creato da `discogs_dump.py` (default `data/discogs.sqlite`) |
 
 ### Dove sta lo stato
 
-I progressi (foto riconosciute, prezzi ottenuti, righe CSV e annunci creati) sono in
+I progressi (foto riconosciute, dati letti dall'AI e relativo costo, prezzi ottenuti, righe CSV e annunci creati) sono in
 `data/vendita_stato.sqlite`. È separato da `discogs.sqlite` perché quello viene
 ricostruito da zero ogni mese, e i progressi andrebbero persi.
 
@@ -325,4 +406,7 @@ volte lo stesso disco.
   `master_id`, `status`, `data_quality`).
 - `barcodes`: `release_id`, `barcode`, `barcode_norm` (**indicizzato**).
 - `catnos`: `release_id`, `label`, `catno`, `catno_norm` (**indicizzato**).
+- `releases_fts`: indice di ricerca testuale (SQLite FTS5) su artista e titolo,
+  normalizzati senza maiuscole, accenti e punteggiatura; `releases_vocab`
+  elenca le parole presenti.
 - `meta`: data del dump, versione dello schema, data di importazione.
