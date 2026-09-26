@@ -2,29 +2,27 @@
 """
 Mette in vendita su Discogs i dischi fotografati.
 
-Le foto stanno in una cartella per grado (M, NM, VG+, VG, G+, G), una foto del
-retro per disco, numerate: 0001.jpg, 0002.jpg... Il numero è quello scritto
-sulla busta e diventa l'external_id dell'annuncio.
-  0002_x3.jpg  -> 3 copie dello stesso disco, stesso grado
-  0002_2.jpg   -> seconda foto facoltativa, usata solo se la prima non basta
+Struttura: Dischi/<grado>/<foto>, con i gradi M, NM, VG+, VG, G+, G e le foto
+con i nomi originali dell'iPhone (JPG o HEIC). Ogni foto è una copia; il nome
+del file senza estensione è l'external_id.
 
-Per ogni disco:
-  1. legge il barcode (zxing-cpp) e, se serve, il numero di catalogo con l'OCR
-     di macOS (ocrmac), e li cerca nel database di discogs_dump.py;
-  2. se non lo trova in locale, lo cerca su Discogs via API (barcode, poi catno);
-  3. prende il grado dal nome della cartella;
-  4. chiede il prezzo suggerito a Discogs e aggiunge il ricarico;
-  5. se trovato in locale -> una riga nel CSV di caricamento inventario con
-     quantity = N (max 1.000 dischi per file); se trovato solo via API ->
-     annuncio via API. L'API non ha un campo quantità: crea un annuncio per
-     copia con external_id numerato 0002-1, 0002-2... (anche con una copia sola)
+  1. riconosce ogni foto: barcode (zxing-cpp) e, se serve, numero di catalogo
+     con l'OCR di macOS (ocrmac), cercati nel database di discogs_dump.py;
+     se non c'è in locale, ricerca su Discogs via API (barcode, poi catno);
+  2. raggruppa le foto della stessa release con lo stesso grado: sono copie
+     dello stesso disco;
+  3. chiede il prezzo suggerito a Discogs e aggiunge il ricarico;
+  4. trovato in locale -> una riga nel CSV di caricamento inventario con
+     quantity = numero di foto (max 1.000 dischi per file);
+     trovato solo via API -> un annuncio via API per foto (l'API non ha un
+     campo quantità), con external_id = nome della foto.
 
 Tutto lo stato è salvato in data/vendita_stato.sqlite: se lo script si
 interrompe, rilanciando lo stesso comando riparte da dove era, senza annunci doppi.
 
 Esempi:
-    python3 vendi.py ~/Foto/Dischi --limite 20 --simula
-    python3 vendi.py ~/Foto/Dischi
+    python3 vendi.py ~/Pictures/Dischi --limite 20 --simula
+    python3 vendi.py ~/Pictures/Dischi
 """
 
 import argparse
@@ -34,7 +32,6 @@ import json
 import os
 import re
 import sqlite3
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -50,7 +47,7 @@ ENV_FILE = dd.BASE_DIR / ".env"
 API_URL = os.environ.get("DISCOGS_API_URL", "https://api.discogs.com")
 USER_AGENT = "DiscogsVendita/1.0 (+https://github.com/Matteocosta1/Discogs)"
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".webp"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".heic", ".heif", ".png"}
 BARCODE_FORMATS = {"EAN13", "EAN8", "UPCA", "UPCE"}
 ROWS_PER_FILE = 1000
 MAX_CANDIDATES_SHOWN = 10
@@ -96,52 +93,31 @@ def read_grades(folder_name):
 
 
 @dataclass
-class Disc:
-    external_id: str          # numero della foto (es. "0002") = numero sulla busta
+class Photo:
+    path: Path
     folder: str
     media: str                # grado del disco (chiave di GRADES)
     sleeve: str               # grado della copertina (chiave di GRADES)
-    photos: list = field(default_factory=list)  # foto principale ed eventuale _2
-    quantity: int = 1         # copie dello stesso grado (_xN nel nome)
 
-    def listing_ids(self):
-        """external_id degli annunci via API, sempre numerati: '0002-1', '0002-2'..."""
-        return [f"{self.external_id}-{i}" for i in range(1, self.quantity + 1)]
+    @property
+    def external_id(self):
+        return self.path.stem  # es. "IMG_1234"
+
+    @property
+    def name(self):
+        return f"{self.folder}/{self.path.name}"
 
     def fingerprint(self):
-        parts = [self.folder]
-        for p in self.photos:
-            st = p.stat()
-            parts.append(f"{p.name}:{st.st_size}:{st.st_mtime_ns}")
-        return "|".join(parts)
-
-
-PHOTO_NAME_RE = re.compile(r"^(\d+)((?:_(?:[xX]\d+|2))*)$")
-
-
-def parse_photo_name(stem):
-    """'0002_x3_2' -> ('0002', quantità 3 o None, seconda foto True). None se il nome non è valido."""
-    m = PHOTO_NAME_RE.match(stem)
-    if not m:
-        return None
-    number, quantity, second = m.group(1), None, False
-    for token in m.group(2).split("_")[1:]:
-        if token == "2" and not second:
-            second = True
-        elif token[0] in "xX" and quantity is None and int(token[1:]) >= 1:
-            quantity = int(token[1:])
-        else:
-            return None  # suffisso ripetuto o _x0
-    return number, quantity, second
+        st = self.path.stat()
+        return f"{self.folder}|{self.path.name}|{st.st_size}|{st.st_mtime_ns}"
 
 
 def scan_photos(root):
-    """Trova i dischi nelle cartelle dei gradi. Si ferma subito se qualcosa non va."""
+    """Trova le foto nelle cartelle dei gradi. Si ferma subito se qualcosa non va."""
     root = Path(root).expanduser()
     if not root.is_dir():
         raise SystemExit(f"Cartella non trovata: {root}")
-    discs, errors, warnings = [], [], []
-    seen = {}
+    photos, errors, warnings = [], [], []
     for sub in sorted(root.iterdir()):
         if sub.name.startswith("."):
             continue
@@ -153,41 +129,20 @@ def scan_photos(root):
         if not grades:
             errors.append(f"la cartella '{sub.name}' non è un grado valido ({', '.join(GRADES)})")
             continue
-        groups = {}  # numero -> {"main": [...], "second": [...], "qty": set()}
         for f in sorted(sub.iterdir()):
-            if not f.is_file() or f.name.startswith(".") or f.suffix.lower() not in IMAGE_EXTS:
-                continue
-            parsed = parse_photo_name(f.stem)
-            if not parsed:
-                errors.append(f"{sub.name}/{f.name}: nome non valido (usa 0001.jpg, 0001_x3.jpg, 0001_2.jpg)")
-                continue
-            number, quantity, second = parsed
-            g = groups.setdefault(number, {"main": [], "second": [], "qty": set()})
-            g["second" if second else "main"].append(f)
-            if quantity:
-                g["qty"].add(quantity)
-        for number, g in groups.items():
-            where = f"{sub.name}/{number}"
-            if not g["main"]:
-                errors.append(f"{where}: c'è la seconda foto ma manca la foto principale")
-                continue
-            if len(g["main"]) > 1 or len(g["second"]) > 1:
-                names = ", ".join(f.name for f in g["main"] + g["second"])
-                errors.append(f"{where}: troppe foto per lo stesso disco ({names})")
-                continue
-            if len(g["qty"]) > 1:
-                errors.append(f"{where}: quantità diverse nei nomi delle foto ({', '.join(f'x{q}' for q in sorted(g['qty']))})")
-                continue
-            if number in seen:
-                errors.append(f"il numero {number} è in due cartelle: {seen[number]} e {sub.name}")
-                continue
-            seen[number] = sub.name
-            quantity = g["qty"].pop() if g["qty"] else 1
-            discs.append(Disc(number, sub.name, grades[0], grades[1], g["main"] + g["second"], quantity))
+            if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in IMAGE_EXTS:
+                photos.append(Photo(f, sub.name, grades[0], grades[1]))
+    # Il nome della foto è l'external_id: deve essere unico in tutte le cartelle.
+    by_id = {}
+    for p in photos:
+        by_id.setdefault(p.external_id, []).append(p.name)
+    for eid, names in by_id.items():
+        if len(names) > 1:
+            errors.append(f"nome ripetuto {eid}: {', '.join(names)} (rinomina una delle foto)")
     if errors:
         raise SystemExit("Sistema prima le cartelle delle foto:\n  " + "\n  ".join(errors))
-    discs.sort(key=lambda d: natural_key(d.external_id))
-    return discs, warnings
+    photos.sort(key=lambda p: natural_key(p.external_id))
+    return photos, warnings
 
 
 # --------------------------------------------------------------------------
@@ -493,7 +448,7 @@ def search_api(api, ev):
 
 
 # --------------------------------------------------------------------------
-# Riconoscimento di un disco
+# Riconoscimento di una foto
 # --------------------------------------------------------------------------
 
 @dataclass
@@ -505,10 +460,11 @@ class Recognition:
     details: str = ""
 
 
-def recognize(disc, con, api, use_ocr):
+def recognize(paths, con, api, use_ocr):
+    """Riconosce il disco dalle foto indicate (oggi: una sola foto per copia)."""
     ev = Evidence()
     fonte, candidates = None, []
-    for photo in disc.photos:  # la seconda foto solo se la prima non basta
+    for photo in paths:
         img = load_image(photo)
         for b in read_barcodes(img):
             if b not in ev.barcodes:
@@ -556,8 +512,8 @@ def format_candidates(candidates):
 # --------------------------------------------------------------------------
 
 STATE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS dischi (
-    external_id TEXT PRIMARY KEY,   -- numero della foto
+CREATE TABLE IF NOT EXISTS foto (
+    external_id TEXT PRIMARY KEY,   -- nome della foto senza estensione
     cartella    TEXT,
     foto        TEXT,
     impronta    TEXT,
@@ -569,24 +525,25 @@ CREATE TABLE IF NOT EXISTS dischi (
     candidati   TEXT,
     dettagli    TEXT,
     aggiornato  TEXT,
-    quantita    INTEGER DEFAULT 1
+    riga_csv    TEXT      -- external_id della riga CSV in cui è finita la foto
 );
 CREATE TABLE IF NOT EXISTS prezzi (      -- prezzi suggeriti per release, tutti i gradi
     release_id INTEGER PRIMARY KEY,
     suggeriti  TEXT,
     ottenuto   TEXT
 );
-CREATE TABLE IF NOT EXISTS csv_righe (   -- dischi già assegnati a un file CSV
-    external_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS righe_csv (   -- righe già assegnate a un file CSV
+    external_id TEXT PRIMARY KEY,   -- nome della prima foto del gruppo
     parte       INTEGER,
     release_id  INTEGER,
     price       REAL,
     media       TEXT,
     sleeve      TEXT,
-    quantita    INTEGER DEFAULT 1
+    quantita    INTEGER,
+    foto        TEXT      -- tutte le foto del gruppo
 );
-CREATE TABLE IF NOT EXISTS annunci (     -- annunci creati via API, uno per copia
-    external_id TEXT PRIMARY KEY,   -- external_id dell'annuncio: 0002-1, 0002-2...
+CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
+    external_id TEXT PRIMARY KEY,   -- nome della foto
     release_id  INTEGER,
     price       REAL,
     media       TEXT,
@@ -594,9 +551,7 @@ CREATE TABLE IF NOT EXISTS annunci (     -- annunci creati via API, uno per copi
     stato       TEXT,     -- in_corso / pubblicato / rifiutato
     listing_id  INTEGER,
     messaggio   TEXT,
-    inviato     TEXT,
-    disco       TEXT,     -- numero della foto
-    copie       INTEGER   -- quante copie aveva il disco quando è stato pubblicato
+    inviato     TEXT
 );
 """
 
@@ -606,16 +561,19 @@ def open_state(path):
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     con.executescript(STATE_SCHEMA)
-    # Stato creato da una versione precedente dello script: aggiungo le colonne nuove.
-    for table, column, decl in [("dischi", "quantita", "INTEGER DEFAULT 1"),
-                                ("csv_righe", "quantita", "INTEGER DEFAULT 1"),
-                                ("annunci", "disco", "TEXT"),
-                                ("annunci", "copie", "INTEGER")]:
-        if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
-            con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-    con.execute("UPDATE annunci SET disco = external_id, copie = 1 WHERE disco IS NULL")
-    con.commit()
+    old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
+    if any(con.execute(f"SELECT COUNT(*) FROM {r['name']}").fetchone()[0] for r in old):
+        print("Attenzione: lo stato contiene dati della versione precedente (foto numerate), che vengono ignorati.\n"
+              "Se avevi già pubblicato annunci con quella versione, controllali su Discogs.")
     return con
+
+
+def is_assigned(state, external_id):
+    """True se la foto è già in una riga CSV o ha già un annuncio via API."""
+    row = state.execute("SELECT riga_csv FROM foto WHERE external_id = ?", (external_id,)).fetchone()
+    if row and row["riga_csv"]:
+        return True
+    return state.execute("SELECT 1 FROM annunci_api WHERE external_id = ?", (external_id,)).fetchone() is not None
 
 
 def get_price_suggestions(state, api, release_id, refresh=False):
@@ -630,7 +588,7 @@ def get_price_suggestions(state, api, release_id, refresh=False):
 
 def recover_pending_listings(state, api, username):
     """Annunci rimasti 'in_corso' per un'interruzione: controlla su Discogs se esistono già."""
-    pending = state.execute("SELECT * FROM annunci WHERE stato = 'in_corso'").fetchall()
+    pending = state.execute("SELECT * FROM annunci_api WHERE stato = 'in_corso'").fetchall()
     if not pending:
         return
     print(f"Controllo su Discogs {len(pending)} annunci rimasti in sospeso dall'ultima esecuzione...")
@@ -654,11 +612,11 @@ def recover_pending_listings(state, api, username):
     for p in pending:
         eid = p["external_id"]
         if eid in found:
-            state.execute("UPDATE annunci SET stato = 'pubblicato', listing_id = ? WHERE external_id = ?",
+            state.execute("UPDATE annunci_api SET stato = 'pubblicato', listing_id = ? WHERE external_id = ?",
                           (found[eid], eid))
             print(f"  {eid}: l'annuncio esisteva già (listing {found[eid]})")
         elif saw_external_id or seen_items == 0:  # inventario vuoto: sicuramente non creato
-            state.execute("DELETE FROM annunci WHERE external_id = ?", (eid,))
+            state.execute("DELETE FROM annunci_api WHERE external_id = ?", (eid,))
             print(f"  {eid}: annuncio non creato, verrà pubblicato ora")
         else:
             print(f"  {eid}: impossibile verificare, lo lascio da controllare a mano (niente doppioni)")
@@ -672,7 +630,7 @@ def recover_pending_listings(state, api, username):
 # Colonne del caricamento inventario di Discogs (i valori di status sono FOR_SALE o DRAFT).
 CSV_HEADER = ["release_id", "price", "media_condition", "sleeve_condition", "quantity", "external_id", "status"]
 CSV_STATUS = "FOR_SALE"
-LISTING_HEADER = ["external_id", "numero", "release_id", "price", "media_condition", "sleeve_condition"]
+LISTING_HEADER = ["external_id", "release_id", "price", "media_condition", "sleeve_condition"]
 
 
 def csv_row(release_id, price, media, sleeve, quantity, external_id):
@@ -688,7 +646,7 @@ def write_csv(path, header, rows):
 
 
 def photo_name(path):
-    """'VG+/0001.jpg' invece del percorso completo."""
+    """'VG+/IMG_1234.HEIC' invece del percorso completo."""
     return f"{Path(path).parent.name}/{Path(path).name}" if path else ""
 
 
@@ -711,45 +669,49 @@ REASONS = {
     "senza_prezzo": "nessun prezzo suggerito da Discogs",
     "errore": "errore durante l'elaborazione",
 }
-CHECK_HEADER = ["numero", "foto", "cartella", "quantita", "motivo", "dettagli", "candidati"]
+CHECK_HEADER = ["foto", "cartella", "motivo", "dettagli", "candidati"]
 
 
-def write_outputs(state, out_dir, simulated_csv, simulated_listings, extra_checks):
+def write_outputs(state, out_dir, simulated_csv, simulated_listings):
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # CSV di inventario: ogni disco resta per sempre nella sua parte.
+    # CSV di inventario: ogni riga resta per sempre nella sua parte.
     parts = {}
-    for r in state.execute("SELECT * FROM csv_righe"):
+    for r in state.execute("SELECT * FROM righe_csv"):
         parts.setdefault(r["parte"], []).append(r)
     for part, rows in parts.items():
         rows.sort(key=lambda r: natural_key(r["external_id"]))
         write_csv(out_dir / f"inventario_{part:03d}.csv", CSV_HEADER,
                   [csv_row(r["release_id"], r["price"], r["media"], r["sleeve"], r["quantita"], r["external_id"])
                    for r in rows])
+    # Quali foto sono finite in ogni riga (per ritrovare le copie).
+    all_rows = sorted(state.execute("SELECT * FROM righe_csv").fetchall(),
+                      key=lambda r: (r["parte"], natural_key(r["external_id"])))
+    write_csv(out_dir / "inventario_foto.csv", ["file", "external_id", "release_id", "quantity", "foto"],
+              [[f"inventario_{r['parte']:03d}.csv", r["external_id"], r["release_id"], r["quantita"], r["foto"]]
+               for r in all_rows])
 
-    published = sorted(state.execute("SELECT * FROM annunci WHERE stato = 'pubblicato'").fetchall(),
+    published = sorted(state.execute("SELECT * FROM annunci_api WHERE stato = 'pubblicato'").fetchall(),
                        key=lambda r: natural_key(r["external_id"]))
     write_csv(out_dir / "annunci_pubblicati_api.csv", LISTING_HEADER + ["listing_id", "link"],
-              [[r["external_id"], r["disco"], r["release_id"], f"{r['price']:.2f}", GRADES[r["media"]],
-                GRADES[r["sleeve"]], r["listing_id"], f"https://www.discogs.com/sell/item/{r['listing_id']}"]
-               for r in published])
+              [[r["external_id"], r["release_id"], f"{r['price']:.2f}", GRADES[r["media"]], GRADES[r["sleeve"]],
+                r["listing_id"], f"https://www.discogs.com/sell/item/{r['listing_id']}"] for r in published])
 
     # Da controllare a mano.
     rows = []
-    for r in state.execute("SELECT * FROM dischi WHERE esito IN ({})".format(",".join("?" * len(PROBLEMS))),
+    for r in state.execute("SELECT * FROM foto WHERE esito IN ({})".format(",".join("?" * len(PROBLEMS))),
                            sorted(PROBLEMS)):
-        rows.append([r["external_id"], photo_name(r["foto"]), r["cartella"], r["quantita"], REASONS[r["esito"]],
+        rows.append([photo_name(r["foto"]), r["cartella"], REASONS[r["esito"]],
                      r["dettagli"] or "", r["candidati"] or ""])
-    for r in state.execute("SELECT a.*, d.foto, d.cartella FROM annunci a LEFT JOIN dischi d ON d.external_id = a.disco "
-                           "WHERE a.stato IN ('in_corso', 'rifiutato')"):
+    for r in state.execute("SELECT a.*, f.foto, f.cartella FROM annunci_api a "
+                           "LEFT JOIN foto f USING (external_id) WHERE a.stato IN ('in_corso', 'rifiutato')"):
         if r["stato"] == "in_corso":
-            motivo = f"pubblicazione dell'annuncio {r['external_id']} non confermata: controlla su Discogs se esiste già"
+            motivo = "pubblicazione non confermata: controlla su Discogs se l'annuncio esiste già"
         else:
-            motivo = f"Discogs ha rifiutato l'annuncio {r['external_id']}"
-        rows.append([r["disco"], photo_name(r["foto"]), r["cartella"], r["copie"], motivo,
+            motivo = "Discogs ha rifiutato l'annuncio"
+        rows.append([photo_name(r["foto"]), r["cartella"], motivo,
                      f"release {r['release_id']}, prezzo {r['price']:.2f}; {r['messaggio'] or ''}",
                      f"https://www.discogs.com/release/{r['release_id']}"])
-    rows.extend(extra_checks)
     rows.sort(key=lambda r: natural_key(r[0]))
     write_csv(out_dir / "da_controllare.csv", CHECK_HEADER, rows)
 
@@ -774,23 +736,21 @@ def main():
     parser = argparse.ArgumentParser(description="Metti in vendita su Discogs i dischi fotografati")
     parser.add_argument("cartella", help="cartella che contiene le sottocartelle dei gradi (M, NM, VG+, VG, G+, G)")
     parser.add_argument("--ricarico", type=float, default=12.0, help="ricarico in %% sul prezzo suggerito (default 12)")
-    parser.add_argument("--limite", type=int, help="elabora solo i primi N dischi (prova)")
+    parser.add_argument("--limite", type=int, help="elabora solo le prime N foto (prova)")
     parser.add_argument("--simula", action="store_true",
                         help="non pubblica annunci via API e non modifica i CSV veri: scrive tutto in risultati/simulazione/")
     parser.add_argument("--riprova", action="store_true",
-                        help="rianalizza anche i dischi finiti da controllare (non trovati, più release, senza prezzo)")
+                        help="rianalizza anche le foto finite da controllare (non trovate, più release, senza prezzo)")
     parser.add_argument("--db", default=str(dd.DEFAULT_DB), help="database creato da discogs_dump.py")
     parser.add_argument("--uscita", default=str(OUT_DIR), help="cartella dei risultati (default: risultati/)")
     args = parser.parse_args()
 
-    discs, warnings = scan_photos(args.cartella)
+    photos, warnings = scan_photos(args.cartella)
     for w in warnings:
         print(f"Attenzione: {w}")
     if args.limite:
-        discs = discs[:args.limite]
-    copies = sum(d.quantity for d in discs)
-    print(f"Dischi da elaborare: {len(discs)} ({copies} copie)"
-          + (" (SIMULAZIONE: nessun annuncio verrà pubblicato)" if args.simula else ""))
+        photos = photos[:args.limite]
+    print(f"Foto da elaborare: {len(photos)}" + (" (SIMULAZIONE: nessun annuncio verrà pubblicato)" if args.simula else ""))
 
     con = dd.open_db(args.db)
     use_ocr = ocr_available()
@@ -804,153 +764,136 @@ def main():
     if not args.simula:
         recover_pending_listings(state, api, identity["username"])
 
-    max_part = state.execute("SELECT COALESCE(MAX(parte), 0) FROM csv_righe").fetchone()[0]
-    parts = PartAllocator(max_part + 1)   # i dischi nuovi vanno sempre in file nuovi
-    simulated_csv, simulated_listings, extra_checks = [], [], []
-    stats = {"csv": 0, "csv_copie": 0, "api": 0, "problemi": 0, "gia_fatti": 0}
+    max_part = state.execute("SELECT COALESCE(MAX(parte), 0) FROM righe_csv").fetchone()[0]
+    parts = PartAllocator(max_part + 1)   # le righe nuove vanno sempre in file nuovi
+    simulated_csv, simulated_listings = [], []
+    stats = {"righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0}
     price_calls = 0
-    total = len(discs)
-
-    def quantity_changed(disc, before):
-        extra_checks.append([disc.external_id, photo_name(disc.photos[0]), disc.folder, disc.quantity,
-                             f"quantità cambiata dopo la messa in vendita: erano {before} copie, ora {disc.quantity}; "
-                             "l'annuncio esistente non è stato modificato", "", ""])
+    total = len(photos)
 
     try:
-        for n, disc in enumerate(discs, 1):
-            eid = disc.external_id
-            qty_label = f" x{disc.quantity}" if disc.quantity > 1 else ""
-            prefix = f"[{n}/{total}] {eid}{qty_label} ({disc.folder})"
-
-            # Già nel CSV o già messo in vendita via API?
-            done_csv = state.execute("SELECT quantita FROM csv_righe WHERE external_id = ?", (eid,)).fetchone()
-            if done_csv:
-                if done_csv["quantita"] != disc.quantity:
-                    quantity_changed(disc, done_csv["quantita"])
-                stats["gia_fatti"] += 1
+        # 1. Riconoscimento di ogni foto (i risultati restano salvati).
+        todo = []
+        for n, photo in enumerate(photos, 1):
+            eid = photo.external_id
+            prefix = f"[{n}/{total}] {photo.name}"
+            if is_assigned(state, eid):
+                stats["gia_fatte"] += 1
                 continue
-            existing = state.execute("SELECT * FROM annunci WHERE disco = ?", (eid,)).fetchall()
-            if existing:
-                if existing[0]["copie"] != disc.quantity:
-                    quantity_changed(disc, existing[0]["copie"])
-                    stats["gia_fatti"] += 1
-                    continue
-                if len(existing) >= disc.quantity:
-                    stats["gia_fatti"] += 1
-                    continue
-                # altrimenti: pubblicazione interrotta a metà, mancano delle copie
-
-            row = state.execute("SELECT * FROM dischi WHERE external_id = ?", (eid,)).fetchone()
-            fingerprint = disc.fingerprint()
-            redo = (row is None or row["impronta"] != fingerprint or row["esito"] == "errore"
-                    or (args.riprova and row["esito"] in PROBLEMS))
-            if redo and not existing:
+            row = state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
+            fingerprint = photo.fingerprint()
+            if (row is None or row["impronta"] != fingerprint or row["esito"] == "errore"
+                    or (args.riprova and row["esito"] in PROBLEMS)):
                 try:
-                    rec = recognize(disc, con, api, use_ocr)
+                    rec = recognize([photo.path], con, api, use_ocr)
                 except (ApiError, OSError, ValueError) as e:
                     rec = Recognition("errore", details=str(e))
                 state.execute(
-                    "INSERT OR REPLACE INTO dischi (external_id, cartella, foto, impronta, media, sleeve, esito, fonte,"
-                    " release_id, candidati, dettagli, aggiornato, quantita) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (eid, disc.folder, str(disc.photos[0]), fingerprint, disc.media, disc.sleeve,
-                     rec.esito, rec.fonte, rec.release_id, format_candidates(rec.candidates), rec.details, now(),
-                     disc.quantity),
+                    "INSERT OR REPLACE INTO foto (external_id, cartella, foto, impronta, media, sleeve, esito, fonte,"
+                    " release_id, candidati, dettagli, aggiornato) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (eid, photo.folder, str(photo.path), fingerprint, photo.media, photo.sleeve, rec.esito, rec.fonte,
+                     rec.release_id, format_candidates(rec.candidates), rec.details, now()),
                 )
                 state.commit()
-                row = state.execute("SELECT * FROM dischi WHERE external_id = ?", (eid,)).fetchone()
-
-            if row["esito"] not in ("trovato", "senza_prezzo"):
+                row = state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
+                where = f"release {row['release_id']} ({row['fonte']})" if row["esito"] == "trovato" else row["esito"]
+                print(f"{prefix}: {where}")
+            if row["esito"] in ("trovato", "senza_prezzo"):
+                todo.append((photo, row))
+            else:
                 stats["problemi"] += 1
-                print(f"{prefix}: da controllare ({row['esito']})")
-                continue
 
-            release_id = row["release_id"]
+        # 2. Stessa release e stesso grado = copie dello stesso disco: un unico annuncio.
+        groups = {}
+        for photo, row in todo:
+            groups.setdefault((row["release_id"], photo.media, photo.sleeve), []).append((photo, row))
+
+        for (release_id, media, sleeve), members in groups.items():
+            names = ", ".join(p.external_id for p, _ in members)
+            label = f"release {release_id} {media}" + (f" x{len(members)}" if len(members) > 1 else "")
+            refresh = args.riprova and any(r["esito"] == "senza_prezzo" for _, r in members)
             try:
-                sugg, fetched = get_price_suggestions(
-                    state, api, release_id, refresh=args.riprova and row["esito"] == "senza_prezzo")
+                sugg, fetched = get_price_suggestions(state, api, release_id, refresh=refresh)
             except ApiError as e:
-                state.execute("UPDATE dischi SET esito = 'errore', dettagli = ? WHERE external_id = ?",
-                              (f"prezzo: {e}", eid))
+                for p, _ in members:
+                    state.execute("UPDATE foto SET esito = 'errore', dettagli = ? WHERE external_id = ?",
+                                  (f"prezzo: {e}", p.external_id))
                 state.commit()
-                stats["problemi"] += 1
-                print(f"{prefix}: errore nel prezzo ({e})")
+                stats["problemi"] += len(members)
+                print(f"{label} ({names}): errore nel prezzo ({e})")
                 continue
             price_calls += fetched
-            suggestion = sugg.get(GRADES[disc.media])
-            if not suggestion or not suggestion.get("value"):
-                state.execute("UPDATE dischi SET esito = 'senza_prezzo' WHERE external_id = ?", (eid,))
-                state.commit()
-                stats["problemi"] += 1
-                print(f"{prefix}: release {release_id}, nessun prezzo suggerito per {disc.media}")
+            suggestion = sugg.get(GRADES[media])
+            new_esito = "trovato" if suggestion and suggestion.get("value") else "senza_prezzo"
+            for p, _ in members:
+                state.execute("UPDATE foto SET esito = ? WHERE external_id = ?", (new_esito, p.external_id))
+            state.commit()
+            if new_esito == "senza_prezzo":
+                stats["problemi"] += len(members)
+                print(f"{label} ({names}): nessun prezzo suggerito per {media}")
                 continue
-            if row["esito"] == "senza_prezzo":
-                state.execute("UPDATE dischi SET esito = 'trovato' WHERE external_id = ?", (eid,))
             price = round(float(suggestion["value"]) * (1 + args.ricarico / 100), 2)
-            if existing:  # copie mancanti di una pubblicazione interrotta: stesso prezzo delle altre
-                price = existing[0]["price"]
-            currency = suggestion.get("currency", "")
-            info = f"release {release_id}, {price:.2f} {currency}"
+            info = f"{label} ({names}): {price:.2f} {suggestion.get('currency', '')}"
 
-            if row["fonte"].startswith("locale"):
-                # Trovato in locale: una riga nel CSV con quantity = copie.
+            if any(r["fonte"].startswith("locale") for _, r in members):
+                # Trovato in locale: una riga nel CSV con quantity = numero di foto.
+                row_id = members[0][0].external_id
+                quantity = len(members)
                 if args.simula:
-                    simulated_csv.append(csv_row(release_id, price, disc.media, disc.sleeve, disc.quantity, eid))
+                    simulated_csv.append(csv_row(release_id, price, media, sleeve, quantity, row_id))
                 else:
                     state.execute(
-                        "INSERT INTO csv_righe (external_id, parte, release_id, price, media, sleeve, quantita)"
-                        " VALUES (?,?,?,?,?,?,?)",
-                        (eid, parts.assign(disc.quantity), release_id, price, disc.media, disc.sleeve, disc.quantity))
+                        "INSERT INTO righe_csv VALUES (?,?,?,?,?,?,?,?)",
+                        (row_id, parts.assign(quantity), release_id, price, media, sleeve, quantity,
+                         ", ".join(p.name for p, _ in members)))
+                    for p, _ in members:
+                        state.execute("UPDATE foto SET riga_csv = ? WHERE external_id = ?", (row_id, p.external_id))
                 state.commit()
-                stats["csv"] += 1
-                stats["csv_copie"] += disc.quantity
-                print(f"{prefix}: {info} -> CSV (trovato in locale, {row['fonte'].split('-')[1]})")
+                stats["righe_csv"] += 1
+                stats["copie_csv"] += quantity
+                print(f"{info} -> CSV")
                 continue
 
-            # Trovato solo via API: un annuncio per copia (l'API non ha un campo quantità).
-            already = {r["external_id"] for r in existing}
-            for listing_eid in disc.listing_ids():
-                if listing_eid in already:
-                    continue
-                listing_info = [listing_eid, eid, release_id, f"{price:.2f}", GRADES[disc.media], GRADES[disc.sleeve]]
+            # Trovato solo via API: un annuncio per foto (l'API non ha un campo quantità).
+            for p, _ in members:
+                eid = p.external_id
                 if args.simula:
-                    simulated_listings.append(listing_info)
+                    simulated_listings.append([eid, release_id, f"{price:.2f}", GRADES[media], GRADES[sleeve]])
                     stats["api"] += 1
-                    print(f"{prefix}: {info} -> annuncio API {listing_eid} (simulato)")
+                    print(f"{info} -> annuncio API {eid} (simulato)")
                     continue
                 state.execute(
-                    "INSERT INTO annunci (external_id, release_id, price, media, sleeve, stato, inviato, disco, copie)"
-                    " VALUES (?,?,?,?,?,'in_corso',?,?,?)",
-                    (listing_eid, release_id, price, disc.media, disc.sleeve, now(), eid, disc.quantity))
+                    "INSERT INTO annunci_api (external_id, release_id, price, media, sleeve, stato, inviato)"
+                    " VALUES (?,?,?,?,?,'in_corso',?)", (eid, release_id, price, media, sleeve, now()))
                 state.commit()  # segnato PRIMA di inviare: niente doppioni se si interrompe
                 try:
-                    resp = api.create_listing(release_id, GRADES[disc.media], GRADES[disc.sleeve], price, listing_eid)
+                    resp = api.create_listing(release_id, GRADES[media], GRADES[sleeve], price, eid)
                 except ApiUncertain as e:
-                    print(f"{prefix}: esito della pubblicazione di {listing_eid} incerto ({e}), "
-                          "verrà controllato al prossimo avvio")
+                    print(f"{info}: esito della pubblicazione di {eid} incerto ({e}), verrà controllato al prossimo avvio")
                     continue
                 except ApiError as e:
-                    state.execute("UPDATE annunci SET stato = 'rifiutato', messaggio = ? WHERE external_id = ?",
-                                  (str(e), listing_eid))
+                    state.execute("UPDATE annunci_api SET stato = 'rifiutato', messaggio = ? WHERE external_id = ?",
+                                  (str(e), eid))
                     state.commit()
                     stats["problemi"] += 1
-                    print(f"{prefix}: annuncio {listing_eid} rifiutato da Discogs ({e})")
+                    print(f"{info}: annuncio {eid} rifiutato da Discogs ({e})")
                     continue
-                state.execute("UPDATE annunci SET stato = 'pubblicato', listing_id = ? WHERE external_id = ?",
-                              (resp.get("listing_id"), listing_eid))
+                state.execute("UPDATE annunci_api SET stato = 'pubblicato', listing_id = ? WHERE external_id = ?",
+                              (resp.get("listing_id"), eid))
                 state.commit()
                 stats["api"] += 1
-                print(f"{prefix}: {info} -> annuncio {listing_eid} pubblicato via API (listing {resp.get('listing_id')})")
+                print(f"{info} -> annuncio {eid} pubblicato via API (listing {resp.get('listing_id')})")
     except KeyboardInterrupt:
         print("\nInterrotto. Rilancia lo stesso comando per riprendere da qui.")
     finally:
         out_dir = Path(args.uscita).expanduser()
-        to_check = write_outputs(state, out_dir, simulated_csv, simulated_listings, extra_checks)
+        to_check = write_outputs(state, out_dir, simulated_csv, simulated_listings)
         print()
         print("Riepilogo di questa esecuzione")
-        print(f"  nel CSV di inventario:  {stats['csv']} dischi ({stats['csv_copie']} copie)")
+        print(f"  righe nel CSV di inventario: {stats['righe_csv']} ({stats['copie_csv']} copie)")
         print(f"  annunci via API{' (simulati)' if args.simula else ''}: {stats['api']}")
-        print(f"  da controllare:         {stats['problemi'] + len(extra_checks)}")
-        print(f"  già fatti in precedenza: {stats['gia_fatti']}")
+        print(f"  foto da controllare:         {stats['problemi']}")
+        print(f"  foto già in vendita:         {stats['gia_fatte']}")
         print(f"  richieste API: {api.calls} (di cui prezzi: {price_calls})")
         print(f"Risultati in {out_dir}/  (righe in da_controllare.csv: {to_check})")
         if args.simula:

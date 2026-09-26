@@ -112,71 +112,62 @@ open "/Applications/Python 3.12/Install Certificates.command"
 
 ### Come preparare le foto
 
-Una cartella per grado, con esattamente questi nomi: `M`, `NM`, `VG+`, `VG`,
-`G+`, `G`. Per ora il grado della cartella vale sia per il disco sia per la
-copertina.
+La struttura è semplicemente `Dischi/<grado>/<foto>`:
 
-In ogni cartella metti **una foto del retro per disco**, numerata in modo
-progressivo. Il numero è lo stesso che scrivi sulla busta del disco. Le foto
-che iniziano con lo stesso numero sono lo stesso disco:
-
-| Nome della foto | Significato |
-| --- | --- |
-| `0001.jpg` | disco 0001, 1 copia |
-| `0002_x3.jpg` | disco 0002, **3 copie** dello stesso grado |
-| `0004_2.jpg` | **seconda foto facoltativa** del disco 0004 (es. l'etichetta), usata solo se la prima non basta |
-| `0002_x3_2.jpg` oppure `0002_2.jpg` | seconda foto del disco 0002 (la quantità basta scriverla una volta) |
+- una cartella per grado, con esattamente questi nomi: `M`, `NM`, `VG+`,
+  `VG`, `G+`, `G`. Per ora il grado della cartella vale sia per il disco sia
+  per la copertina;
+- dentro, **una foto del retro per copia**, con i nomi originali dell'iPhone,
+  in JPG o HEIC. Non serve rinominare nulla.
 
 ```
 Dischi/
   NM/
-    0001.jpg
-    0002_x3.jpg     ← 3 copie NM
+    IMG_1234.HEIC
+    IMG_1240.JPG
   VG+/
-    0003.jpg
-    0004.jpg
-    0004_2.jpg      ← seconda foto del disco 0004
+    IMG_1235.HEIC
+    IMG_1236.HEIC   ← stesso disco di IMG_1235, stesso grado: diventano 1 annuncio con quantità 2
   VG/
-    0005.heic       ← vanno bene anche le foto HEIC dell'iPhone
-    0006.jpg        ← un'altra copia dello stesso disco ma VG: foto separata, numero suo
+    IMG_1237.JPG    ← stesso disco ma VG: annuncio separato
 ```
 
-- Copie di gradi diversi vanno come foto separate, ognuna con il proprio
-  numero, nella cartella del proprio grado.
-- Il numero della foto, senza `_x3` e senza estensione, diventa
-  l'`external_id` dell'annuncio. È un campo privato su Discogs: quando un disco
-  si vende, ti dice quale busta prendere.
+- **L'external_id è il nome della foto senza estensione** (es. `IMG_1234`). È
+  un campo privato su Discogs: quando un disco si vende, ti dice quale foto
+  corrisponde.
+- **Copie:** le foto riconosciute come la **stessa release con lo stesso
+  grado** vengono unite in un unico annuncio, con quantità pari al numero di
+  foto. Le copie di gradi diversi vanno nelle rispettive cartelle e diventano
+  annunci separati.
 - **Controlli all'avvio.** Lo script si ferma subito, prima di fare qualsiasi
-  cosa, e ti elenca i problemi se trova:
-  - un nome che non segue lo schema (es. `IMG_1234.jpg`);
-  - lo stesso numero in due cartelle;
-  - due foto principali per lo stesso numero (es. `0002.jpg` e `0002_x3.jpg`);
-  - quantità diverse per lo stesso disco;
-  - una seconda foto senza foto principale;
-  - una cartella che non è un grado.
+  cosa, se trova:
+  - una cartella che non è un grado;
+  - due foto con lo stesso nome in cartelle diverse (es. `VG/IMG_1234.JPG` e
+    `NM/IMG_1234.HEIC`), perché avrebbero lo stesso external_id. Rinominane
+    una.
 
-### Cosa fa, disco per disco
+### Cosa fa, foto per foto
 
 1. **Barcode** letto in locale (zxing-cpp) e cercato nel database.
 2. Se non basta, **OCR** in locale, con il riconoscimento testo di macOS.
    Estrae i possibili numeri di catalogo e li cerca nel database. Una release
    trovata per catno viene accettata solo se anche il **nome dell'etichetta**
    compare nella foto, per evitare abbinamenti sbagliati.
-3. Se la prima foto non basta e c'è la `_2`, ripete i passi 1 e 2 con la
-   seconda foto.
-4. Se il disco **non è nel database locale**, lo cerca su Discogs via API:
+3. Se la foto **non è nel database locale**, la cerca su Discogs via API:
    prima per barcode, poi per numero di catalogo.
+4. Riconosciute tutte le foto, **raggruppa** quelle con la stessa release e lo
+   stesso grado.
 5. **Prezzo suggerito** da Discogs per il grado della cartella, più il ricarico
    (12% di default). Una chiamata restituisce i prezzi di tutti i gradi di una
-   release, quindi le altre copie della stessa release riusano il prezzo senza
+   release, quindi gli altri gradi della stessa release riusano il prezzo senza
    nuove chiamate.
 6. **Uscita:**
    - trovato **in locale** → **una riga** nel CSV di inventario, con
-     `quantity` = numero di copie;
-   - trovato **solo via API** → annuncio creato direttamente via API
-     (`For Sale`). L'API di Discogs non ha un campo quantità: con più copie lo
-     script crea un annuncio per copia, con external_id sempre numerato:
-     `0002-1`, `0002-2`, `0002-3`. Anche con una copia sola diventa `0002-1`.
+     `quantity` = numero di foto ed `external_id` = nome della prima foto
+     del gruppo;
+   - trovato **solo via API** → annunci creati direttamente via API
+     (`For Sale`). L'API di Discogs non ha un campo quantità, quindi lo script
+     crea **un annuncio per foto**, con external_id = nome di quella foto.
 
 Nessun modello AI e nessun servizio a pagamento: barcode e OCR sono librerie
 gratuite che girano sul Mac, e l'API di Discogs è gratuita con il token
@@ -225,8 +216,8 @@ trascinare la cartella dal Finder nel Terminale per scriverne il percorso.
 python3 vendi.py ~/Pictures/Dischi --limite 20 --simula
 ```
 
-- `--limite 20`: elabora solo i primi 20 dischi, in ordine di numero.
-- `--simula`: riconosce i dischi e chiede i prezzi davvero, ma **non pubblica
+- `--limite 20`: elabora solo le prime 20 foto, in ordine di nome.
+- `--simula`: riconosce le foto e chiede i prezzi davvero, ma **non pubblica
   nessun annuncio** e non tocca i CSV veri. Scrive tutto in
   `risultati/simulazione/`:
   - `inventario_001.csv`: quello che andrebbe nel caricamento;
@@ -249,31 +240,34 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --ricarico 15
 **Tempi:** lo script fa al massimo 60 richieste al minuto a Discogs, come
 impone il limite dell'API. Con 10.000 dischi conta diverse ore. Puoi
 interromperlo quando vuoi con **Ctrl+C**: rilanciando lo stesso comando
-riparte da dove era. I dischi già fatti non vengono rianalizzati e gli annunci
-già pubblicati non vengono mai ripubblicati. Se si interrompe a metà delle
-copie di un disco (es. dopo `0002-1`), alla ripresa crea solo quelle mancanti.
+riparte da dove era. Le foto già riconosciute non vengono rianalizzate e gli
+annunci già pubblicati non vengono mai ripubblicati.
 
 ### I risultati (cartella `risultati/`)
 
 | File | Cosa contiene |
 | --- | --- |
 | `inventario_001.csv`, `inventario_002.csv`… | Dischi trovati in locale, al massimo 1.000 dischi per file (le copie contano), da caricare su Discogs |
-| `annunci_pubblicati_api.csv` | Annunci pubblicati via API, uno per copia, con numero del disco e link |
-| `da_controllare.csv` | Dischi da sistemare a mano: numero, foto, cartella, quantità, motivo e candidati |
+| `inventario_foto.csv` | Per ogni riga dei CSV di inventario, tutte le foto (copie) che contiene |
+| `annunci_pubblicati_api.csv` | Annunci pubblicati via API, uno per foto, con link |
+| `da_controllare.csv` | Foto da sistemare a mano: nome della foto, cartella, motivo, dettagli letti e candidati |
 
 I CSV di inventario hanno le colonne `release_id`, `price`, `media_condition`,
 `sleeve_condition`, `quantity`, `external_id` e `status` (`FOR_SALE`, il
 valore indicato dalla guida di Discogs per il caricamento CSV).
 
-- Un disco scritto in un file **resta sempre in quel file**, e i dischi delle
+- Una riga scritta in un file **resta sempre in quel file**, e le righe delle
   esecuzioni successive vanno in file nuovi.
 - Quindi i file che hai già caricato non cambiano: carica solo quelli nuovi.
+- Se aggiungi più avanti un'altra foto di una release già messa in vendita con
+  lo stesso grado, diventa una **riga nuova** in un file nuovo, non si somma
+  alla riga già caricata.
 
 Si caricano dalla pagina di caricamento dell'inventario di Discogs
 ([discogs.com/sell/upload](https://www.discogs.com/sell/upload)).
 
 > **Al primo caricamento prova con un file piccolo** (per esempio quello
-> prodotto con `--limite 20`), che contenga anche un disco con più copie. Le
+> prodotto con `--limite 20`), che contenga anche una riga con più copie. Le
 > colonne e il valore `FOR_SALE` seguono la guida
 > [Import and Export Your Inventory (CSV)](https://support.discogs.com/hc/en-us/articles/360007622373-Import-and-Export-Your-Inventory-CSV),
 > ma non ho potuto provarli con un caricamento reale. Controlla che la
@@ -291,15 +285,12 @@ Motivi possibili in `da_controllare.csv`:
 - **nessun prezzo suggerito da Discogs**.
 - **pubblicazione non confermata**: lo script si è interrotto proprio durante
   la pubblicazione e non è riuscito a verificare se l'annuncio esiste.
-  Controlla su Discogs cercando l'`external_id` (es. `0002-2`).
+  Controlla su Discogs cercando l'`external_id` (es. `IMG_1234`).
 - **Discogs ha rifiutato l'annuncio**, con il messaggio di Discogs.
-- **quantità cambiata dopo la messa in vendita**: hai rinominato, per esempio,
-  `0002_x3` in `0002_x4` dopo che il disco era già nel CSV o pubblicato. Lo
-  script non modifica gli annunci esistenti: aggiorna la quantità a mano su
-  Discogs.
 
-Hai aggiunto una foto `_2` a un disco finito da controllare? Al prossimo lancio
-viene rianalizzato da solo. Per rianalizzare tutti i dischi da controllare:
+Se sostituisci una foto finita da controllare con uno scatto migliore (stesso
+nome), al prossimo lancio viene rianalizzata da sola. Per rianalizzare tutte le
+foto da controllare:
 
 ```bash
 caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
@@ -310,15 +301,15 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | Opzione | Cosa fa |
 | --- | --- |
 | `--ricarico 15` | Ricarico in % sul prezzo suggerito (default 12) |
-| `--limite N` | Elabora solo i primi N dischi |
+| `--limite N` | Elabora solo le prime N foto |
 | `--simula` | Non pubblica annunci e non tocca i CSV veri; scrive in `risultati/simulazione/` |
-| `--riprova` | Rianalizza i dischi finiti da controllare |
+| `--riprova` | Rianalizza le foto finite da controllare |
 | `--uscita PERCORSO` | Cartella dei risultati (default `risultati/`) |
 | `--db PERCORSO` | Database creato da `discogs_dump.py` (default `data/discogs.sqlite`) |
 
 ### Dove sta lo stato
 
-I progressi (dischi riconosciuti, prezzi ottenuti, annunci creati) sono in
+I progressi (foto riconosciute, prezzi ottenuti, righe CSV e annunci creati) sono in
 `data/vendita_stato.sqlite`. È separato da `discogs.sqlite` perché quello viene
 ricostruito da zero ogni mese, e i progressi andrebbero persi.
 
