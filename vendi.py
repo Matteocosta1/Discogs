@@ -6,12 +6,16 @@ Struttura: Dischi/<grado>/<foto>, con i gradi M, NM, VG+, VG, G+, G e le foto
 con i nomi originali dell'iPhone (JPG o HEIC). Ogni foto è una copia; il nome
 del file senza estensione è l'external_id.
 
-  1. riconosce ogni foto, in locale e gratis, nel database di discogs_dump.py:
-     barcode (zxing-cpp), poi numero di catalogo + etichetta letti con l'OCR di
-     macOS (ocrmac), poi artista e titolo letti con l'OCR (ricerca tollerante
-     agli errori di lettura); se non c'è in locale, ricerca su Discogs via API
-     (barcode, poi catno); con --ai, solo per le foto ancora non riconosciute,
-     un modello con visione legge la foto (a pagamento, con tetto di spesa);
+  1. riconosce ogni foto (fronte, retro o etichetta), senza interventi manuali:
+     a. parte locale gratuita: barcode (zxing-cpp), testo con l'OCR di macOS
+        (ocrmac), ricerca nel database di discogs_dump.py per barcode, catno +
+        etichetta, artista + titolo; se il risultato è sicuro, niente AI;
+     b. altrimenti un modello AI con visione dice cosa vede nella foto;
+     c. con quei dati cerca i candidati nel database e, se non ci sono, su
+        Discogs via API;
+     d. l'AI sceglie tra i candidati reali (mai inventati) e la scelta deve
+        combaciare con artista e titolo letti nella foto;
+     l'AI ha un tetto di spesa totale e i suoi risultati restano in cache;
   2. raggruppa le foto della stessa release con lo stesso grado: sono copie
      dello stesso disco;
   3. chiede il prezzo suggerito a Discogs e aggiunge il ricarico;
@@ -393,12 +397,12 @@ def search_barcode_local(con, ev):
     ids = []
     for b in ev.barcodes:
         ids += [r["id"] for r in dd.search_by_barcode(con, b)]
-    return dd.get_releases(con, ids)
+    return [{**r, "_code": True} for r in dd.get_releases(con, ids)]
 
 
 def search_catno_local(con, ev):
     confirmed, _ = local_catno_matches(con, ev)
-    return dd.get_releases(con, list(confirmed))
+    return [{**r, "_code": True} for r in dd.get_releases(con, list(confirmed))]
 
 
 def text_lines_for_search(con, ev, max_lines=10):
@@ -592,14 +596,23 @@ class DiscogsAPI:
 
 
 def api_result_as_release(r):
-    return {"id": r["id"], "artists": "", "title": r.get("title", ""), "labels": ", ".join(r.get("label", []))}
+    """Risultato della ricerca Discogs nello stesso formato delle release del database locale."""
+    artist, _, title = (r.get("title") or "").partition(" - ")
+    year = str(r.get("year") or "")
+    return {
+        "id": r["id"], "artists": artist.strip() if title else "", "title": (title or artist).strip(),
+        "labels": ", ".join(r.get("label", [])), "label_names": r.get("label", []),
+        "catno_norms": [dd.normalize_catno(r.get("catno", ""))] if r.get("catno") else [],
+        "country": r.get("country", ""), "year": int(year) if year.isdigit() else None,
+        "formats": ", ".join(r.get("format", [])), "barcodes": r.get("barcode", [])[:3], "_fonte": "api",
+    }
 
 
-def search_api(api, ev):
-    """(fonte, candidati) cercando su Discogs per barcode, poi per catno."""
+def search_api(api, ev, artist_titles=()):
+    """(fonte, candidati) cercando su Discogs per barcode, poi per catno, poi per artista e titolo."""
     for b in ev.barcodes:
         res = api.search(barcode=b)
-        results = {r["id"]: api_result_as_release(r) for r in res.get("results", [])}
+        results = {r["id"]: {**api_result_as_release(r), "_code": True} for r in res.get("results", [])}
         if results:
             return "api-barcode", list(results.values())
     strong = [(norm, raw) for norm, raw in ev.catnos.items() if is_strong_catno(norm)]
@@ -607,91 +620,149 @@ def search_api(api, ev):
     for _norm, raw in strong[:3]:  # al massimo 3 tentativi per non sprecare richieste
         res = api.search(catno=raw)
         confirmed = {
-            r["id"]: api_result_as_release(r)
+            r["id"]: {**api_result_as_release(r), "_code": True}
             for r in res.get("results", [])
             if any(label_in_text(l, ev.text) for l in r.get("label", []))
         }
         if confirmed:
             return "api-catno", list(confirmed.values())
+    for artist, title in artist_titles:
+        params = {"release_title": title}
+        if artist:
+            params["artist"] = artist
+        res = api.search(**params)
+        results = {r["id"]: api_result_as_release(r) for r in res.get("results", [])}
+        if results:
+            return "api-testo", list(results.values())
     return None, []
 
 
 # --------------------------------------------------------------------------
-# Opzione --ai: modello con visione, solo per le foto non riconosciute
+# AI con visione: entra solo quando la parte locale non è sicura
 # --------------------------------------------------------------------------
 
-# Prezzi in dollari per milione di token (input, output).
+# Prezzi in dollari per milione di token (input, output). Per prudenza il tetto
+# di spesa conta 1 $ = 1 €, quindi la spesa reale in euro è un po' più bassa.
 AI_MODELS = {
     "claude-haiku-4-5": (1.00, 5.00),
     "claude-sonnet-5": (2.00, 10.00),
     "claude-opus-5": (5.00, 25.00),
 }
-AI_MAX_EDGE = 1568        # lato lungo massimo della foto inviata (pixel)
-AI_MAX_TOKENS = 600
-AI_PROMPT = (
-    "This is a photo of a vinyl record: the back cover, the front cover or the centre label. "
-    "Transcribe the identifying details exactly as printed. Use an empty string for anything "
-    "that is not clearly readable; do not guess. catno is the catalogue number (e.g. 'SHVL 804'). "
-    "barcode is the digits under the barcode, if any. year is the release year printed "
-    "(e.g. after ℗ or ©). country is where it was made/printed, if stated."
-)
-AI_SCHEMA = {
+AI_MAX_EDGE = 1568          # lato lungo massimo della foto inviata (pixel)
+AI_MAX_CANDIDATES = 40      # candidati mostrati all'AI per la scelta finale
+
+AI_READ_PROMPT = """This photo shows ONE vinyl record: its front cover, back cover or centre label.
+Report what you can see. Transcribe printed details exactly; use an empty string when something is not clearly readable. Never guess printed details.
+- photo_type: front, back, label or other.
+- artist, title, label, catno (catalogue number, e.g. "SHVL 804"), year (e.g. after ℗ or ©), country (where made/printed), barcode (digits).
+- readable_text: the most useful readable text, one item per line (titles, credits, codes, label, company names), at most 40 lines.
+- recognized_artist / recognized_title: if you recognise the record from its artwork or overall look, the artist and album you believe it is, even if not printed; otherwise empty."""
+
+AI_READ_SCHEMA = {
     "type": "object",
-    "properties": {k: {"type": "string"} for k in ("artist", "title", "label", "catno", "year", "country", "barcode")},
-    "required": ["artist", "title", "label", "catno", "year", "country", "barcode"],
+    "properties": {
+        "photo_type": {"type": "string", "enum": ["front", "back", "label", "other"]},
+        **{k: {"type": "string"} for k in ("artist", "title", "label", "catno", "year", "country", "barcode",
+                                          "readable_text", "recognized_artist", "recognized_title")},
+    },
+    "required": ["photo_type", "artist", "title", "label", "catno", "year", "country", "barcode",
+                 "readable_text", "recognized_artist", "recognized_title"],
     "additionalProperties": False,
 }
 
+AI_CHOOSE_PROMPT = """This photo shows ONE vinyl record (front cover, back cover or centre label).
+Below is a list of candidate Discogs releases. Choose the one this record is.
+Compare every visible clue: artist, title, label, catalogue number, barcode, country, year, format, artwork.
+If the exact pressing cannot be determined, choose the most likely one based on the visible clues and set confidence to "low".
+Only answer with an id from the list. Answer 0 only if NONE of the candidates is this record (different artist or album).
 
-class AIReader:
-    """Chiede a un modello con visione di leggere la foto, rispettando un tetto di spesa totale."""
+Candidates (id | artist | title | label (catno) | country | year | format | barcodes):
+{candidates}"""
 
-    def __init__(self, model, budget_usd, spent_usd):
-        import anthropic  # installato solo se si usa --ai
-        self.client = anthropic.Anthropic(api_key=load_env_value("ANTHROPIC_API_KEY", "la chiave API di Anthropic",
-                                                                 "https://console.anthropic.com/settings/keys"))
-        self.anthropic = anthropic
+AI_CHOOSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "release_id": {"type": "integer"},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "reason": {"type": "string"},
+    },
+    "required": ["release_id", "confidence", "reason"],
+    "additionalProperties": False,
+}
+CONFIDENCE_IT = {"high": "alta", "medium": "media", "low": "bassa"}
+
+
+class BudgetReached(Exception):
+    """Il tetto di spesa AI non permette un'altra chiamata."""
+
+
+class AIVision:
+    """Chiamate al modello con visione, con tetto di spesa totale (in euro, 1 $ = 1 €)."""
+
+    def __init__(self, model, budget_eur, spent_eur):
+        import anthropic  # libreria ufficiale di Anthropic
+        self.client = anthropic.Anthropic(api_key=load_env_value(
+            "ANTHROPIC_API_KEY", "la chiave API di Anthropic (serve per l'AI; per farne a meno usa --senza-ai)",
+            "https://console.anthropic.com/settings/keys"))
         self.model = model
         self.price_in, self.price_out = AI_MODELS[model]
-        self.budget = budget_usd
-        self.spent = spent_usd
-        self.exhausted = False
+        self.budget = budget_eur
+        self.spent = spent_eur
 
-    def _max_cost(self, image_tokens):
-        return ((image_tokens + 400) * self.price_in + AI_MAX_TOKENS * self.price_out) / 1_000_000
-
-    def read(self, path):
-        """(dati letti, costo in dollari), oppure (None, 0) se il tetto di spesa non lo permette."""
+    @staticmethod
+    def prepare(img):
+        """Foto ridotta e compressa, pronta da inviare: (base64, token stimati)."""
         import base64
         import io
-        img = load_image(path)
-        img.thumbnail((AI_MAX_EDGE, AI_MAX_EDGE))
-        image_tokens = img.size[0] * img.size[1] / 750  # stima di Anthropic per le immagini
-        if self.spent + self._max_cost(image_tokens) > self.budget:
-            self.exhausted = True
-            return None, 0.0
+        small = img.copy()
+        small.thumbnail((AI_MAX_EDGE, AI_MAX_EDGE))
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=85)
+        small.save(buf, format="JPEG", quality=85)
+        return base64.standard_b64encode(buf.getvalue()).decode(), small.size[0] * small.size[1] / 750
+
+    def _call(self, image, prompt, schema, max_tokens, extra_input_tokens=0):
+        data, image_tokens = image
+        max_cost = ((image_tokens + extra_input_tokens + 600) * self.price_in + max_tokens * self.price_out) / 1e6
+        if self.spent + max_cost > self.budget:
+            raise BudgetReached()
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=AI_MAX_TOKENS,
+            max_tokens=max_tokens,
             messages=[{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
-                                             "data": base64.standard_b64encode(buf.getvalue()).decode()}},
-                {"type": "text", "text": AI_PROMPT},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}},
+                {"type": "text", "text": prompt},
             ]}],
-            output_config={"format": {"type": "json_schema", "schema": AI_SCHEMA}},
+            output_config={"format": {"type": "json_schema", "schema": schema}},
         )
-        cost = (response.usage.input_tokens * self.price_in + response.usage.output_tokens * self.price_out) / 1_000_000
+        cost = (response.usage.input_tokens * self.price_in + response.usage.output_tokens * self.price_out) / 1e6
         self.spent += cost
-        if response.stop_reason != "end_turn":
-            return {}, cost
         text = next((b.text for b in response.content if b.type == "text"), "")
         try:
-            data = json.loads(text)
+            result = json.loads(text) if response.stop_reason == "end_turn" else {}
         except ValueError:
-            data = {}
-        return {k: str(v).strip() for k, v in data.items() if str(v).strip()}, cost
+            result = {}
+        return result, cost
+
+    def read(self, image):
+        """Cosa vede l'AI nella foto (passo 2)."""
+        data, cost = self._call(image, AI_READ_PROMPT, AI_READ_SCHEMA, 1200)
+        return {k: (v.strip() if isinstance(v, str) else v) for k, v in data.items()}, cost
+
+    def choose(self, image, candidates):
+        """Quale candidato è il disco della foto (passo 4)."""
+        lines = []
+        for r in candidates:
+            label = f"{r.get('labels') or ', '.join(r.get('label_names', []))}"
+            lines.append(" | ".join(str(x) for x in (
+                r["id"], clean_artist(r.get("artists")), r.get("title"), label, r.get("country") or "",
+                r.get("year") or "", r.get("formats") or "", ", ".join(r.get("barcodes", [])[:3]))))
+        text = "\n".join(lines)
+        return self._call(image, AI_CHOOSE_PROMPT.format(candidates=text), AI_CHOOSE_SCHEMA, 400,
+                          extra_input_tokens=len(text) // 3)
+
+
+def clean_artist(artist):
+    return re.sub(r"\s*\(\d+\)", "", artist or "")
 
 
 def ai_evidence(ev, data):
@@ -700,13 +771,46 @@ def ai_evidence(ev, data):
         digits = re.sub(r"\D", "", data["barcode"])
         if len(digits) >= 8 and digits not in ev.barcodes:
             ev.barcodes.append(digits)
-    # artista e titolo come righe "grandi", il resto come testo normale
-    lines = [(data[k], 1.0) for k in ("artist", "title") if data.get(k)]
+    # artista e titolo come scritte "grandi", il resto come testo normale
+    lines = [(data[k], 1.0) for k in ("artist", "title", "recognized_artist", "recognized_title") if data.get(k)]
     lines += [(data[k], 0.0) for k in ("label", "catno", "year", "country") if data.get(k)]
     if data.get("catno") and data.get("label"):
         lines.append((f"{data['label']} {data['catno']}", 0.0))
+    lines += [(t, 0.0) for t in (data.get("readable_text") or "").splitlines() if t.strip()]
     ev.add_lines(lines)
-    ev.ai_note = "letto dall'AI: " + ", ".join(f"{k}={v}" for k, v in data.items())
+    shown = {k: v for k, v in data.items() if v and k != "readable_text"}
+    ev.ai_note = "letto dall'AI: " + ", ".join(f"{k}={v}" for k, v in shown.items())
+
+
+def ai_artist_titles(data):
+    """Coppie (artista, titolo) lette o riconosciute dall'AI, per la ricerca su Discogs."""
+    pairs = []
+    for a, t in ((data.get("artist"), data.get("title")),
+                 (data.get("recognized_artist"), data.get("recognized_title"))):
+        if t and (a, t) not in pairs:
+            pairs.append((a or "", t))
+    return pairs
+
+
+def coherent(release, ai_data, ocr_text):
+    """Regola di sicurezza: artista e titolo della release devono combaciare con quelli
+    letti o riconosciuti dall'AI, oppure con il testo letto dall'OCR.
+    Per le release trovate con un codice letto nella foto (barcode o catno) basta che
+    l'AI non indichi un artista o un titolo diversi."""
+    ai_data = ai_data or {}
+    names = "\n".join(ai_data.get(k, "") for k in ("artist", "title", "recognized_artist", "recognized_title"))
+    ai_text = names + "\n" + ai_data.get("readable_text", "")
+    if release.get("_code") and not names.strip():
+        return True
+    artist = clean_artist(release.get("artists"))
+    various = dd.normalize_text(artist) in ("various", "")
+    for text in (ai_text, ocr_text):
+        if not text.strip():
+            continue
+        m = TextMatcher(text)
+        if (various or m.coverage(artist) >= TEXT_MIN_COVERAGE) and m.coverage(release.get("title") or "") >= TEXT_MIN_COVERAGE:
+            return True
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -715,37 +819,42 @@ def ai_evidence(ev, data):
 
 @dataclass
 class Recognition:
-    esito: str                 # trovato / multiplo / non_trovato / errore
-    fonte: str = ""
-    release_id: int = None
+    esito: str                 # trovato / multiplo / non_trovato / errore / sospeso (tetto di spesa)
+    fonte: str = ""            # es. locale-barcode, ai+locale-testo, ai-scelta+api
+    release: dict = None
     candidates: list = field(default_factory=list)   # [(punteggio, release, motivi)]
     details: str = ""
     ai_cost: float = 0.0
-    ai_data: dict = None
+    ai_read: dict = None
+    ai_choice: dict = None
+
+    @property
+    def release_id(self):
+        return self.release["id"] if self.release else None
 
 
 def recognize_local(con, ev, img, use_ocr):
-    """Passi 1-3 in locale. Restituisce (fonte, release trovata o None, candidati ordinati)."""
+    """Ricerca locale. Restituisce (fonte, release sicura o None, candidati ordinati)."""
     ranked = []
-    # 1. barcode
+    # barcode
     if img is not None:
         for b in read_barcodes(img):
             if b not in ev.barcodes:
                 ev.barcodes.append(b)
     found = search_barcode_local(con, ev)
     if len(found) == 1:
-        return "locale-barcode", found[0], []
+        return "locale-barcode", found[0], score_candidates(found, ev)
     if img is not None and use_ocr and not ev.ocr_done:
         ev.add_lines(ocr_lines(img))
     if found:  # stesso barcode per più stampe: scelgo con gli altri dati della foto
         ranked = score_candidates(found, ev)
         return "locale-barcode", clear_winner(ranked), ranked
-    # 2. numero di catalogo + etichetta
+    # numero di catalogo + etichetta
     found = search_catno_local(con, ev)
     if found:
         ranked = score_candidates(found, ev)
         return "locale-catno", clear_winner(ranked), ranked
-    # 3. artista e titolo, ricerca tollerante agli errori di lettura
+    # artista e titolo, ricerca tollerante agli errori di lettura
     if ev.lines:
         ranked = [x for x in score_candidates(search_text_local(con, ev), ev)
                   if min(x[1]["_coverage"]) >= TEXT_MIN_COVERAGE]
@@ -753,72 +862,114 @@ def recognize_local(con, ev, img, use_ocr):
     return "", None, []
 
 
-def recognize(path, con, api, use_ocr, ai=None, cached_ai=None):
+def merge_ranked(*lists):
+    seen, out = set(), []
+    for ranked in lists:
+        for x in ranked:
+            if x[1]["id"] not in seen:
+                seen.add(x[1]["id"])
+                out.append(x)
+    return out
+
+
+def recognize(path, con, api, use_ocr, ai=None, cache=None):
+    """Riconosce il disco di una foto. cache: dati AI già pagati per questa foto
+    ({"read": ..., "choice": ...}), che non vengono mai richiesti di nuovo."""
+    cache = dict(cache or {})
     ev = Evidence()
     img = load_image(path)
+
+    # 1. Parte locale: se il risultato è sicuro, niente AI
     fonte, release, ranked = recognize_local(con, ev, img, use_ocr)
-
-    # Non in locale: ricerca via API Discogs (barcode, poi numero di catalogo)
-    if release is None and not ranked:
-        api_fonte, api_found = search_api(api, ev)
-        if len(api_found) == 1:
-            return Recognition("trovato", api_fonte, api_found[0]["id"], [], ev.describe())
-        if api_found:
-            fonte, ranked = api_fonte, [(0.0, r, []) for r in api_found]
-
-    # Opzione --ai: solo se non riconosciuta con i metodi gratuiti
-    ai_cost, ai_data = 0.0, cached_ai
-    if release is None and (ai is not None or cached_ai is not None):
-        if ai_data is None and not ai.exhausted:
-            ai_data, ai_cost = ai.read(path)
-        if ai_data:
-            ocr_ranked = ranked  # quello che l'OCR aveva trovato da solo
-            ai_evidence(ev, ai_data)
-            a_fonte, a_release, a_ranked = recognize_local(con, ev, None, use_ocr)
-            if a_release is not None and contradicts_ocr(a_release, ocr_ranked):
-                ev.ai_note += " (in contrasto con artista/titolo letti dall'OCR)"
-                a_release, a_ranked = None, a_ranked + [x for x in ocr_ranked if x[1]["id"] not in
-                                                        {y[1]["id"] for y in a_ranked}]
-            if a_release is not None:
-                return Recognition("trovato", "ai+" + a_fonte, a_release["id"], a_ranked, ev.describe(),
-                                   ai_cost, ai_data)
-            if not a_ranked:
-                api_fonte, api_found = search_api(api, ev)
-                if len(api_found) == 1:
-                    return Recognition("trovato", "ai+" + api_fonte, api_found[0]["id"], [], ev.describe(),
-                                       ai_cost, ai_data)
-                a_ranked = [(0.0, r, []) for r in api_found]
-            if a_ranked:
-                fonte, ranked = "ai+" + (a_fonte or "api"), a_ranked
-
-    details = ev.describe()
     if release is not None:
-        return Recognition("trovato", fonte, release["id"], ranked, details, ai_cost, ai_data)
-    if ranked:
-        return Recognition("multiplo", fonte, None, ranked, details, ai_cost, ai_data)
-    _, unconfirmed = local_catno_matches(con, ev) if ev.catnos else ({}, {})
-    if unconfirmed:
-        details += "; catno presente nel database ma etichetta non riconosciuta nella foto"
-        return Recognition("non_trovato", "", None, [(0.0, r, []) for r in dd.get_releases(con, list(unconfirmed))],
-                           details, ai_cost, ai_data)
-    return Recognition("non_trovato", "", None, [], details, ai_cost, ai_data)
+        return Recognition("trovato", fonte, release, ranked, ev.describe())
+    ocr_text = ev.text
+
+    # Nulla in locale ma c'è un codice leggibile: prima la ricerca gratuita su Discogs
+    if not ranked:
+        api_fonte, found = search_api(api, ev)
+        if len(found) == 1:
+            return Recognition("trovato", api_fonte, found[0], [], ev.describe())
+        if found:
+            fonte, ranked = api_fonte, score_candidates(found, ev)
+
+    if ai is None and not cache.get("read"):  # --senza-ai: solo metodi gratuiti
+        if ranked:
+            return Recognition("multiplo", fonte, None, ranked, ev.describe())
+        return Recognition("non_trovato", "", None, [], ev.describe())
+
+    # 2. L'AI guarda la foto e dice cosa vede
+    cost = 0.0
+    image = AIVision.prepare(img) if ai is not None else None
+    read = cache.get("read")
+    if read is None:
+        read, c = ai.read(image)
+        cost += c
+    ai_evidence(ev, read)
+
+    # 3. Di nuovo la parte locale, con i dati dell'AI; se non trova nulla, Discogs via API
+    a_fonte, a_release, a_ranked = recognize_local(con, ev, None, use_ocr)
+    ranked = merge_ranked(a_ranked, score_candidates([r for _s, r, _w in ranked], ev))
+    ranked.sort(key=lambda x: -x[0])
+    base = a_fonte or fonte
+    if not ranked:
+        base, found = search_api(api, ev, ai_artist_titles(read))
+        local = {r["id"]: r for r in dd.get_releases(con, [r["id"] for r in found])}
+        ranked = score_candidates([{**local[r["id"]], "_code": r.get("_code")} if r["id"] in local else r
+                                   for r in found], ev)
+    ranked = [x for x in ranked if coherent(x[1], read, ocr_text)]  # l'AI non può inventare
+    if not ranked:
+        return Recognition("non_trovato", "", None, [], ev.describe() + "; nessun candidato coerente con la foto",
+                           cost, read)
+
+    def source(r):
+        return "api" if r.get("_fonte") == "api" else "locale"
+
+    # Un solo candidato coerente, o un vincitore chiaro: niente seconda chiamata
+    if a_release is not None and coherent(a_release, read, ocr_text):
+        return Recognition("trovato", "ai+" + a_fonte, a_release, ranked, ev.describe(), cost, read)
+    if len(ranked) == 1:
+        r = ranked[0][1]
+        return Recognition("trovato", f"ai+{source(r)}-{(base or 'testo').split('-')[-1]}", r, ranked,
+                           ev.describe(), cost, read)
+
+    # 4. L'AI sceglie tra i candidati reali
+    shortlist = [r for _s, r, _w in ranked[:AI_MAX_CANDIDATES]]
+    ids = [r["id"] for r in shortlist]
+    choice = cache.get("choice")
+    if choice is not None and choice.get("release_id") not in ids and choice.get("_ids") != ids:
+        choice = None  # i candidati sono cambiati (es. database aggiornato): la scelta va rifatta
+    if choice is None:
+        if image is None:  # scelta non in cache e AI spenta: resta da controllare
+            return Recognition("multiplo", base, None, ranked, ev.describe(), cost, read)
+        try:
+            choice, c = ai.choose(image, shortlist)
+        except BudgetReached:  # la lettura è già pagata: la salvo e mi fermo
+            return Recognition("sospeso", base, None, ranked, ev.describe(), cost, read)
+        cost += c
+        choice["_ids"] = ids
+    chosen = next((r for r in shortlist if r["id"] == choice.get("release_id")), None)
+    details = ev.describe()
+    if choice.get("reason"):
+        details += f"; scelta AI ({CONFIDENCE_IT.get(choice.get('confidence'), '?')}): {choice['reason']}"
+    if chosen is None:
+        return Recognition("non_trovato", base, None, ranked, details + "; l'AI non ha trovato il disco tra i candidati",
+                           cost, read, choice)
+    return Recognition("trovato", f"ai-scelta+{source(chosen)}", chosen, ranked, details, cost, read, choice)
 
 
-def contradicts_ocr(release, ocr_ranked):
-    """True se l'OCR aveva letto chiaramente artista e titolo di un altro disco."""
-    def key(r):
-        return dd.normalize_text(re.sub(r"\s*\(\d+\)", "", r.get("artists") or "")), dd.normalize_text(r.get("title"))
-    clear = [r for _s, r, _w in ocr_ranked if min(r.get("_coverage", (0, 0))) >= 0.9]
-    return bool(clear) and all(key(r) != key(release) for r in clear)
+def describe_release(r):
+    if not r:
+        return ""
+    extra = " ".join(str(x) for x in (r.get("labels"), r.get("country"), r.get("year")) if x)
+    return f"{clean_artist(r.get('artists'))} - {r.get('title')} ({extra})"
 
 
 def format_candidates(ranked):
     out = []
     for score, c, why in ranked[:MAX_CANDIDATES_SHOWN]:
-        name = " - ".join(x for x in (re.sub(r"\s*\(\d+\)", "", c.get("artists") or ""), c.get("title")) if x)
-        extra = " ".join(str(x) for x in (c.get("labels"), c.get("country"), c.get("year")) if x)
         points = f" [punteggio {score:.2f}: {', '.join(why)}]" if why else ""
-        out.append(f"{c['id']} {name} ({extra}){points} https://www.discogs.com/release/{c['id']}")
+        out.append(f"{c['id']} {describe_release(c)}{points} https://www.discogs.com/release/{c['id']}")
     if len(ranked) > MAX_CANDIDATES_SHOWN:
         out.append(f"... e altre {len(ranked) - MAX_CANDIDATES_SHOWN}")
     return " | ".join(out)
@@ -843,8 +994,10 @@ CREATE TABLE IF NOT EXISTS foto (
     dettagli    TEXT,
     aggiornato  TEXT,
     riga_csv    TEXT,     -- external_id della riga CSV in cui è finita la foto
-    ai_dati     TEXT,     -- dati letti dall'AI (--ai), per non pagarli due volte
-    ai_costo    REAL DEFAULT 0
+    ai_dati     TEXT,     -- cosa ha letto l'AI nella foto (mai richiesto due volte)
+    ai_costo    REAL DEFAULT 0,  -- spesa AI per questa foto (euro, 1 $ = 1 €)
+    ai_scelta   TEXT,     -- scelta dell'AI tra i candidati, con sicurezza e motivo
+    disco       TEXT      -- artista - titolo (etichetta, paese, anno) della release trovata
 );
 CREATE TABLE IF NOT EXISTS prezzi (      -- prezzi suggeriti per release, tutti i gradi
     release_id INTEGER PRIMARY KEY,
@@ -880,7 +1033,8 @@ def open_state(path):
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     con.executescript(STATE_SCHEMA)
-    for column, decl in [("ai_dati", "TEXT"), ("ai_costo", "REAL DEFAULT 0")]:  # stato di una versione precedente
+    for column, decl in [("ai_dati", "TEXT"), ("ai_costo", "REAL DEFAULT 0"), ("ai_scelta", "TEXT"),
+                         ("disco", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute("PRAGMA table_info(foto)")}:
             con.execute(f"ALTER TABLE foto ADD COLUMN {column} {decl}")
     old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
@@ -895,8 +1049,8 @@ def is_local_source(fonte):
     return (fonte or "").split("+")[-1].startswith("locale")
 
 
-def money(usd):
-    return f"${usd:.2f}" if usd >= 1 else f"${usd:.3f}"
+def money(eur):
+    return f"{eur:.2f} €" if eur >= 1 else f"{eur:.3f} €"
 
 
 def is_assigned(state, external_id):
@@ -1046,6 +1200,18 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings):
     rows.sort(key=lambda r: natural_key(r[0]))
     write_csv(out_dir / "da_controllare.csv", CHECK_HEADER, rows)
 
+    # Come è stata riconosciuta ogni foto, con la spesa AI per disco.
+    recog = []
+    for r in state.execute("SELECT * FROM foto"):
+        choice = json.loads(r["ai_scelta"]) if r["ai_scelta"] and r["esito"] == "trovato" else {}
+        recog.append([photo_name(r["foto"]), r["cartella"], r["esito"], r["fonte"] or "", r["release_id"] or "",
+                      r["disco"] or "", CONFIDENCE_IT.get(choice.get("confidence"), ""), choice.get("reason", ""),
+                      f"{r['ai_costo'] or 0:.4f}"])
+    recog.sort(key=lambda r: natural_key(Path(r[0]).name))
+    write_csv(out_dir / "riconoscimento.csv",
+              ["foto", "cartella", "esito", "metodo", "release_id", "disco", "sicurezza_ai", "motivo_ai", "costo_ai_eur"],
+              recog)
+
     if simulated_csv or simulated_listings:
         sim_dir = out_dir / "simulazione"
         for old in sim_dir.glob("inventario_*.csv"):
@@ -1072,10 +1238,10 @@ def main():
                         help="non pubblica annunci via API e non modifica i CSV veri: scrive tutto in risultati/simulazione/")
     parser.add_argument("--riprova", action="store_true",
                         help="rianalizza anche le foto finite da controllare (non trovate, più release, senza prezzo)")
-    parser.add_argument("--ai", action="store_true",
-                        help="usa un modello AI con visione (a pagamento) solo per le foto non riconosciute")
-    parser.add_argument("--ai-tetto", type=float, default=5.0,
-                        help="spesa AI massima in dollari, sommando tutte le esecuzioni (default 5)")
+    parser.add_argument("--senza-ai", action="store_true",
+                        help="non usa l'AI: solo riconoscimento locale gratuito (le foto incerte vanno da controllare)")
+    parser.add_argument("--ai-tetto", type=float, default=50.0,
+                        help="spesa AI massima in euro, sommando tutte le esecuzioni (default 50); raggiunta, lo script si ferma")
     parser.add_argument("--ai-modello", default="claude-haiku-4-5", choices=sorted(AI_MODELS),
                         help="modello AI (default claude-haiku-4-5, il più economico)")
     parser.add_argument("--db", default=str(dd.DEFAULT_DB), help="database creato da discogs_dump.py")
@@ -1100,9 +1266,9 @@ def main():
     state = open_state(STATE_DB)
     ai = None
     ai_spent_before = state.execute("SELECT COALESCE(SUM(ai_costo), 0) FROM foto").fetchone()[0]
-    if args.ai:
-        ai = AIReader(args.ai_modello, args.ai_tetto, ai_spent_before)
-        print(f"AI attiva ({args.ai_modello}) solo per le foto non riconosciute: "
+    if not args.senza_ai:
+        ai = AIVision(args.ai_modello, args.ai_tetto, ai_spent_before)
+        print(f"AI ({args.ai_modello}) usata solo quando la parte locale non basta: "
               f"spesa finora {money(ai_spent_before)}, tetto {money(args.ai_tetto)}")
     if not args.simula:
         recover_pending_listings(state, api, identity["username"])
@@ -1113,6 +1279,7 @@ def main():
     stats = {"righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0}
     price_calls = 0
     total = len(photos)
+    budget_stop = False
 
     try:
         # 1. Riconoscimento di ogni foto (i risultati restano salvati).
@@ -1126,34 +1293,47 @@ def main():
             row = state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
             fingerprint = photo.fingerprint()
             same_photo = row is not None and row["impronta"] == fingerprint
-            cached_ai = json.loads(row["ai_dati"]) if same_photo and row["ai_dati"] else None
-            if (not same_photo or row["esito"] == "errore"
+            cache = {"read": json.loads(row["ai_dati"]) if same_photo and row["ai_dati"] else None,
+                     "choice": json.loads(row["ai_scelta"]) if same_photo and row["ai_scelta"] else None}
+            if (not same_photo or row["esito"] in ("errore", "sospeso")
                     or (args.riprova and row["esito"] in PROBLEMS)
-                    or (ai and row["esito"] in ("non_trovato", "multiplo") and cached_ai is None and not ai.exhausted)):
+                    or (ai and row["esito"] in ("non_trovato", "multiplo") and cache["read"] is None)):
                 try:
-                    rec = recognize(photo.path, con, api, use_ocr, ai, cached_ai)
+                    rec = recognize(photo.path, con, api, use_ocr, ai, cache)
+                except BudgetReached:
+                    budget_stop = True
+                    break
                 except (ApiError, OSError, ValueError) as e:
-                    rec = Recognition("errore", details=str(e), ai_data=cached_ai)
-                except Exception as e:  # errori dell'API di Anthropic con --ai
-                    if not ai or type(e).__module__.split(".")[0] != "anthropic":
+                    rec = Recognition("errore", details=str(e), ai_read=cache["read"], ai_choice=cache["choice"])
+                except Exception as e:  # errori dell'API di Anthropic
+                    if type(e).__module__.split(".")[0] != "anthropic":
                         raise
-                    rec = Recognition("errore", details=f"AI: {e}", ai_data=cached_ai)
+                    rec = Recognition("errore", details=f"AI: {e}", ai_read=cache["read"], ai_choice=cache["choice"])
                 old_cost = row["ai_costo"] if same_photo and row["ai_costo"] else 0.0
                 state.execute(
                     "INSERT OR REPLACE INTO foto (external_id, cartella, foto, impronta, media, sleeve, esito, fonte,"
-                    " release_id, candidati, dettagli, aggiornato, ai_dati, ai_costo)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " release_id, candidati, dettagli, aggiornato, ai_dati, ai_costo, ai_scelta, disco)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (eid, photo.folder, str(photo.path), fingerprint, photo.media, photo.sleeve, rec.esito, rec.fonte,
                      rec.release_id, format_candidates(rec.candidates), rec.details, now(),
-                     json.dumps(rec.ai_data) if rec.ai_data is not None else None, old_cost + rec.ai_cost),
+                     json.dumps(rec.ai_read) if rec.ai_read is not None else None, old_cost + rec.ai_cost,
+                     json.dumps(rec.ai_choice) if rec.ai_choice is not None else None, describe_release(rec.release)),
                 )
                 state.commit()
                 row = state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
-                where = f"release {row['release_id']} ({row['fonte']})" if row["esito"] == "trovato" else row["esito"]
-                print(f"{prefix}: {where}")
+                if rec.esito == "trovato":
+                    how = row["fonte"]
+                    if rec.ai_choice and rec.ai_choice.get("confidence"):
+                        how += f", sicurezza {CONFIDENCE_IT.get(rec.ai_choice['confidence'], '?')}"
+                    print(f"{prefix}: {row['disco']} [release {row['release_id']}, {how}]")
+                else:
+                    print(f"{prefix}: {row['esito']}")
+                if rec.esito == "sospeso":
+                    budget_stop = True
+                    break
             if row["esito"] in ("trovato", "senza_prezzo"):
                 todo.append((photo, row))
-            else:
+            elif row["esito"] != "sospeso":
                 stats["problemi"] += 1
 
         # 2. Stessa release e stesso grado = copie dello stesso disco: un unico annuncio.
@@ -1250,7 +1430,11 @@ def main():
         print(f"  richieste API: {api.calls} (di cui prezzi: {price_calls})")
         if ai:
             print(f"  spesa AI: {money(ai.spent - ai_spent_before)} in questa esecuzione, {money(ai.spent)} in totale"
-                  f" (tetto {money(args.ai_tetto)})" + ("  TETTO RAGGIUNTO" if ai.exhausted else ""))
+                  f" (tetto {money(args.ai_tetto)})")
+        if budget_stop:
+            print(f"\nTETTO DI SPESA AI RAGGIUNTO ({money(args.ai_tetto)}): lo script si è fermato qui.\n"
+                  "Le foto già riconosciute sono state messe in vendita normalmente. Per continuare con le altre,\n"
+                  "rilancia lo stesso comando con un tetto più alto, es. --ai-tetto 80.")
         print(f"Risultati in {out_dir}/  (righe in da_controllare.csv: {to_check})")
         if args.simula:
             print(f"Simulazione in {out_dir / 'simulazione'}/")

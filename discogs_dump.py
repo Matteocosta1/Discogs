@@ -504,7 +504,7 @@ def word_frequency(con, word):
 
 
 def get_releases(con, ids):
-    """Dettagli delle release indicate, con le etichette e i numeri di catalogo di ognuna."""
+    """Dettagli delle release indicate, con etichette, numeri di catalogo e barcode di ognuna."""
     ids = list(dict.fromkeys(ids))
     out = {}
     for i in range(0, len(ids), 500):
@@ -512,13 +512,17 @@ def get_releases(con, ids):
         marks = ",".join("?" * len(chunk))
         for r in con.execute(f"SELECT {_RELEASE_COLS}, r.year, r.master_id FROM releases r WHERE r.id IN ({marks})",
                              chunk):
-            out[r["id"]] = {**dict(r), "label_names": [], "catno_norms": []}
+            out[r["id"]] = {**dict(r), "label_names": [], "catno_norms": [], "barcodes": []}
         for c in con.execute(f"SELECT release_id, label, catno_norm FROM catnos WHERE release_id IN ({marks})", chunk):
             d = out.get(c["release_id"])
             if d is not None:
                 if c["label"] and c["label"] not in d["label_names"]:
                     d["label_names"].append(c["label"])
                 d["catno_norms"].append(c["catno_norm"])
+        for b in con.execute(f"SELECT release_id, barcode FROM barcodes WHERE release_id IN ({marks})", chunk):
+            d = out.get(b["release_id"])
+            if d is not None and b["barcode"] not in d["barcodes"]:
+                d["barcodes"].append(b["barcode"])
     return [out[i] for i in ids if i in out]
 
 
