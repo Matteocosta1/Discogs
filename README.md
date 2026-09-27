@@ -1,6 +1,6 @@
 # Discogs: database locale e messa in vendita
 
-Due script:
+Tre script:
 
 - **`discogs_dump.py`**: scarica il dump mensile delle release di Discogs e lo
   importa in un database SQLite locale (`data/discogs.sqlite`), con indici su
@@ -10,6 +10,8 @@ Due script:
   marketplace Discogs e prepara la vendita. I dischi trovati nel
   database locale finiscono nei CSV di caricamento dell'inventario. Quelli
   trovati solo via API vengono pubblicati direttamente via API.
+- **`pubblica_bozze.py`**: mette in vendita, in blocco e dopo la tua conferma,
+  gli annunci che `vendi.py --bozza` ha creato in bozza.
 
 Il database, i token e le chiavi (`.env`) e i risultati sono nel `.gitignore`, quindi non
 finiscono mai nella repository.
@@ -308,11 +310,50 @@ metterli in vendita:
 caffeinate -i python3 vendi.py ~/Pictures/Dischi --bozza
 ```
 
+Quando le hai controllate, le metti in vendita tutte insieme con
+`pubblica_bozze.py` (vedi "Mettere in vendita le bozze" più sotto).
+
 **Tempi:** lo script fa al massimo 60 richieste al minuto a Discogs, come
 impone il limite dell'API. Con 10.000 dischi conta diverse ore. Puoi
 interromperlo quando vuoi con **Ctrl+C**: rilanciando lo stesso comando
 riparte da dove era. Le foto già riconosciute non vengono rianalizzate e gli
 annunci già pubblicati non vengono mai ripubblicati.
+
+### Mettere in vendita le bozze (`pubblica_bozze.py`)
+
+Mette in vendita (`For Sale`), via API, **tutte le bozze create da
+`vendi.py --bozza`**: quelle dei CSV di inventario (dopo che li hai caricati
+su Discogs) e quelle create via API.
+
+```bash
+caffeinate -i python3 pubblica_bozze.py
+```
+
+1. Cerca nel tuo inventario Discogs le bozze create dallo script (le
+   riconosce dall'`external_id`, cioè il nome della foto). Le altre bozze
+   del tuo inventario non vengono toccate.
+2. Ti mostra **quante bozze sta per mettere in vendita** (quante dai CSV e
+   quante create via API), il totale dei prezzi, le prime 10 e il tempo
+   stimato.
+3. **Chiede conferma**: scrivi `s` e premi Invio per procedere. Qualsiasi
+   altra risposta annulla senza toccare nulla.
+4. Le mette in vendita una per una e alla fine dice quante ci sono riuscite
+   e quali no, con il motivo.
+
+Cose da sapere:
+
+- Prezzo e gradi sono quelli che l'annuncio ha **in quel momento su
+  Discogs**: se in bozza hai cambiato qualcosa a mano, resta la tua modifica.
+- Le bozze che hai già messo in vendita o cancellato a mano vengono saltate,
+  come le righe dei CSV non ancora caricati su Discogs.
+- Una riga del CSV con `quantity` 3 diventa su Discogs 3 annunci: vengono
+  contati e messi in vendita tutti e 3.
+- Puoi interromperlo con **Ctrl+C** e rilanciarlo: riparte dalle bozze
+  rimaste, senza doppioni. Lo stesso vale per quelle non riuscite.
+- Va al ritmo di 60 richieste al minuto: 1.000 bozze richiedono circa 18
+  minuti.
+- Aggiorna `annunci_pubblicati_api.csv` (colonna `status`). I CSV di
+  inventario invece non cambiano: restano quelli che hai caricato.
 
 ### Regola del prezzo
 
@@ -531,7 +572,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 
 ### Dove sta lo stato
 
-I progressi (foto riconosciute, risultati dell'AI e relativo costo, prezzi ottenuti, dati collezionistici, righe CSV e annunci creati) sono in
+I progressi (foto riconosciute, risultati dell'AI e relativo costo, prezzi ottenuti, dati collezionistici, righe CSV, annunci creati e bozze messe in vendita) sono in
 `data/vendita_stato.sqlite`. È separato da `discogs.sqlite` perché quello viene
 ricostruito da zero ogni mese, e i progressi andrebbero persi.
 

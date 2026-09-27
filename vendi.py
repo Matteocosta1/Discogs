@@ -605,10 +605,17 @@ class DiscogsAPI:
         params = {"curr_abbr": currency} if currency else None
         return self.request("GET", f"/marketplace/stats/{release_id}", params)
 
-    def inventory_page(self, username, page):
-        return self.request("GET", f"/users/{urllib.parse.quote(username)}/inventory", {
-            "sort": "listed", "sort_order": "desc", "per_page": 100, "page": page,
-        })
+    def inventory_page(self, username, page, status=None):
+        params = {"sort": "listed", "sort_order": "desc", "per_page": 100, "page": page}
+        if status:
+            params["status"] = status
+        return self.request("GET", f"/users/{urllib.parse.quote(username)}/inventory", params)
+
+    def edit_listing(self, listing_id, release_id, condition, sleeve_condition, price, status):
+        body = {"release_id": release_id, "condition": condition, "price": price, "status": status}
+        if sleeve_condition:
+            body["sleeve_condition"] = sleeve_condition
+        return self.request("POST", f"/marketplace/listings/{listing_id}", body=body)
 
 
 def api_result_as_release(r):
@@ -1218,6 +1225,14 @@ CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     inviato     TEXT,
     calcolo     TEXT,     -- come è stato calcolato il prezzo
     status      TEXT      -- FOR_SALE / DRAFT (vuoto = FOR_SALE, versioni precedenti)
+);
+CREATE TABLE IF NOT EXISTS bozze_pubblicate ( -- bozze messe in vendita da pubblica_bozze.py
+    listing_id  INTEGER PRIMARY KEY,
+    external_id TEXT,
+    release_id  INTEGER,
+    price       REAL,
+    origine     TEXT,     -- CSV / API
+    pubblicato  TEXT
 );
 """
 
