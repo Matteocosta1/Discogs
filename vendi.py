@@ -27,7 +27,8 @@ del file senza estensione è l'external_id.
   4. trovato in locale -> una riga nel CSV di caricamento inventario con
      quantity = numero di foto (max 1.000 dischi per file);
      trovato solo via API -> un annuncio via API per foto (l'API non ha un
-     campo quantità), con external_id = nome della foto.
+     campo quantità), con external_id = nome della foto;
+     con --bozza gli annunci sono in bozza (Draft) invece che in vendita.
 
 Tutto lo stato è salvato in data/vendita_stato.sqlite: se lo script si
 interrompe, rilanciando lo stesso comando riparte da dove era, senza annunci doppi.
@@ -584,13 +585,13 @@ class DiscogsAPI:
                 return {}
             raise
 
-    def create_listing(self, release_id, condition, sleeve_condition, price, external_id):
+    def create_listing(self, release_id, condition, sleeve_condition, price, external_id, status="For Sale"):
         return self.request("POST", "/marketplace/listings", body={
             "release_id": release_id,
             "condition": condition,
             "sleeve_condition": sleeve_condition,
             "price": price,
-            "status": "For Sale",
+            "status": status,
             "external_id": external_id,
         })
 
@@ -1202,7 +1203,8 @@ CREATE TABLE IF NOT EXISTS righe_csv (   -- righe già assegnate a un file CSV
     sleeve      TEXT,
     quantita    INTEGER,
     foto        TEXT,     -- tutte le foto del gruppo
-    calcolo     TEXT      -- come è stato calcolato il prezzo
+    calcolo     TEXT,     -- come è stato calcolato il prezzo
+    status      TEXT      -- FOR_SALE / DRAFT (vuoto = FOR_SALE, versioni precedenti)
 );
 CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     external_id TEXT PRIMARY KEY,   -- nome della foto
@@ -1214,7 +1216,8 @@ CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     listing_id  INTEGER,
     messaggio   TEXT,
     inviato     TEXT,
-    calcolo     TEXT      -- come è stato calcolato il prezzo
+    calcolo     TEXT,     -- come è stato calcolato il prezzo
+    status      TEXT      -- FOR_SALE / DRAFT (vuoto = FOR_SALE, versioni precedenti)
 );
 """
 
@@ -1227,7 +1230,8 @@ def open_state(path):
     for table, column, decl in [("foto", "ai_dati", "TEXT"), ("foto", "ai_costo", "REAL DEFAULT 0"),
                                 ("foto", "ai_scelta", "TEXT"), ("foto", "disco", "TEXT"),
                                 ("righe_csv", "calcolo", "TEXT"), ("annunci_api", "calcolo", "TEXT"),
-                                ("collezionistici", "calcolo", "TEXT")]:  # stato di una versione precedente
+                                ("collezionistici", "calcolo", "TEXT"), ("righe_csv", "status", "TEXT"),
+                                ("annunci_api", "status", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
@@ -1307,12 +1311,14 @@ def recover_pending_listings(state, api, username):
 
 # Colonne del caricamento inventario di Discogs (i valori di status sono FOR_SALE o DRAFT).
 CSV_HEADER = ["release_id", "price", "media_condition", "sleeve_condition", "quantity", "external_id", "status"]
-CSV_STATUS = "FOR_SALE"
-LISTING_HEADER = ["external_id", "release_id", "price", "media_condition", "sleeve_condition", "calcolo_prezzo"]
+# Stato degli annunci: nel CSV (FOR_SALE / DRAFT) e via API ("For Sale" / "Draft").
+API_STATUS = {"FOR_SALE": "For Sale", "DRAFT": "Draft"}
+LISTING_HEADER = ["external_id", "release_id", "price", "media_condition", "sleeve_condition", "status",
+                  "calcolo_prezzo"]
 
 
-def csv_row(release_id, price, media, sleeve, quantity, external_id):
-    return [release_id, f"{price:.2f}", GRADES[media], GRADES[sleeve], quantity, external_id, CSV_STATUS]
+def csv_row(release_id, price, media, sleeve, quantity, external_id, status):
+    return [release_id, f"{price:.2f}", GRADES[media], GRADES[sleeve], quantity, external_id, status or "FOR_SALE"]
 
 
 def write_csv(path, header, rows):
@@ -1377,21 +1383,21 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     for part, rows in parts.items():
         rows.sort(key=lambda r: natural_key(r["external_id"]))
         write_csv(out_dir / f"inventario_{part:03d}.csv", CSV_HEADER,
-                  [csv_row(r["release_id"], r["price"], r["media"], r["sleeve"], r["quantita"], r["external_id"])
-                   for r in rows])
+                  [csv_row(r["release_id"], r["price"], r["media"], r["sleeve"], r["quantita"], r["external_id"],
+                           r["status"]) for r in rows])
     # Quali foto sono finite in ogni riga (per ritrovare le copie).
     all_rows = sorted(state.execute("SELECT * FROM righe_csv").fetchall(),
                       key=lambda r: (r["parte"], natural_key(r["external_id"])))
     write_csv(out_dir / "inventario_foto.csv",
-              ["file", "external_id", "release_id", "quantity", "prezzo", "foto", "calcolo_prezzo"],
+              ["file", "external_id", "release_id", "quantity", "prezzo", "status", "foto", "calcolo_prezzo"],
               [[f"inventario_{r['parte']:03d}.csv", r["external_id"], r["release_id"], r["quantita"],
-                f"{r['price']:.2f}", r["foto"], r["calcolo"] or ""] for r in all_rows])
+                f"{r['price']:.2f}", r["status"] or "FOR_SALE", r["foto"], r["calcolo"] or ""] for r in all_rows])
 
     published = sorted(state.execute("SELECT * FROM annunci_api WHERE stato = 'pubblicato'").fetchall(),
                        key=lambda r: natural_key(r["external_id"]))
     write_csv(out_dir / "annunci_pubblicati_api.csv", LISTING_HEADER + ["listing_id", "link"],
               [[r["external_id"], r["release_id"], f"{r['price']:.2f}", GRADES[r["media"]], GRADES[r["sleeve"]],
-                r["calcolo"] or "", r["listing_id"], f"https://www.discogs.com/sell/item/{r['listing_id']}"]
+                API_STATUS[r["status"] or "FOR_SALE"], r["calcolo"] or "", r["listing_id"], f"https://www.discogs.com/sell/item/{r['listing_id']}"]
                for r in published])
 
     # Da controllare a mano.
@@ -1439,7 +1445,8 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
             write_csv(sim_dir / f"inventario_{part:03d}.csv", CSV_HEADER, part_rows)
         write_csv(sim_dir / "annunci_api_simulati.csv", LISTING_HEADER, simulated_listings)
         write_csv(sim_dir / "inventario_foto.csv",
-                  ["external_id", "release_id", "quantity", "prezzo", "foto", "calcolo_prezzo"], simulated_rows_info)
+                  ["external_id", "release_id", "quantity", "prezzo", "status", "foto", "calcolo_prezzo"],
+                  simulated_rows_info)
     return len(rows)
 
 
@@ -1466,6 +1473,9 @@ def main():
     parser.add_argument("--soglia-collezionistico", type=int, default=4,
                         help="per collezionistici.csv: punteggio minimo per considerare un disco collezionistico (default 4)")
     parser.add_argument("--limite", type=int, help="elabora solo le prime N foto (prova)")
+    parser.add_argument("--bozza", action="store_true",
+                        help="crea gli annunci come bozza (Draft) invece che in vendita (For Sale), "
+                             "sia nel CSV di inventario sia via API")
     parser.add_argument("--simula", action="store_true",
                         help="non pubblica annunci via API e non modifica i CSV veri: scrive tutto in risultati/simulazione/")
     parser.add_argument("--riprova", action="store_true",
@@ -1479,13 +1489,15 @@ def main():
     parser.add_argument("--db", default=str(dd.DEFAULT_DB), help="database creato da discogs_dump.py")
     parser.add_argument("--uscita", default=str(OUT_DIR), help="cartella dei risultati (default: risultati/)")
     args = parser.parse_args()
+    status = "DRAFT" if args.bozza else "FOR_SALE"
 
     photos, warnings = scan_photos(args.cartella)
     for w in warnings:
         print(f"Attenzione: {w}")
     if args.limite:
         photos = photos[:args.limite]
-    print(f"Foto da elaborare: {len(photos)}" + (" (SIMULAZIONE: nessun annuncio verrà pubblicato)" if args.simula else ""))
+    print(f"Foto da elaborare: {len(photos)}" + (" (SIMULAZIONE: nessun annuncio verrà pubblicato)" if args.simula else "")
+          + (" - annunci come BOZZA (Draft)" if args.bozza else ""))
 
     con = dd.open_db(args.db)
     use_ocr = ocr_available()
@@ -1637,35 +1649,40 @@ def main():
                 quantity = len(members)
                 photos_text = ", ".join(p.name for p, _ in members)
                 if args.simula:
-                    simulated_csv.append(csv_row(release_id, price, media, sleeve, quantity, row_id))
-                    simulated_rows_info.append([row_id, release_id, quantity, f"{price:.2f}", photos_text, calc])
+                    simulated_csv.append(csv_row(release_id, price, media, sleeve, quantity, row_id, status))
+                    simulated_rows_info.append([row_id, release_id, quantity, f"{price:.2f}", status, photos_text,
+                                                calc])
                 else:
                     state.execute(
                         "INSERT INTO righe_csv (external_id, parte, release_id, price, media, sleeve, quantita, foto,"
-                        " calcolo) VALUES (?,?,?,?,?,?,?,?,?)",
-                        (row_id, parts.assign(quantity), release_id, price, media, sleeve, quantity, photos_text, calc))
+                        " calcolo, status) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (row_id, parts.assign(quantity), release_id, price, media, sleeve, quantity, photos_text, calc,
+                         status))
                     for p, _ in members:
                         state.execute("UPDATE foto SET riga_csv = ? WHERE external_id = ?", (row_id, p.external_id))
                 state.commit()
                 stats["righe_csv"] += 1
                 stats["copie_csv"] += quantity
-                print(f"{info} -> CSV")
+                print(f"{info} -> CSV" + (" (bozza)" if args.bozza else ""))
                 continue
 
             # Trovato solo via API: un annuncio per foto (l'API non ha un campo quantità).
             for p, _ in members:
                 eid = p.external_id
                 if args.simula:
-                    simulated_listings.append([eid, release_id, f"{price:.2f}", GRADES[media], GRADES[sleeve], calc])
+                    simulated_listings.append([eid, release_id, f"{price:.2f}", GRADES[media], GRADES[sleeve],
+                                               API_STATUS[status], calc])
                     stats["api"] += 1
-                    print(f"{info} -> annuncio API {eid} (simulato)")
+                    print(f"{info} -> annuncio API {eid}" + (" in bozza" if args.bozza else "") + " (simulato)")
                     continue
                 state.execute(
-                    "INSERT INTO annunci_api (external_id, release_id, price, media, sleeve, stato, inviato, calcolo)"
-                    " VALUES (?,?,?,?,?,'in_corso',?,?)", (eid, release_id, price, media, sleeve, now(), calc))
+                    "INSERT INTO annunci_api (external_id, release_id, price, media, sleeve, stato, inviato, calcolo,"
+                    " status) VALUES (?,?,?,?,?,'in_corso',?,?,?)",
+                    (eid, release_id, price, media, sleeve, now(), calc, status))
                 state.commit()  # segnato PRIMA di inviare: niente doppioni se si interrompe
                 try:
-                    resp = api.create_listing(release_id, GRADES[media], GRADES[sleeve], price, eid)
+                    resp = api.create_listing(release_id, GRADES[media], GRADES[sleeve], price, eid,
+                                              API_STATUS[status])
                 except ApiUncertain as e:
                     print(f"{info}: esito della pubblicazione di {eid} incerto ({e}), verrà controllato al prossimo avvio")
                     continue
@@ -1680,7 +1697,8 @@ def main():
                               (resp.get("listing_id"), eid))
                 state.commit()
                 stats["api"] += 1
-                print(f"{info} -> annuncio {eid} pubblicato via API (listing {resp.get('listing_id')})")
+                print(f"{info} -> annuncio {eid} " + ("creato in bozza" if args.bozza else "pubblicato")
+                      + f" via API (listing {resp.get('listing_id')})")
     except KeyboardInterrupt:
         print("\nInterrotto. Rilancia lo stesso comando per riprendere da qui.")
     finally:

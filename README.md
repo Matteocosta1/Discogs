@@ -202,7 +202,10 @@ almeno 0,15 punti di distacco dalla seconda; altrimenti decide l'AI.
     `quantity` = numero di foto ed `external_id` = nome della prima foto;
   - trovato **solo su Discogs** → annunci creati via API (`For Sale`), **uno
     per foto** perché l'API non ha un campo quantità, con external_id = nome
-    di quella foto.
+    di quella foto;
+  - con `--bozza` gli annunci (sia nel CSV sia via API) sono creati **in
+    bozza** (`Draft`): non sono visibili ai compratori finché non li metti in
+    vendita tu da Discogs.
 
 ### Prima volta: installazione
 
@@ -296,6 +299,13 @@ Con premi diversi, per esempio +30% con 3-5 copie in vendita:
 
 ```bash
 caffeinate -i python3 vendi.py ~/Pictures/Dischi --premio-alcune-copie 30
+```
+
+Per creare tutti gli annunci **in bozza** e controllarli su Discogs prima di
+metterli in vendita:
+
+```bash
+caffeinate -i python3 vendi.py ~/Pictures/Dischi --bozza
 ```
 
 **Tempi:** lo script fa al massimo 60 richieste al minuto a Discogs, come
@@ -446,8 +456,15 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --ai-tetto 80
 | `da_controllare.csv` | Foto da sistemare a mano: nome della foto, cartella, motivo, dettagli letti e candidati |
 
 I CSV di inventario hanno le colonne `release_id`, `price`, `media_condition`,
-`sleeve_condition`, `quantity`, `external_id` e `status` (`FOR_SALE`, il
-valore indicato dalla guida di Discogs per il caricamento CSV).
+`sleeve_condition`, `quantity`, `external_id` e `status`: `FOR_SALE`, oppure
+`DRAFT` se hai lanciato lo script con `--bozza` (sono i due valori indicati
+dalla guida di Discogs per il caricamento CSV). Anche `inventario_foto.csv` e
+`annunci_pubblicati_api.csv` hanno una colonna `status`, così vedi quali
+annunci sono in bozza.
+
+- Lo stato di una riga resta quello con cui è stata scritta la prima volta:
+  lanciare più tardi lo script con o senza `--bozza` non cambia le righe (né
+  gli annunci) già creati, solo quelli nuovi.
 
 - Una riga scritta in un file **resta sempre in quel file**, e le righe delle
   esecuzioni successive vanno in file nuovi.
@@ -503,6 +520,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | `--soglia-prezzo 80` | Per `collezionistici.csv`: prezzo oltre il quale un disco conta come di valore (default 50, valuta del tuo account) |
 | `--soglia-collezionistico 5` | Per `collezionistici.csv`: punteggio minimo (default 4) |
 | `--limite N` | Elabora solo le prime N foto |
+| `--bozza` | Crea gli annunci in bozza (`Draft`) invece che in vendita (`For Sale`), sia nel CSV di inventario sia via API |
 | `--simula` | Non pubblica annunci e non tocca i CSV veri; scrive in `risultati/simulazione/` |
 | `--riprova` | Rianalizza le foto finite da controllare |
 | `--ai-tetto 80` | Spesa AI massima in euro, sommando tutte le esecuzioni (default 50); raggiunta, lo script si ferma |
