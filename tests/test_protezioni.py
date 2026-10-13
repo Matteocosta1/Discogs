@@ -37,6 +37,9 @@ RELEASES = [
     (1111111, "Moodymann", "Silentintroduction", "Planet E", "PE-TEST", "US", 1997, "Vinyl, LP, Album"),
     (4207270, "Theo Parrish", "Dance Of The Medusa", "Sound Signature", "SS049", "US", 2012, "Vinyl, 12\""),
     (807332, "Omar-S", "Test Omar-S EP", "FXHE Records", "FXHE-TEST", "US", 2006, "Vinyl, 12\""),
+    # Francisco - Music Business: stesso disco in LP e in CD (catalogo del CD semplificato)
+    (572658, "Francisco", "Music Business", "Nature Records", "NAT2130", "Italy", 2005, "Vinyl, LP, Album"),
+    (568083, "Francisco", "Music Business", "Nature Records", "NATCD2130", "Italy", 2005, "CD, Album"),
 ]
 
 # Prezzo suggerito (uguale per tutti i gradi) e dati del marketplace di ogni release.
@@ -49,6 +52,8 @@ MARKET = {
     1111111: (80.0, {"want": 10, "have": 100}, {"num_for_sale": 2, "lowest_price": {"value": 80.0}}),  # 120 €
     4207270: (25.0, {"want": 40, "have": 100}, {"num_for_sale": 6, "lowest_price": {"value": 25.0}}),
     807332: (15.0, {"want": 30, "have": 100}, {"num_for_sale": 8, "lowest_price": {"value": 15.0}}),
+    572658: (12.0, {"want": 10, "have": 100}, {"num_for_sale": 6, "lowest_price": {"value": 12.0}}),
+    568083: (5.0, {"want": 2, "have": 100}, {"num_for_sale": 9, "lowest_price": {"value": 4.0}}),
 }
 
 # Foto: cartella/nome -> righe lette dall'OCR (testo, altezza). [] = OCR senza testo utile.
@@ -69,6 +74,10 @@ OCR = {
                  ("Sound Signature", 0.02)],
     # Etichetta Omar-S al limite: l'OCR non legge nulla, il primo modello nemmeno.
     "IMG_0007": [],
+    # Francisco - Music Business: copertina (artista e titolo), etichetta LP (NAT2130), etichetta CD
+    "IMG_0010": [("FRANCISCO", 0.06), ("MUSIC BUSINESS", 0.05)],
+    "IMG_0011": [("Nature Records", 0.03), ("NAT2130", 0.012), ("FRANCISCO", 0.05), ("MUSIC BUSINESS", 0.04)],
+    "IMG_0012": [("Nature Records", 0.03), ("NATCD2130", 0.012), ("FRANCISCO", 0.05), ("MUSIC BUSINESS", 0.04)],
 }
 
 # Caso 1: cosa ha "letto" l'AI sbagliando (prende artista, titolo e catno dalla scaletta)

@@ -546,16 +546,36 @@ def local_catno_matches(con, ev):
     return confirmed, unconfirmed
 
 
+# Formati ammessi (--formati-ammessi): il disco fotografato è sempre un vinile. Una release va bene
+# solo se tra i suoi formati c'è uno di questi (Vinyl + CD sì, solo CD / Cassette / File / DVD no).
+ALLOWED_FORMATS = ["Vinyl"]
+
+
+def format_allowed(release, allowed=None):
+    """True se tra i formati della release (dump locale: "Vinyl, LP, Album; CD"; API: ["Vinyl", "LP"])
+    c'è uno dei formati ammessi. Formati sconosciuti: no."""
+    allowed = {a.strip().lower() for a in (allowed or ALLOWED_FORMATS)}
+    formats = release.get("formats") or ""
+    if isinstance(formats, (list, tuple)):
+        formats = ", ".join(formats)
+    return any(part.strip().lower() in allowed for part in re.split(r"[,;]", formats))
+
+
+def keep_allowed(releases):
+    """Solo le release nei formati ammessi: le altre vengono scartate prima di qualsiasi scelta."""
+    return [r for r in releases if format_allowed(r)]
+
+
 def search_barcode_local(con, ev):
     ids = []
     for b in ev.barcodes:
         ids += [r["id"] for r in dd.search_by_barcode(con, b)]
-    return [{**r, "_code": "barcode"} for r in dd.get_releases(con, ids)]
+    return keep_allowed([{**r, "_code": "barcode"} for r in dd.get_releases(con, ids)])
 
 
 def search_catno_local(con, ev):
     confirmed, _ = local_catno_matches(con, ev)
-    return [{**r, "_code": "catno"} for r in dd.get_releases(con, list(confirmed))]
+    return keep_allowed([{**r, "_code": "catno"} for r in dd.get_releases(con, list(confirmed))])
 
 
 def text_lines_for_search(con, ev, max_lines=10):
@@ -613,7 +633,7 @@ def search_text_local(con, ev):
                 ids += found
         if len(ids) > 3000:
             break
-    return dd.get_releases(con, ids[:3000])
+    return keep_allowed(dd.get_releases(con, ids[:3000]))
 
 
 # --------------------------------------------------------------------------
@@ -826,19 +846,25 @@ def api_result_as_release(r):
 
 
 def search_api(api, ev, artist_titles=()):
-    """(fonte, candidati) cercando su Discogs per barcode, poi per catno, poi per artista e titolo."""
+    """(fonte, candidati) cercando su Discogs per barcode, poi per catno, poi per artista e titolo.
+    Solo release nei formati ammessi (con un solo formato ammesso lo si chiede già a Discogs)."""
+    fmt_param = {"format": ALLOWED_FORMATS[0]} if len(ALLOWED_FORMATS) == 1 else {}
+
+    def allowed(res):
+        return [r for r in res.get("results", []) if format_allowed({"formats": r.get("format", [])})]
+
     for b in ev.barcodes:
-        res = api.search(barcode=b)
-        results = {r["id"]: {**api_result_as_release(r), "_code": "barcode"} for r in res.get("results", [])}
+        res = api.search(barcode=b, **fmt_param)
+        results = {r["id"]: {**api_result_as_release(r), "_code": "barcode"} for r in allowed(res)}
         if results:
             return "api-barcode", list(results.values())
     strong = [(norm, raw) for norm, raw in ev.catnos.items() if is_strong_catno(norm)]
     strong.sort(key=lambda x: -len(x[0]))
     for _norm, raw in strong[:3]:  # al massimo 3 tentativi per non sprecare richieste
-        res = api.search(catno=raw)
+        res = api.search(catno=raw, **fmt_param)
         confirmed = {
             r["id"]: {**api_result_as_release(r), "_code": "catno"}
-            for r in res.get("results", [])
+            for r in allowed(res)
             if any(label_in_text(l, ev.text) for l in r.get("label", []))
         }
         if confirmed:
@@ -847,8 +873,8 @@ def search_api(api, ev, artist_titles=()):
         params = {"release_title": title}
         if artist:
             params["artist"] = artist
-        res = api.search(**params)
-        results = {r["id"]: api_result_as_release(r) for r in res.get("results", [])}
+        res = api.search(**params, **fmt_param)
+        results = {r["id"]: api_result_as_release(r) for r in allowed(res)}
         if results:
             return "api-testo", list(results.values())
     return None, []
@@ -876,6 +902,7 @@ AI_MAX_EDGE = 1568          # lato lungo massimo della foto inviata (pixel)
 AI_MAX_CANDIDATES = 40      # candidati mostrati all'AI per la scelta finale
 
 AI_READ_PROMPT = """This photo shows ONE vinyl record: its front cover, back cover or centre label.
+The record is ALWAYS a vinyl record (LP, 12", 10" or 7"), never a CD, cassette or digital release.
 Report what you can see. Transcribe printed details exactly; use an empty string when something is not clearly readable. Never guess printed details.
 Identify THIS record only from its MAIN printed details: the artist and title printed large on the cover or label (the header), the record's own catalogue number and its barcode.
 A tracklist is NOT the record: never take artist, title or catalogue number from tracklist lines (e.g. "A1 ...", "C2. Artist - Track") or from references such as "From the album 'X' ABC/12 [1973]", which name OTHER records the tracks come from.
@@ -900,6 +927,7 @@ AI_READ_SCHEMA = {
 }
 
 AI_CHOOSE_PROMPT = """This photo shows ONE vinyl record (front cover, back cover or centre label).
+The record is ALWAYS a vinyl record: never choose a CD, cassette or file release (check the format column).
 Below is a list of candidate Discogs releases. Choose the one this record is.
 Compare every visible clue: artist, title, label, catalogue number, barcode, country, year, format, artwork.
 Identify the record from its MAIN printed details (artist and title printed large on the cover or label, its own catalogue number, its barcode).
@@ -2147,6 +2175,17 @@ def same_record_gap(photos, seconds):
     return close, missing, used
 
 
+def same_title_other_release(items):
+    """Gruppi di foto [(foto, riga)] con lo stesso artista e titolo (confronto tollerante: maiuscole,
+    accenti, punteggiatura, "(2)" negli artisti) ma release diverse."""
+    by_title = {}
+    for photo, row in items:
+        key = dd.normalize_text(clean_artist(artist_title(row["disco"])))
+        if row["release_id"] and key:
+            by_title.setdefault(key, []).append((photo, row))
+    return [members for members in by_title.values() if len({r["release_id"] for _, r in members}) > 1]
+
+
 def is_stale(when, max_age_days):
     """True se un dato salvato il `when` (ISO) è più vecchio di max_age_days giorni (None = mai)."""
     if max_age_days is None:
@@ -2480,6 +2519,9 @@ def run(opened):
                         help="spesa AI massima in euro, sommando tutte le esecuzioni (default 50); raggiunta, lo script si ferma")
     parser.add_argument("--ai-modello", default="claude-haiku-4-5", choices=sorted(AI_MODELS),
                         help="modello AI (default claude-haiku-4-5, il più economico)")
+    parser.add_argument("--formati-ammessi", default="Vinyl",
+                        help="formati Discogs ammessi, separati da virgole (default Vinyl): le release senza nessuno "
+                             "di questi formati vengono scartate (Vinyl + CD va bene, solo CD no)")
     parser.add_argument("--ai-modello-secondo", default=AI_SECOND_MODEL, choices=sorted(AI_MODELS),
                         help="modello più forte per un secondo tentativo sulle foto non trovate o con più release "
                              f"possibili dopo il primo (default {AI_SECOND_MODEL}); stesso tetto di spesa")
@@ -2504,6 +2546,7 @@ def run(opened):
     args = parser.parse_args()
     status = "DRAFT" if args.bozza else "FOR_SALE"
     check_price_args(args)
+    ALLOWED_FORMATS[:] = [f.strip() for f in args.formati_ammessi.split(",") if f.strip()] or ["Vinyl"]
     if args.rielabora and not args.bozza:
         raise SystemExit("--rielabora funziona solo insieme a --bozza: rielaborando foto già elaborate gli annunci\n"
                          "devono essere bozze, per non mettere mai in vendita dei doppioni.")
@@ -2666,6 +2709,24 @@ def run(opened):
                 stats["problemi"] += 1
                 if row["esito"] == "da_verificare" and row["release_id"] and row["prezzo"] is None:
                     todo.append((photo, row))  # solo per calcolare il prezzo da mostrare: non va in vendita
+
+        # Stesso artista e titolo su release diverse (es. LP e CD) nello stesso giro: quasi sempre lo
+        # stesso disco fotografato più volte e riconosciuto in due modi. Tutte da controllare, prima
+        # di qualsiasi richiesta a Discogs. Il controllo si ripete a ogni lancio.
+        for members in same_title_other_release([(p, r) for p, r in todo if r["esito"] != "da_verificare"]):
+            releases = sorted({r["release_id"] for _, r in members})
+            reason = ("stesso artista e titolo su release diverse (es. LP e CD): "
+                      + ", ".join(f"{p.external_id} -> {r['release_id']}" for p, r in members)
+                      + "; probabilmente lo stesso disco fotografato più volte")
+            for p, _ in members:
+                state.execute("UPDATE foto SET esito = 'stesso_disco', motivo = ? WHERE external_id = ?",
+                              (reason, p.external_id))
+            state.commit()
+            stats["problemi"] += len(members)
+            flagged = {p.external_id for p, _ in members}
+            todo = [(p, r) for p, r in todo if p.external_id not in flagged]
+            print(f"{artist_title(members[0][1]['disco'])}: DA CONTROLLARE, stesso artista e titolo su "
+                  f"{len(releases)} release diverse ({', '.join(map(str, releases))})")
 
         # 2. Stessa release e stesso grado = copie dello stesso disco: un unico annuncio.
         groups = {}

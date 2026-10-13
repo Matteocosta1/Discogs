@@ -790,6 +790,79 @@ class TestDataDiScatto(TempRun):
         self.assertEqual(self.run.inventory(), [])
 
 
+class TestSoloVinile(TempRun):
+    photos = {"VG+": ["IMG_0010"]}
+
+    def test_format_allowed(self):
+        self.assertTrue(vendi.format_allowed({"formats": "Vinyl, LP, Album"}, ["Vinyl"]))
+        self.assertTrue(vendi.format_allowed({"formats": "Vinyl, LP, Album; CD, Album"}, ["Vinyl"]))  # Vinyl + CD
+        self.assertTrue(vendi.format_allowed({"formats": ["Vinyl", "12\"", "33 ⅓ RPM"]}, ["Vinyl"]))     # dall'API
+        for formats in ("CD, Album", "Cassette, Album", "File, MP3", "DVD, PAL", "", None):
+            self.assertFalse(vendi.format_allowed({"formats": formats}, ["Vinyl"]), formats)
+        self.assertTrue(vendi.format_allowed({"formats": "CD, Album"}, ["Vinyl", "CD"]))
+
+    def test_solo_cd_scartato_lp_scelto(self):
+        # Artista e titolo combaciano con l'LP 572658 e con il CD 568083: il CD viene scartato prima della scelta
+        out = self.run.main()
+        self.assertEqual([(r["external_id"], r["release_id"]) for r in self.run.inventory()], [("IMG_0010", "572658")])
+        self.assertIn("release 572658, locale-testo", out)
+        self.assertNotIn("568083", self.run.read_csv("riconoscimento.csv")[0]["release_id"])
+
+    def test_vinile_e_cd_accettata(self):
+        con = sqlite3.connect(self.run.db)
+        self.addCleanup(con.close)
+        con.execute("UPDATE releases SET formats = 'Vinyl, LP, Album; CD, Album' WHERE id = 568083")
+        con.commit()
+        db = vendi.dd.open_db(self.run.db)
+        self.addCleanup(db.close)
+        ev = vendi.Evidence()
+        ev.add_lines(tp.OCR["IMG_0010"])
+        found = {r["id"] for r in vendi.search_text_local(db, ev)}
+        self.assertEqual(found, {572658, 568083})                   # Vinyl + CD: va bene
+
+    def test_ricerca_api_solo_vinile(self):
+        ev = vendi.Evidence()
+        ev.barcodes = ["8012345678901"]
+        results = [{"id": 1, "title": "Francisco - Music Business", "format": ["CD", "Album"]},
+                   {"id": 2, "title": "Francisco - Music Business", "format": ["Vinyl", "LP"]}]
+        api = mock.Mock()
+        api.search.return_value = {"results": results}
+        source, found = vendi.search_api(api, ev)
+        self.assertEqual([r["id"] for r in found], [2])
+        self.assertEqual(api.search.call_args.kwargs.get("format"), "Vinyl")   # chiesto anche a Discogs
+
+    def test_prompt_ai_vinile(self):
+        self.assertIn("ALWAYS a vinyl record", vendi.AI_READ_PROMPT)
+        self.assertIn("never choose a CD", vendi.AI_CHOOSE_PROMPT)
+
+
+class TestStessoTitoloReleaseDiverse(TempRun):
+    # Due foto dello stesso disco: etichetta con NAT2130 (LP 572658) e una con NATCD2130 (CD 568083)
+    photos = {"VG+": ["IMG_0011", "IMG_0012"]}
+
+    def test_lp_e_cd_da_controllare(self):
+        out = self.run.main("--formati-ammessi", "Vinyl,CD")
+        self.assertEqual(self.run.inventory(), [])
+        check = self.run.to_check()
+        self.assertEqual(set(check), {"IMG_0011", "IMG_0012"})
+        self.assertIn("stesso artista e titolo su release diverse (es. LP e CD)", check["IMG_0011"]["motivo"])
+        self.assertEqual({check[e]["release_id_proposto"] for e in check}, {"572658", "568083"})
+        self.assertIn("Francisco - Music Business: DA CONTROLLARE", out)
+        self.assertNotIn(("price_suggestions", 572658), self.run.api.log)    # nessuna richiesta a Discogs
+
+    def test_con_solo_vinile_il_cd_non_viene_mai_scelto(self):
+        self.run.main()
+        self.assertEqual([(r["external_id"], r["release_id"]) for r in self.run.inventory()],
+                         [("IMG_0011", "572658")])
+        self.assertNotIn("568083", {r["release_id"] for r in self.run.read_csv("riconoscimento.csv")})
+
+    def test_tolta_la_foto_doppia_va_in_vendita(self):
+        self.run.main("--formati-ammessi", "Vinyl,CD")
+        (self.run.photos / "VG+" / "IMG_0012.JPG").unlink()
+        self.run.main("--formati-ammessi", "Vinyl,CD")
+        self.assertEqual([r["external_id"] for r in self.run.inventory()], ["IMG_0011"])
+
+
 class TestConnessioniChiuse(TempRun):
     def test_stato_chiuso_anche_se_lo_script_si_ferma(self):
         opened = []
