@@ -1299,14 +1299,14 @@ def api_formats_text(release):
     return "; ".join(parts)
 
 
-def get_collector_data(state, api, con, release_id, currency, release=None):
+def get_collector_data(state, api, con, release_id, currency, release=None, max_age_days=None):
     """Dati per il valore collezionistico di una release, dalla cache o da Discogs.
     want/have dalla release, copie in vendita e prezzo più basso dalle statistiche del marketplace,
     caratteristiche della stampa dal database locale (o dall'API se la release non c'è).
     release: la risposta di GET /releases/{id} se già ottenuta (es. dal controllo di vendibilità).
     Restituisce (dati, richieste fatte a Discogs)."""
-    row = state.execute("SELECT dati FROM collezione WHERE release_id = ?", (release_id,)).fetchone()
-    if row:
+    row = state.execute("SELECT dati, ottenuto FROM collezione WHERE release_id = ?", (release_id,)).fetchone()
+    if row and not is_stale(row["ottenuto"], max_age_days):
         cached = json.loads(row["dati"])
         if not cached.get("lowest_price") or cached.get("lowest_currency") == currency:
             return cached, 0  # (se la valuta dell'account è cambiata, li richiedo)
@@ -1344,12 +1344,13 @@ class SaleCheckFailed(Exception):
     """Impossibile sapere se la release si può vendere (rete, errore di Discogs, campo assente)."""
 
 
-def check_sellable(state, api, release_id, refresh=False):
+def check_sellable(state, api, release_id, refresh=False, max_age_days=None):
     """(vendibile, risposta di GET /releases/{id} o None se dalla cache, richieste fatte).
-    L'esito resta in cache nello stato: ai giri successivi nessuna richiesta (refresh=True la rifà).
-    Solleva SaleCheckFailed se Discogs non risponde o la risposta non contiene BLOCKED_FIELD."""
-    row = state.execute("SELECT bloccata FROM vendibilita WHERE release_id = ?", (release_id,)).fetchone()
-    if row and not refresh:
+    L'esito resta in cache nello stato per max_age_days giorni: nel frattempo nessuna richiesta
+    (refresh=True la rifà). Solleva SaleCheckFailed se Discogs non risponde o la risposta non
+    contiene BLOCKED_FIELD."""
+    row = state.execute("SELECT bloccata, ottenuto FROM vendibilita WHERE release_id = ?", (release_id,)).fetchone()
+    if row and not refresh and not is_stale(row["ottenuto"], max_age_days):
         return not row["bloccata"], None, 0
     try:
         release = api.release(release_id)
@@ -1865,9 +1866,24 @@ def is_assigned(state, external_id):
     return state.execute("SELECT 1 FROM annunci_api WHERE external_id = ?", (external_id,)).fetchone() is not None
 
 
-def get_price_suggestions(state, api, release_id, refresh=False):
-    row = state.execute("SELECT suggeriti FROM prezzi WHERE release_id = ?", (release_id,)).fetchone()
-    if row and not refresh:
+CACHE_PRICES_DAYS = 30        # prezzi suggeriti e dati del marketplace
+CACHE_SELLABLE_DAYS = 90      # vendibilità (blocked_from_sale)
+
+
+def is_stale(when, max_age_days):
+    """True se un dato salvato il `when` (ISO) è più vecchio di max_age_days giorni (None = mai)."""
+    if max_age_days is None:
+        return False
+    try:
+        return dt.datetime.now() - dt.datetime.fromisoformat(when) > dt.timedelta(days=max_age_days)
+    except (TypeError, ValueError):
+        return True
+
+
+def get_price_suggestions(state, api, release_id, refresh=False, max_age_days=None):
+    """Prezzi suggeriti per tutti i gradi, dalla cache se più recenti di max_age_days giorni."""
+    row = state.execute("SELECT suggeriti, ottenuto FROM prezzi WHERE release_id = ?", (release_id,)).fetchone()
+    if row and not refresh and not is_stale(row["ottenuto"], max_age_days):
         return json.loads(row["suggeriti"]), False
     sugg = api.price_suggestions(release_id)
     state.execute("INSERT OR REPLACE INTO prezzi VALUES (?, ?, ?)", (release_id, json.dumps(sugg), now()))
@@ -2138,6 +2154,12 @@ def main():
     parser.add_argument("--uscita", default=str(OUT_DIR), help="cartella dei risultati (default: risultati/)")
     parser.add_argument("--backup-da-tenere", type=int, default=BACKUPS_TO_KEEP,
                         help=f"copie dello stato da tenere in data/backup/ (default {BACKUPS_TO_KEEP})")
+    parser.add_argument("--cache-prezzi-giorni", type=float, default=CACHE_PRICES_DAYS,
+                        help="dopo quanti giorni prezzi suggeriti, copie in vendita e want/have salvati si richiedono "
+                             f"di nuovo a Discogs (default {CACHE_PRICES_DAYS})")
+    parser.add_argument("--cache-vendibilita-giorni", type=float, default=CACHE_SELLABLE_DAYS,
+                        help="dopo quanti giorni si ricontrolla se una release è bloccata dal marketplace "
+                             f"(default {CACHE_SELLABLE_DAYS})")
     args = parser.parse_args()
     status = "DRAFT" if args.bozza else "FOR_SALE"
     if args.passo_prezzo < decimal.Decimal("0.01") or args.prezzo_minimo < 0:
@@ -2270,7 +2292,12 @@ def main():
             if row["esito"] in ("trovato", "senza_prezzo", "non_verificato"):
                 todo.append((photo, row))
             elif row["esito"] == "non_vendibile":
-                stats["non_vendibili"] += 1  # già controllata: nessuna richiesta a Discogs
+                checked = state.execute("SELECT ottenuto FROM vendibilita WHERE release_id = ?",
+                                        (row["release_id"],)).fetchone()
+                if checked and not is_stale(checked["ottenuto"], args.cache_vendibilita_giorni):
+                    stats["non_vendibili"] += 1  # già controllata: nessuna richiesta a Discogs
+                else:
+                    todo.append((photo, row))    # controllo scaduto: si richiede a Discogs
             elif row["esito"] != "sospeso":
                 stats["problemi"] += 1
                 if row["esito"] == "da_verificare" and row["release_id"] and row["prezzo"] is None:
@@ -2292,7 +2319,8 @@ def main():
             # Se è bloccata: niente prezzo, niente statistiche, niente annuncio.
             try:
                 sellable, release_data, calls = check_sellable(
-                    state, api, release_id, refresh=any(p.external_id in recheck for p, _ in members + to_check))
+                    state, api, release_id, refresh=any(p.external_id in recheck for p, _ in members + to_check),
+                    max_age_days=args.cache_vendibilita_giorni)
             except SaleCheckFailed as e:
                 for p, _ in members:
                     state.execute("UPDATE foto SET esito = 'non_verificato', motivo = ? WHERE external_id = ?",
@@ -2316,7 +2344,8 @@ def main():
 
             refresh = args.riprova and any(r["esito"] == "senza_prezzo" for _, r in members)
             try:
-                sugg, fetched = get_price_suggestions(state, api, release_id, refresh=refresh)
+                sugg, fetched = get_price_suggestions(state, api, release_id, refresh=refresh,
+                                                      max_age_days=args.cache_prezzi_giorni)
             except ApiError as e:
                 for p, _ in members:
                     state.execute("UPDATE foto SET esito = 'errore', dettagli = ? WHERE external_id = ?",
@@ -2348,7 +2377,7 @@ def main():
             cdata, collector = None, None
             try:
                 cdata, fetched = get_collector_data(state, api, con, release_id, account_currency or currency,
-                                                    release=release_data)
+                                                    release=release_data, max_age_days=args.cache_prezzi_giorni)
                 price_calls += fetched
                 score, reasons = collector_score(cdata, suggested, args.soglia_prezzo)
                 if score >= args.soglia_collezionistico:

@@ -401,5 +401,78 @@ class TestRinominaFoto(TempRun):
         self.assertTrue(renamed[0].startswith(f"{mtime:%Y%m%d_%H%M%S}_"))
 
 
+# --------------------------------------------------------------------------
+# Punto 5: cache dei prezzi e della vendibilità con scadenza
+# --------------------------------------------------------------------------
+
+class TestCacheScadenza(TempRun):
+    def age(self, table, days):
+        state = self.state()
+        when = (vendi.dt.datetime.now() - vendi.dt.timedelta(days=days)).isoformat(timespec="seconds")
+        state.execute(f"UPDATE {table} SET ottenuto = ?", (when,))
+        state.commit()
+
+    def calls(self, rid):
+        return [c[0] for c in self.run.api.log if len(c) > 1 and c[1] == rid]
+
+    def fresh_state(self):
+        self.run.main()  # riempie le cache per 4207270 (IMG_0006)
+        state = vendi.open_state(self.run.tmp / "vendita_stato.sqlite")
+        self.addCleanup(state.close)
+        self.run.api.log = []
+        return state
+
+    def test_prezzi_e_collezione(self):
+        state = self.fresh_state()
+        vendi.get_price_suggestions(state, self.run.api, 4207270, max_age_days=30)
+        vendi.get_collector_data(state, self.run.api, None, 4207270, "EUR", max_age_days=30)
+        self.assertEqual(self.calls(4207270), [])                        # recenti: nessuna richiesta
+
+        self.age("prezzi", 31)
+        self.age("collezione", 31)
+        state = vendi.open_state(self.run.tmp / "vendita_stato.sqlite")
+        self.addCleanup(state.close)
+        with mock.patch("discogs_dump.get_releases", lambda con, ids: []):
+            vendi.get_price_suggestions(state, self.run.api, 4207270, max_age_days=30)
+            vendi.get_collector_data(state, self.run.api, None, 4207270, "EUR", max_age_days=30)
+        self.assertEqual(self.calls(4207270), ["price_suggestions", "release", "marketplace_stats"])
+
+    def test_vendibilita(self):
+        state = self.fresh_state()
+        self.assertEqual(vendi.check_sellable(state, self.run.api, 4207270, max_age_days=90)[2], 0)
+        self.age("vendibilita", 89)
+        self.assertEqual(vendi.check_sellable(state, self.run.api, 4207270, max_age_days=90)[2], 0)
+        self.age("vendibilita", 91)
+        self.assertEqual(vendi.check_sellable(state, self.run.api, 4207270, max_age_days=90)[2], 1)
+        self.assertEqual(self.calls(4207270), ["release"])
+
+    def test_non_vendibile_ricontrollata_alla_scadenza(self):
+        self.run.api.blocked = {3993455}
+        self.run.main()
+        self.assertEqual(len(self.run.read_csv("non_vendibili.csv")), 1)
+        self.run.api.blocked = set()                                       # Discogs l'ha sbloccata
+
+        self.age("vendibilita", 30)
+        self.run.api.log = []
+        self.run.main()
+        self.assertEqual(self.calls(3993455), [])                          # controllo recente: niente
+        self.assertEqual(len(self.run.read_csv("non_vendibili.csv")), 1)
+
+        self.age("vendibilita", 91)
+        self.run.main("--cache-vendibilita-giorni", "90")
+        self.assertIn("release", self.calls(3993455))
+        self.assertEqual(self.run.read_csv("non_vendibili.csv"), [])
+        self.assertIn("IMG_0003", [r["external_id"] for r in self.run.inventory()])
+
+    def test_opzione_prezzi_giorni(self):
+        self.run.main()
+        self.age("prezzi", 10)
+        state = vendi.open_state(self.run.tmp / "vendita_stato.sqlite")
+        self.addCleanup(state.close)
+        self.run.api.log = []
+        vendi.get_price_suggestions(state, self.run.api, 4207270, max_age_days=7)   # --cache-prezzi-giorni 7
+        self.assertEqual(self.calls(4207270), ["price_suggestions"])
+
+
 if __name__ == "__main__":
     unittest.main()
