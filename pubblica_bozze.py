@@ -103,8 +103,13 @@ def main():
     parser = argparse.ArgumentParser(description="Metti in vendita le bozze create da vendi.py --bozza")
     parser.add_argument("--uscita", default=str(vendi.OUT_DIR),
                         help="cartella dei risultati da aggiornare (default: risultati/)")
+    parser.add_argument("--backup-da-tenere", type=int, default=vendi.BACKUPS_TO_KEEP,
+                        help=f"copie dello stato da tenere in data/backup/ (default {vendi.BACKUPS_TO_KEEP})")
     args = parser.parse_args()
 
+    saved = vendi.backup_state(vendi.STATE_DB, args.backup_da_tenere)
+    if saved:
+        print(f"Backup dello stato: {saved}")
     state = open_state(vendi.STATE_DB)
     by_eid, by_listing = our_drafts(state)
     if not by_eid:

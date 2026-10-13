@@ -1508,6 +1508,35 @@ CREATE TABLE IF NOT EXISTS bozze_pubblicate ( -- bozze messe in vendita da pubbl
 """
 
 
+BACKUPS_TO_KEEP = 20
+
+
+def backup_state(path=None, keep=BACKUPS_TO_KEEP):
+    """Copia dello stato in data/backup/vendita_stato_AAAAMMGG_HHMMSS.sqlite (API di backup di
+    sqlite3: copia coerente anche se il file è in uso). Tiene solo le ultime `keep` copie.
+    Restituisce il percorso della copia, o None se lo stato non esiste ancora."""
+    path = Path(path or STATE_DB)
+    if not path.exists():
+        return None
+    folder = path.parent / "backup"
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest, n = folder / f"vendita_stato_{stamp}.sqlite", 1
+    while dest.exists():  # più lanci nello stesso secondo
+        n += 1
+        dest = folder / f"vendita_stato_{stamp}_{n:02d}.sqlite"
+    src, dst = sqlite3.connect(path), sqlite3.connect(dest)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    copies = sorted(folder.glob("vendita_stato_*.sqlite"), key=lambda p: (p.stat().st_mtime, p.name))
+    for old in copies[:max(len(copies) - max(keep, 1), 0)]:
+        old.unlink()
+    return dest
+
+
 def open_state(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
@@ -1854,6 +1883,8 @@ def main():
                         help="modello AI (default claude-haiku-4-5, il più economico)")
     parser.add_argument("--db", default=str(dd.DEFAULT_DB), help="database creato da discogs_dump.py")
     parser.add_argument("--uscita", default=str(OUT_DIR), help="cartella dei risultati (default: risultati/)")
+    parser.add_argument("--backup-da-tenere", type=int, default=BACKUPS_TO_KEEP,
+                        help=f"copie dello stato da tenere in data/backup/ (default {BACKUPS_TO_KEEP})")
     args = parser.parse_args()
     status = "DRAFT" if args.bozza else "FOR_SALE"
     if args.passo_prezzo < decimal.Decimal("0.01") or args.prezzo_minimo < 0:
@@ -1882,6 +1913,10 @@ def main():
     account_currency = api.user(identity["username"]).get("curr_abbr", "")
     print(f"Collegato a Discogs come {identity.get('username')} (valuta dell'account: {account_currency or '?'})")
 
+    if not args.simula:
+        saved = backup_state(STATE_DB, args.backup_da_tenere)
+        if saved:
+            print(f"Backup dello stato: {saved}")
     state = open_state(STATE_DB)
     ai = None
     ai_spent_before = state.execute("SELECT COALESCE(SUM(ai_costo), 0) FROM foto").fetchone()[0]
