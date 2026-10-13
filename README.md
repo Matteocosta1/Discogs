@@ -145,8 +145,16 @@ open "/Applications/Python 3.12/Install Certificates.command"
 La struttura è semplicemente `Dischi/<grado>/<foto>`:
 
 - una cartella per grado, con esattamente questi nomi: `M`, `NM`, `VG+`,
-  `VG`, `G+`, `G`. Per ora il grado della cartella vale sia per il disco sia
-  per la copertina;
+  `VG`, `G+`, `G`. Il grado della cartella vale sia per il disco sia per la
+  copertina;
+- **disco e copertina con gradi diversi:** chiama la cartella
+  `DISCO_COPERTINA`, es. `M_NM` (disco Mint, copertina Near Mint), `VG+_VG`,
+  `NM_VG+`. Nel CSV e negli annunci API `media_condition` è il primo grado e
+  `sleeve_condition` il secondo. Il **prezzo** resta calcolato sul grado del
+  **disco**. Maiuscole e minuscole non contano (`m_nm` va bene); ogni parte
+  deve essere uno dei sei gradi, altrimenti (es. `M_XX`, `M_NM_VG`) lo script
+  si ferma con l'elenco dei nomi ammessi. Vale anche per le sottocartelle per
+  disco (`lotto-02/M_NM/disco-001/…`) e per `raggruppa_foto.py --grado M_NM`;
 - dentro, **una foto per copia**: il **fronte**, il **retro** o l'**etichetta
   centrale**, come ti viene più comodo. Nomi originali dell'iPhone, in JPG o
   HEIC: non serve rinominare nulla.
@@ -161,13 +169,15 @@ Dischi/
     IMG_1236.HEIC   ← stesso disco di IMG_1235, stesso grado: 1 annuncio con quantità 2
   VG/
     IMG_1237.JPG    ← stesso disco ma VG: annuncio separato
+  M_NM/
+    IMG_1238.HEIC   ← disco Mint, copertina Near Mint
 ```
 
 - **L'external_id è il nome della foto senza estensione** (es. `IMG_1234`). È
   un campo privato su Discogs: quando un disco si vende, ti dice quale foto
   corrisponde.
 - **Copie:** le foto riconosciute come la **stessa release con lo stesso
-  grado** vengono unite in un unico annuncio, con quantità pari al numero di
+  grado** (di disco e di copertina) vengono unite in un unico annuncio, con quantità pari al numero di
   foto.
 - **Controlli all'avvio.** Lo script si ferma subito se trova una cartella che
   non è un grado, o due foto con lo stesso nome in cartelle diverse (avrebbero
@@ -249,6 +259,8 @@ python3 raggruppa_foto.py ~/Desktop/scatti --grado VG+ --destinazione ~/Desktop/
   `<destinazione>/<grado>/disco-NNN`; la numerazione continua dopo le
   sottocartelle `disco-NNN` già presenti. Con `--simula` mostra solo
   l'anteprima.
+- `--grado` accetta anche `DISCO_COPERTINA`: `--grado M_NM` crea
+  `<destinazione>/M_NM/disco-NNN`.
 - Controlla sempre i gruppi sospetti prima di lanciare `vendi.py`.
 
 ### Come riconosce il disco
@@ -1026,11 +1038,11 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --ai-tetto 80
 | `archivio/` | File CSV annullati (`inventario_NNN_ANNULLATO.csv`, da non caricare) e copie dei file prima di una modifica (`inventario_NNN_PRIMA_<data>.csv`) |
 | `verifica_inventario.csv` | Scritto da `verifica_inventario.py`: per ogni riga CSV e annuncio API, se è online su Discogs e come |
 | `inventario_foto.csv` | Per ogni riga dei CSV di inventario: tutte le foto (copie) che contiene, il prezzo e il **calcolo del prezzo** |
-| `non_vendibili.csv` | Dischi riconosciuti ma **bloccati dal marketplace Discogs**, che non si possono mettere in vendita: foto, grado, release_id, artista e titolo, metodo di riconoscimento, link alla release, motivo |
-| `collezionistici.csv` | Dischi collezionistici, ordinati per punteggio, con motivi, prezzo suggerito, prezzo più basso in vendita, prezzo finale e calcolo |
+| `non_vendibili.csv` | Dischi riconosciuti ma **bloccati dal marketplace Discogs**, che non si possono mettere in vendita: foto, grado (del disco), grado_copertina, release_id, artista e titolo, metodo di riconoscimento, link alla release, motivo |
+| `collezionistici.csv` | Dischi collezionistici, ordinati per punteggio, con grado del disco e della copertina, motivi, prezzo suggerito, prezzo più basso in vendita, prezzo finale e calcolo |
 | `riconoscimento.csv` | Per ogni foto: esito, metodo (es. `locale-barcode`, `ai-scelta+locale`), disco trovato, sicurezza e motivo della scelta AI, costo AI in euro |
 | `annunci_pubblicati_api.csv` | Annunci pubblicati via API, uno per foto, con calcolo del prezzo e link |
-| `da_controllare.csv` | Foto da sistemare a mano: nome della foto, cartella, motivo, release proposta (`release_id_proposto`, `disco_proposto`, `link_proposto`), metodo (`barcode`, `catno`, `locale-testo`, `ai`), prezzo calcolato, dettagli letti e candidati |
+| `da_controllare.csv` | Foto da sistemare a mano: nome della foto, cartella, grado (del disco), grado_copertina, motivo, release proposta (`release_id_proposto`, `disco_proposto`, `link_proposto`), metodo (`barcode`, `catno`, `locale-testo`, `ai`), prezzo calcolato, dettagli letti e candidati |
 
 I CSV di inventario hanno le colonne `release_id`, `price`, `media_condition`,
 `sleeve_condition`, `quantity`, `external_id` e `status`: `FOR_SALE`, oppure
@@ -1190,7 +1202,7 @@ titolo, e la release Various data a un'etichetta Omar-S finiscono in
 revisione prima del primo lotto (backup, verifica dell'inventario, bozze via
 API, nomi ripetuti, scadenza delle cache, stesso disco fotografato più volte,
 secondo tentativo AI) in `tests/test_lotto.py`, il riprezzamento in
-`tests/test_riprezza.py`, le tre corsie in `tests/test_corsie.py` e i dischi
+`tests/test_riprezza.py`, il doppio grado in `tests/test_doppio_grado.py`, le tre corsie in `tests/test_corsie.py` e i dischi
 in sottocartella con `raggruppa_foto.py` in `tests/test_dischi_cartella.py`. I
 test scritti per la regola unica girano con `--corsie-off`. I test con l'EXIF
 vero (data di scatto, `raggruppa_foto.py`) richiedono Pillow e vengono saltati

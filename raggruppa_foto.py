@@ -13,7 +13,8 @@ Raggruppa le foto sciolte in sottocartelle, una per disco, pronte per vendi.py.
      passano più di --pausa secondi (default 20);
   3. mostra l'anteprima (disco-001: 3 foto, 12:04:10-12:04:31; ...) e i gruppi sospetti: più di 4
      foto (forse due dischi) o 1 sola foto (forse manca il retro);
-  4. dopo conferma SPOSTA (non copia) le foto in <destinazione>/<grado>/disco-NNN; la numerazione
+  4. --grado è un grado (VG+) o DISCO_COPERTINA (M_NM: disco M, copertina NM);
+     dopo conferma SPOSTA (non copia) le foto in <destinazione>/<grado>/disco-NNN; la numerazione
      continua dopo le sottocartelle disco-NNN già presenti. Con --simula mostra solo l'anteprima.
 
 Esempio:
@@ -98,7 +99,9 @@ def ask_confirmation(question):
 def main():
     parser = argparse.ArgumentParser(description="Raggruppa le foto sciolte in sottocartelle, una per disco")
     parser.add_argument("cartella", help="cartella con le foto sciolte (fronte, retro, etichetta di più dischi)")
-    parser.add_argument("--grado", required=True, help=f"grado dei dischi ({', '.join(vendi.GRADES)})")
+    parser.add_argument("--grado", required=True,
+                        help=f"grado dei dischi: {', '.join(vendi.GRADES)} (uguale per disco e copertina) oppure "
+                             "DISCO_COPERTINA, es. M_NM (disco M, copertina NM)")
     parser.add_argument("--destinazione", required=True,
                         help="cartella del lotto: le foto vanno in <destinazione>/<grado>/disco-NNN")
     parser.add_argument("--pausa", type=float, default=PAUSE_SECONDS,
@@ -111,8 +114,8 @@ def main():
         raise SystemExit(f"Cartella non trovata: {source}")
     grades = vendi.read_grades(args.grado)
     if not grades:
-        raise SystemExit(f"Grado non valido: {args.grado} (usa {', '.join(vendi.GRADES)})")
-    grade_dir = Path(args.destinazione).expanduser() / args.grado.strip().upper()
+        raise SystemExit(f"Grado non valido: {args.grado} (usa {vendi.GRADE_FORMATS})")
+    grade_dir = Path(args.destinazione).expanduser() / vendi.grade_text(*grades)
 
     groups = plan(source, grade_dir, args.pausa)
     print(f"Foto: {sum(len(g) for _n, g, _s in groups)}, dischi: {len(groups)} (nuovo disco dopo più di "

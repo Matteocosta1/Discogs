@@ -2,7 +2,8 @@
 """
 Mette in vendita su Discogs i dischi fotografati.
 
-Struttura: Dischi/<grado>/<foto>, con i gradi M, NM, VG+, VG, G+, G e le foto
+Struttura: Dischi/<grado>/<foto>, con i gradi M, NM, VG+, VG, G+, G (oppure
+DISCO_COPERTINA, es. M_NM: disco M, copertina NM; il prezzo segue il grado del disco) e le foto
 con i nomi originali dell'iPhone (JPG o HEIC). Ogni foto è una copia; il nome
 del file senza estensione è l'external_id. Più foto dello stesso disco vanno in
 una sottocartella del grado (Dischi/VG+/disco-001/{fronte,retro,etichetta}.jpg):
@@ -111,17 +112,26 @@ def natural_key(s):
 # --------------------------------------------------------------------------
 
 def read_grades(folder_name):
-    """(grado disco, grado copertina) dal nome della cartella, o None se non è un grado.
+    """(grado disco, grado copertina) dal nome della cartella, o None se non è un grado valido.
 
-    Oggi il grado della cartella vale per entrambi ('VG+' -> VG+ e VG+).
-    Per aggiungere un grado separato della copertina (es. 'VG+_VG') basta
-    dividere qui il nome su '_' e controllare le due parti: il resto dello
-    script usa già due gradi distinti.
+    'VG+' -> VG+ e VG+ (un grado solo vale per entrambi); 'M_NM' -> disco M, copertina NM
+    (DISCO_COPERTINA). Maiuscole e minuscole indifferenti; ogni parte deve essere in GRADES.
     """
-    grade = folder_name.strip().upper()
-    if grade in GRADES:
-        return grade, grade
-    return None
+    parts = [p.strip().upper() for p in folder_name.strip().split("_")]
+    if len(parts) == 1:
+        parts = parts * 2
+    if len(parts) != 2 or not all(p in GRADES for p in parts):
+        return None
+    return parts[0], parts[1]
+
+
+GRADE_FORMATS = (f"un grado ({', '.join(GRADES)}), uguale per disco e copertina, oppure DISCO_COPERTINA "
+                 "(es. M_NM, VG+_VG, NM_VG+)")
+
+
+def grade_text(media, sleeve):
+    """'VG+' se disco e copertina hanno lo stesso grado, altrimenti 'M_NM' (disco_copertina)."""
+    return media if media == sleeve else f"{media}_{sleeve}"
 
 
 @dataclass
@@ -330,7 +340,7 @@ def scan_photos(root):
             continue
         grades = read_grades(sub.name)
         if not grades:
-            errors.append(f"la cartella '{sub.name}' non è un grado valido ({', '.join(GRADES)})")
+            errors.append(f"la cartella '{sub.name}' non è un grado valido: usa {GRADE_FORMATS}")
             continue
         for f in sorted(sub.iterdir()):
             if f.name.startswith("."):
@@ -1933,7 +1943,8 @@ CREATE TABLE IF NOT EXISTS collezionistici (  -- dischi risultati collezionistic
     prezzo      REAL,
     valuta      TEXT,
     destinazione TEXT,
-    calcolo     TEXT
+    calcolo     TEXT,
+    sleeve      TEXT      -- grado della copertina (vuoto nelle versioni precedenti = come il disco)
 );
 CREATE TABLE IF NOT EXISTS vendibilita (   -- release bloccate o no dal marketplace (GET /releases/{id})
     release_id INTEGER PRIMARY KEY,
@@ -2044,7 +2055,8 @@ def open_state(path):
                                 ("foto", "hash", "TEXT"), ("foto", "ai2_dati", "TEXT"),
                                 ("foto", "ai2_scelta", "TEXT"), ("foto", "secondo", "TEXT"),
                                 ("righe_csv", "online_annunci", "TEXT"), ("annunci_api", "online_annunci", "TEXT"),
-                                ("foto", "n_foto", "INTEGER"), ("foto", "hash_foto", "TEXT")]:  # stato di una versione precedente
+                                ("foto", "n_foto", "INTEGER"), ("foto", "hash_foto", "TEXT"),
+                                ("collezionistici", "sleeve", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
@@ -2514,11 +2526,11 @@ REASONS = {
     "non_verificato": "impossibile verificare se è vendibile",
     "stesso_disco": "probabilmente lo stesso disco fotografato più volte",
 }
-CHECK_HEADER = ["foto", "cartella", "motivo", "release_id_proposto", "disco_proposto", "metodo", "prezzo_calcolato",
+CHECK_HEADER = ["foto", "cartella", "grado", "grado_copertina", "motivo", "release_id_proposto", "disco_proposto", "metodo", "prezzo_calcolato",
                 "link_proposto", "dettagli", "candidati"]
 
 
-COLLECTOR_HEADER = ["external_id", "release_id", "grado", "quantita", "foto", "disco", "punteggio", "motivi",
+COLLECTOR_HEADER = ["external_id", "release_id", "grado", "grado_copertina", "quantita", "foto", "disco", "punteggio", "motivi",
                     "prezzo_suggerito", "prezzo_piu_basso_in_vendita", "prezzo_finale", "valuta", "destinazione",
                     "calcolo_prezzo", "link"]
 
@@ -2527,11 +2539,12 @@ def collector_csv_rows(rows):
     out = []
     for r in rows:
         r = list(r)
+        sleeve = (r.pop(14) if len(r) > 14 else None) or r[2]   # versioni precedenti: come il disco
         r[8] = f"{r[8]:.2f}"
         r[9] = f"{r[9]:.2f}" if r[9] else ""
         r[10] = f"{r[10]:.2f}"
-        out.append(r + [f"https://www.discogs.com/release/{r[1]}"])
-    out.sort(key=lambda r: -int(r[6]))
+        out.append(r[:3] + [sleeve] + r[3:] + [f"https://www.discogs.com/release/{r[1]}"])
+    out.sort(key=lambda r: -int(r[7]))
     return out
 
 
@@ -2567,7 +2580,8 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     for r in state.execute("SELECT * FROM foto WHERE esito IN ({})".format(",".join("?" * len(PROBLEMS))),
                            sorted(PROBLEMS)):
         motivo = REASONS[r["esito"]] + (f": {r['motivo']}" if r["motivo"] else "")
-        rows.append([display_name(r), r["cartella"], motivo, r["release_id"] or "", r["disco"] or "",
+        rows.append([display_name(r), r["cartella"], r["media"] or "", r["sleeve"] or "", motivo,
+                     r["release_id"] or "", r["disco"] or "",
                      r["metodo"] or method_of(r["fonte"], None), f"{r['prezzo']:.2f}" if r["prezzo"] else "",
                      f"https://www.discogs.com/release/{r['release_id']}" if r["release_id"] else "",
                      r["dettagli"] or "", r["candidati"] or ""])
@@ -2578,7 +2592,8 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
             motivo = "pubblicazione non confermata: controlla su Discogs se l'annuncio esiste già"
         else:
             motivo = "Discogs ha rifiutato l'annuncio"
-        rows.append([display_name(r), r["cartella"], motivo, r["release_id"], r["disco"] or "",
+        rows.append([display_name(r), r["cartella"], r["media"] or "", r["sleeve"] or "", motivo,
+                     r["release_id"], r["disco"] or "",
                      r["metodo"] or method_of(r["fonte"], None), f"{r['price']:.2f}",
                      f"https://www.discogs.com/release/{r['release_id']}", r["messaggio"] or "", ""])
     rows.sort(key=lambda r: natural_key(r[0]))
@@ -2600,12 +2615,13 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     # Release bloccate dal marketplace: non si possono vendere su Discogs.
     blocked = []
     for r in state.execute("SELECT * FROM foto WHERE esito = 'non_vendibile'"):
-        blocked.append([display_name(r), r["media"], r["release_id"], artist_title(r["disco"]),
+        blocked.append([display_name(r), r["media"], r["sleeve"], r["release_id"], artist_title(r["disco"]),
                         r["metodo"] or method_of(r["fonte"], None), f"https://www.discogs.com/release/{r['release_id']}",
                         r["motivo"] or NOT_SELLABLE_REASON])
     blocked.sort(key=lambda r: natural_key(Path(r[0]).name))
     write_csv(out_dir / "non_vendibili.csv",
-              ["foto", "grado", "release_id", "artista_titolo", "metodo", "link", "motivo"], blocked)
+              ["foto", "grado", "grado_copertina", "release_id", "artista_titolo", "metodo", "link", "motivo"],
+              blocked)
 
     write_csv(out_dir / "collezionistici.csv", COLLECTOR_HEADER,
               collector_csv_rows(tuple(r) for r in state.execute("SELECT * FROM collezionistici")))
@@ -2702,7 +2718,8 @@ def main():
 
 def run(opened):
     parser = argparse.ArgumentParser(description="Metti in vendita su Discogs i dischi fotografati")
-    parser.add_argument("cartella", help="cartella che contiene le sottocartelle dei gradi (M, NM, VG+, VG, G+, G)")
+    parser.add_argument("cartella", help="cartella che contiene le sottocartelle dei gradi: M, NM, VG+, VG, G+, G "
+                                         "(stesso grado per disco e copertina) oppure DISCO_COPERTINA, es. M_NM, VG+_VG")
     add_price_args(parser)
     parser.add_argument("--soglia-prezzo", type=float, default=50.0,
                         help="per collezionistici.csv: prezzo (valuta del tuo account) oltre il quale un disco "
@@ -2955,7 +2972,7 @@ def run(opened):
         def group_label(members):
             copies = sum(p.copies for p, _ in members)
             return (", ".join(p.external_id for p, _ in members),
-                    f"release {release_id} {media}" + (f" x{copies}" if copies > 1 else ""))
+                    f"release {release_id} {grade_text(media, sleeve)}" + (f" x{copies}" if copies > 1 else ""))
 
         for (release_id, media, sleeve), members in groups.items():
             names, label = group_label(members)
@@ -3104,11 +3121,11 @@ def run(opened):
                 c_row = [members[0][0].external_id, release_id, media, sum(p.copies for p, _ in members),
                          ", ".join(p.name for p, _ in members), members[0][1]["disco"] or "", collector[0],
                          "; ".join(collector[1]), suggested, collector[2], price, currency,
-                         "CSV" if is_csv else "API", calc]
+                         "CSV" if is_csv else "API", calc, sleeve]
                 if args.simula:
                     simulated_collectors.append(c_row)
                 else:
-                    state.execute("INSERT OR REPLACE INTO collezionistici VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", c_row)
+                    state.execute("INSERT OR REPLACE INTO collezionistici VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", c_row)
 
             if is_csv:
                 # Trovato in locale: una riga nel CSV con quantity = numero di copie (foto sciolte + copie-N).
