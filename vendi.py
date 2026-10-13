@@ -757,10 +757,52 @@ class DiscogsAPI:
         return self.request("GET", f"/users/{urllib.parse.quote(username)}/inventory", params)
 
     def edit_listing(self, listing_id, release_id, condition, sleeve_condition, price, status):
+        """Modifica "minima": solo i campi obbligatori (usata da verifica_modifica_annuncio.py per il test)."""
         body = {"release_id": release_id, "condition": condition, "price": price, "status": status}
         if sleeve_condition:
             body["sleeve_condition"] = sleeve_condition
         return self.request("POST", f"/marketplace/listings/{listing_id}", body=body)
+
+    def get_listing(self, listing_id):
+        return self.request("GET", f"/marketplace/listings/{listing_id}")
+
+    def edit_listing_fields(self, listing_id, body):
+        """Modifica di un annuncio inviando tutti i campi in body (vedi listing_edit_body)."""
+        return self.request("POST", f"/marketplace/listings/{listing_id}", body=body)
+
+
+# Campi modificabili di un annuncio (POST /marketplace/listings/{id}). Per non azzerarne nessuno,
+# una modifica li reinvia tutti con il loro valore attuale, cambiando solo quelli voluti.
+LISTING_FIELDS = ["release_id", "condition", "sleeve_condition", "price", "comments", "allow_offers", "status",
+                  "external_id", "location", "weight", "format_quantity"]
+
+
+def listing_fields(listing):
+    """I campi modificabili di un annuncio letto da Discogs (GET dell'annuncio o riga dell'inventario)."""
+    out = {}
+    for key in LISTING_FIELDS:
+        if key == "release_id":
+            value = (listing.get("release") or {}).get("id", listing.get("release_id"))
+        elif key == "price":
+            value = listing.get("price")
+            value = value.get("value") if isinstance(value, dict) else value
+        else:
+            value = listing.get(key)
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def listing_edit_body(listing, **changes):
+    """Corpo per modificare un annuncio: tutti i campi attuali, più le modifiche (es. price=12.5)."""
+    return {**listing_fields(listing), **changes}
+
+
+def changed_fields(before, after, ignore=()):
+    """Campi modificabili diversi tra due letture dello stesso annuncio: {campo: (prima, dopo)}."""
+    a, b = listing_fields(before), listing_fields(after)
+    return {k: (a.get(k), b.get(k)) for k in LISTING_FIELDS
+            if k not in ignore and a.get(k) != b.get(k)}
 
 
 def api_result_as_release(r):

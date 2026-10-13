@@ -23,10 +23,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_protezioni as tp  # noqa: E402
 from test_protezioni import Run  # noqa: E402
 
+import pubblica_bozze  # noqa: E402
 import rinomina_foto  # noqa: E402
+import verifica_modifica_annuncio  # noqa: E402
 import verifica_inventario  # noqa: E402
 
 vendi = tp.vendi
+
+
+class ApiFactory:
+    """Al posto della classe DiscogsAPI: restituisce sempre l'API simulata (con MIN_INTERVAL come la vera)."""
+    MIN_INTERVAL = 0
+
+    def __init__(self, api):
+        self.api = api
+
+    def __call__(self, token):
+        return self.api
 
 
 def run_script(run, module, *options, answer="n"):
@@ -36,7 +49,7 @@ def run_script(run, module, *options, answer="n"):
         for target, value in [("sys.argv", [module.__name__, "--uscita", str(run.out), *options]),
                               ("vendi.STATE_DB", run.tmp / "vendita_stato.sqlite"),
                               (f"{module.__name__}.load_token", lambda: "token-finto"),
-                              (f"{module.__name__}.DiscogsAPI", lambda token: run.api),
+                              (f"{module.__name__}.DiscogsAPI", ApiFactory(run.api)),
                               ("builtins.input", lambda prompt="": answer)]:
             stack.enter_context(mock.patch(target, value))
         stack.enter_context(contextlib.redirect_stdout(output))
@@ -591,6 +604,65 @@ class TestSecondoTentativo(TempRun):
         self.run.main()
         self.assertEqual(self.run.inventory(), [])
         self.assertNotEqual(self.foto()["esito"], "trovato")
+
+
+# --------------------------------------------------------------------------
+# verifica_modifica_annuncio.py: la modifica via API non deve azzerare campi
+# --------------------------------------------------------------------------
+
+class TestVerificaModificaAnnuncio(TempRun):
+    FIELDS = {"comments": "Copertina con firma", "location": "Scaffale B3", "weight": 230,
+              "format_quantity": 1, "allow_offers": True}
+
+    def setUp(self):
+        super().setUp()
+        self.item = self.run.api.add_listing("20261013_154233_IMG_2087", 4207270, 25.0, "For Sale", **self.FIELDS)
+        self.original = vendi.listing_fields(self.item)
+
+    def verify(self, answer="s"):
+        output = io.StringIO()
+        with mock.patch("sys.argv", ["verifica_modifica_annuncio.py", str(self.item["id"]), "--uscita",
+                                     str(self.run.out)]), \
+                mock.patch("verifica_modifica_annuncio.load_token", lambda: "token-finto"), \
+                mock.patch("verifica_modifica_annuncio.DiscogsAPI", lambda token: self.run.api), \
+                mock.patch("builtins.input", lambda prompt="": answer), contextlib.redirect_stdout(output):
+            verifica_modifica_annuncio.main()
+        return output.getvalue()
+
+    def test_modifica_minima_azzera_i_campi_e_viene_ripristinata(self):
+        self.run.api.minimal_edit_resets = True
+        out = self.verify()
+        self.assertIn("Prova A (solo campi obbligatori): HA CAMBIATO", out)
+        self.assertIn("comments: 'Copertina con firma' -> None", out)
+        self.assertIn("Ripristino: OK", out)
+        self.assertIn("Prova B (tutti i campi): nessun campo cambiato", out)
+        self.assertEqual(vendi.listing_fields(self.item), self.original)          # annuncio come prima
+
+    def test_modifica_minima_non_tocca_i_campi(self):
+        out = self.verify()
+        self.assertIn("Prova A (solo campi obbligatori): nessun campo cambiato", out)
+        self.assertEqual(vendi.listing_fields(self.item), self.original)
+
+    def test_senza_conferma_nessuna_modifica(self):
+        out = self.verify(answer="n")
+        self.assertIn("Annullato", out)
+        self.assertNotIn("edit", [c[0] for c in self.run.api.log])
+        report = (self.run.out / "verifica_modifica_annuncio.json").read_text()
+        self.assertIn("Copertina con firma", report)                              # originale salvato
+
+
+class TestPubblicaBozze(TempRun):
+    def test_mette_in_vendita_senza_azzerare_campi(self):
+        self.run.main("--bozza")
+        self.run.api.minimal_edit_resets = True     # anche se Discogs azzerasse i campi non inviati
+        for item in self.run.api.inventory:
+            item["comments"] = "Copertina perfetta"
+        out = run_script(self.run, pubblica_bozze, answer="s")
+        self.assertIn("Messe in vendita: 2 su 2", out)
+        for item in self.run.api.inventory:
+            self.assertEqual(item["status"], "For Sale")
+            self.assertEqual(item["comments"], "Copertina perfetta")
+            self.assertIn(item["external_id"], ("IMG_0003", "IMG_0006"))
 
 
 if __name__ == "__main__":

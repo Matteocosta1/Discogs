@@ -10,9 +10,10 @@ Mette in vendita (For Sale) le bozze (Draft) create da vendi.py --bozza.
      vengono saltate;
   3. mostra quante bozze sta per mettere in vendita (e il totale dei prezzi) e
      chiede conferma;
-  4. le mette in vendita via API una per una, con il prezzo e i gradi che
-     l'annuncio ha in quel momento su Discogs (se li hai cambiati a mano,
-     restano i tuoi).
+  4. le mette in vendita via API una per una, reinviando tutti i campi che
+     l'annuncio ha in quel momento su Discogs (prezzo, gradi, commenti,
+     external_id...): cambia solo lo stato, e se hai modificato qualcosa a mano
+     resta la tua modifica.
 
 Si può interrompere con Ctrl+C: rilanciandolo, le bozze rimaste vengono
 ritrovate e rimesse in vendita (mettere in vendita due volte lo stesso annuncio
@@ -27,7 +28,7 @@ import datetime as dt
 from pathlib import Path
 
 import vendi
-from vendi import ApiError, ApiUncertain, DiscogsAPI, fmt, load_token, now, open_state
+from vendi import ApiError, ApiUncertain, DiscogsAPI, fmt, listing_edit_body, load_token, now, open_state
 
 EXAMPLES = 10  # quante bozze mostrare prima della conferma
 
@@ -156,8 +157,9 @@ def main():
             price = (item.get("price") or {}).get("value")
             release_id = (item.get("release") or {}).get("id")
             try:
-                api.edit_listing(listing_id, release_id, item.get("condition"), item.get("sleeve_condition"),
-                                 price, "For Sale")
+                # Tutti i campi attuali dell'annuncio (commenti, external_id, posizione...), cambia solo lo stato:
+                # inviando solo i campi obbligatori Discogs potrebbe azzerare gli altri.
+                api.edit_listing_fields(listing_id, listing_edit_body(item, status="For Sale"))
             except (ApiError, ApiUncertain) as e:
                 problems.append(f"{eid} (listing {listing_id}): {e}")
                 print(f"[{n}/{len(drafts)}] {eid}: non messo in vendita ({e})")

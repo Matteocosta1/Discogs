@@ -163,6 +163,41 @@ class FakeAPI:
         start = (page - 1) * self.page_size
         return {"listings": items[start:start + self.page_size], "pagination": {"pages": pages}}
 
+    # --- annunci: lettura e modifica (per riprezza.py e verifica_modifica_annuncio.py) ---
+    minimal_edit_resets = False   # True: una modifica con i soli campi obbligatori azzera gli altri
+
+    def _item(self, listing_id):
+        return next(i for i in self.inventory if i["id"] == listing_id)
+
+    def get_listing(self, listing_id):
+        import copy
+        self.log.append(("get_listing", listing_id))
+        return {**copy.deepcopy(self._item(listing_id)), "seller": {"username": "test"}}
+
+    def _apply(self, item, body):
+        for key, value in body.items():
+            if key == "price":
+                item["price"] = {**item.get("price", {}), "value": value}
+            elif key == "release_id":
+                item["release"] = {**item.get("release", {}), "id": value}
+            else:
+                item[key] = value
+
+    def edit_listing(self, listing_id, release_id, condition, sleeve_condition, price, status):
+        self.log.append(("edit", listing_id))
+        item = self._item(listing_id)
+        if self.minimal_edit_resets:
+            for key in ("comments", "external_id", "location", "weight", "format_quantity", "allow_offers"):
+                item.pop(key, None)
+        self._apply(item, {"release_id": release_id, "condition": condition, "sleeve_condition": sleeve_condition,
+                           "price": price, "status": status})
+        return {}
+
+    def edit_listing_fields(self, listing_id, body):
+        self.log.append(("edit", listing_id))
+        self._apply(self._item(listing_id), body)
+        return {}
+
     def upload_csv(self, rows):
         """Simula il caricamento di un CSV su Discogs: le righe vanno In vendita (Discogs ignora DRAFT)."""
         for r in rows:
