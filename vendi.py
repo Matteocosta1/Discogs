@@ -156,8 +156,10 @@ def file_sha256(path):
 
 
 def photo_taken_at(path):
-    """Data e ora di scatto dall'EXIF (DateTimeOriginal, altrimenti DateTime), o None se manca.
-    Funziona anche con le HEIC dell'iPhone tramite pillow-heif. Mai la data del file."""
+    """Data e ora di scatto: SOLO il tag EXIF DateTimeOriginal (36867), o None se manca. Funziona anche
+    con le HEIC dell'iPhone tramite pillow-heif. Mai altre date: il tag DateTime (306) è la data di
+    modifica, che le app di messaggistica riscrivono uguale per tutte le foto ("scatti a 0 secondi"),
+    e la data del file con AirDrop è uguale per tutte."""
     try:
         from PIL import Image
         try:
@@ -167,7 +169,7 @@ def photo_taken_at(path):
             pass
         with Image.open(path) as img:
             exif = img.getexif()
-            value = exif.get_ifd(0x8769).get(36867) or exif.get(306)
+            value = exif.get_ifd(0x8769).get(36867)  # DateTimeOriginal
         return dt.datetime.strptime(str(value).strip()[:19], "%Y:%m:%d %H:%M:%S") if value else None
     except Exception:  # foto senza EXIF, formato non leggibile, Pillow non installato
         return None
@@ -2132,15 +2134,17 @@ SAME_RECORD_SECONDS = 90
 
 def same_record_gap(photos, seconds):
     """Foto della stessa release e dello stesso grado: (secondi tra i due scatti più vicini se sotto
-    `seconds`, altrimenti None; foto senza data di scatto EXIF). Due scatti a pochi secondi sono quasi
-    sempre lo stesso disco (fronte e retro), non due copie. Senza EXIF non si decide: la data del file
-    non vale (con AirDrop è uguale per tutte)."""
+    `seconds`, altrimenti None; foto senza DateTimeOriginal; testo con la data usata per ogni foto).
+    Due scatti a pochi secondi sono quasi sempre lo stesso disco (fronte e retro), non due copie.
+    Solo le foto con DateTimeOriginal si confrontano: senza, non si decide e le copie si sommano."""
     taken = [(photo_taken_at(p.path), p) for p in photos]
     missing = [p for t, p in taken if t is None]
     times = sorted(t for t, _p in taken if t is not None)
     gaps = [(b - a).total_seconds() for a, b in zip(times, times[1:])]
     close = min((g for g in gaps if g < seconds), default=None)
-    return close, missing
+    used = ", ".join(f"{p.external_id}: " + (f"DateTimeOriginal {t:%Y-%m-%d %H:%M:%S}" if t else
+                                               "data di scatto mancante") for t, p in taken)
+    return close, missing, used
 
 
 def is_stale(when, max_age_days):
@@ -2677,7 +2681,8 @@ def run(opened):
 
             # Più foto della stessa release e grado: copie diverse o lo stesso disco fotografato più volte?
             if len(members) >= 2 and not args.copie_consecutive:
-                close, no_exif = same_record_gap([p for p, _ in members], args.secondi_stesso_disco)
+                close, no_exif, used = same_record_gap([p for p, _ in members], args.secondi_stesso_disco)
+                print(f"{label}: date di scatto usate: {used}")
                 if close is not None:
                     reason = (f"probabilmente lo stesso disco fotografato più volte (scatti a {close:.0f} secondi di "
                               "distanza): tieni una sola foto per copia, o usa --copie-consecutive")
@@ -2689,7 +2694,7 @@ def run(opened):
                     print(f"{label} ({names}): DA CONTROLLARE, {reason}")
                     continue
                 if no_exif:
-                    print(f"Attenzione: {label}: {len(no_exif)} foto senza data di scatto EXIF "
+                    print(f"Attenzione: {label}: data di scatto mancante (DateTimeOriginal) per {len(no_exif)} foto "
                           f"({', '.join(p.external_id for p in no_exif)}): non posso controllare se sono lo stesso "
                           "disco, le conto come copie diverse")
 

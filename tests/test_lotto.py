@@ -598,7 +598,7 @@ class TestStessoDisco(TempRun):
     def test_senza_exif_due_copie_con_avviso(self):
         out = self.main_with_exif(None)
         self.assertEqual(self.listed(), [("IMG_0003", "2")])
-        self.assertIn("senza data di scatto EXIF (IMG_0004)", out)
+        self.assertIn("data di scatto mancante (DateTimeOriginal) per 1 foto (IMG_0004)", out)
 
     def test_copie_consecutive(self):
         self.main_with_exif(20, "--copie-consecutive")
@@ -739,6 +739,55 @@ class TestPubblicaBozze(TempRun):
             self.assertEqual(item["status"], "For Sale")
             self.assertEqual(item["comments"], "Copertina perfetta")
             self.assertIn(item["external_id"], ("IMG_0003", "IMG_0006"))
+
+
+def write_jpeg(path, color, date_time=None, date_time_original=None):
+    """Una vera foto JPEG con l'EXIF indicato (DateTime = data di modifica, DateTimeOriginal = scatto)."""
+    from PIL import Image
+    exif = Image.Exif()
+    if date_time:
+        exif[306] = date_time
+    if date_time_original:
+        exif.get_ifd(0x8769)[36867] = date_time_original
+    Image.new("RGB", (8, 8), color).save(path, exif=exif)
+
+
+class TestDataDiScatto(TempRun):
+    """Le foto passate da app di messaggistica hanno DateTime (modifica) uguale per tutte e nessun
+    DateTimeOriginal: prima risultavano "scatti a 0 secondi"."""
+    photos = {"VG+": ["IMG_0003", "IMG_0004"]}   # stessa release 3993455, stesso grado
+
+    def setUp(self):
+        super().setUp()
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            self.skipTest("serve Pillow (pip install Pillow)")
+
+    def test_solo_date_time_original(self):
+        path = self.run.tmp / "a.jpg"
+        write_jpeg(path, "red", date_time="2026:10:13 10:00:00")
+        self.assertIsNone(vendi.photo_taken_at(path))            # DateTime da solo non vale
+        write_jpeg(path, "red", date_time="2026:10:13 10:00:00", date_time_original="2026:10:13 15:42:33")
+        self.assertEqual(vendi.photo_taken_at(path), vendi.dt.datetime(2026, 10, 13, 15, 42, 33))
+
+    def test_senza_date_time_original_nessun_blocco(self):
+        for n, (name, color) in enumerate((("IMG_0003", "red"), ("IMG_0004", "blue"))):
+            write_jpeg(self.run.photos / "VG+" / f"{name}.JPG", color, date_time="2026:10:13 10:00:00")
+        out = self.run.main()
+        self.assertNotIn("secondi di distanza", out)
+        self.assertEqual([(r["external_id"], r["quantity"]) for r in self.run.inventory()], [("IMG_0003", "2")])
+        self.assertIn("IMG_0003: data di scatto mancante, IMG_0004: data di scatto mancante", out)
+        self.assertIn("data di scatto mancante (DateTimeOriginal) per 2 foto", out)
+
+    def test_con_date_time_original_vere(self):
+        write_jpeg(self.run.photos / "VG+" / "IMG_0003.JPG", "red", date_time_original="2026:10:13 15:00:00")
+        write_jpeg(self.run.photos / "VG+" / "IMG_0004.JPG", "blue", date_time_original="2026:10:13 15:00:20")
+        out = self.run.main()
+        self.assertIn("IMG_0003: DateTimeOriginal 2026-10-13 15:00:00, IMG_0004: DateTimeOriginal 2026-10-13 15:00:20",
+                      out)
+        self.assertIn("scatti a 20 secondi di distanza", out)
+        self.assertEqual(self.run.inventory(), [])
 
 
 class TestConnessioniChiuse(TempRun):
