@@ -758,11 +758,11 @@ class TestDataDiScatto(TempRun):
     photos = {"VG+": ["IMG_0003", "IMG_0004"]}   # stessa release 3993455, stesso grado
 
     def setUp(self):
-        super().setUp()
         try:
             import PIL  # noqa: F401
         except ImportError:
             self.skipTest("serve Pillow (pip install Pillow)")
+        super().setUp()
 
     def test_solo_date_time_original(self):
         path = self.run.tmp / "a.jpg"
