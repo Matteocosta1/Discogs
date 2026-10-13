@@ -1476,7 +1476,10 @@ CREATE TABLE IF NOT EXISTS righe_csv (   -- righe già assegnate a un file CSV
     quantita    INTEGER,
     foto        TEXT,     -- tutte le foto del gruppo
     calcolo     TEXT,     -- come è stato calcolato il prezzo
-    status      TEXT      -- FOR_SALE / DRAFT (vuoto = FOR_SALE, versioni precedenti)
+    status      TEXT,     -- FOR_SALE / DRAFT (vuoto = FOR_SALE, versioni precedenti)
+    online      TEXT,     -- da verifica_inventario.py: in_vendita / bozza / venduto / scaduto / assente / sparito
+    online_verificato TEXT,  -- data dell'ultima verifica
+    online_visto TEXT     -- prima volta che è stata vista online su Discogs
 );
 CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     external_id TEXT PRIMARY KEY,   -- nome della foto
@@ -1489,7 +1492,10 @@ CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     messaggio   TEXT,
     inviato     TEXT,
     calcolo     TEXT,     -- come è stato calcolato il prezzo
-    status      TEXT      -- FOR_SALE / DRAFT (vuoto = FOR_SALE, versioni precedenti)
+    status      TEXT,     -- FOR_SALE / DRAFT (vuoto = FOR_SALE, versioni precedenti)
+    online      TEXT,     -- come in righe_csv
+    online_verificato TEXT,
+    online_visto TEXT
 );
 CREATE TABLE IF NOT EXISTS rielaborati (  -- stato archiviato da --rielabora (per sicurezza, mai cancellato)
     tabella     TEXT,
@@ -1547,7 +1553,10 @@ def open_state(path):
                                 ("righe_csv", "calcolo", "TEXT"), ("annunci_api", "calcolo", "TEXT"),
                                 ("collezionistici", "calcolo", "TEXT"), ("righe_csv", "status", "TEXT"),
                                 ("annunci_api", "status", "TEXT"), ("foto", "metodo", "TEXT"),
-                                ("foto", "motivo", "TEXT"), ("foto", "prezzo", "REAL")]:  # stato di una versione precedente
+                                ("foto", "motivo", "TEXT"), ("foto", "prezzo", "REAL"),
+                                ("righe_csv", "online", "TEXT"), ("righe_csv", "online_verificato", "TEXT"),
+                                ("righe_csv", "online_visto", "TEXT"), ("annunci_api", "online", "TEXT"),
+                                ("annunci_api", "online_verificato", "TEXT"), ("annunci_api", "online_visto", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
@@ -1560,6 +1569,151 @@ def open_state(path):
 def is_local_source(fonte):
     """True se la release è stata trovata nel database locale (anche dopo la lettura dell'AI)."""
     return (fonte or "").split("+")[-1].startswith("locale")
+
+
+# --------------------------------------------------------------------------
+# Cosa è davvero online: inventario Discogs confrontato con lo stato
+# --------------------------------------------------------------------------
+
+# Stati dell'inventario Discogs da leggere. "For Sale" e "Draft" sono indispensabili; gli altri
+# servono a riconoscere i venduti e, se Discogs non li restituisce, vengono segnalati e saltati.
+INVENTORY_STATUSES = ["For Sale", "Draft", "Sold", "Expired"]
+ONLINE_OF = {"For Sale": "in_vendita", "Draft": "bozza", "Sold": "venduto", "Expired": "scaduto"}
+ONLINE_ORDER = ["in_vendita", "bozza", "venduto", "scaduto"]
+ONLINE_IT = {"in_vendita": "in vendita", "bozza": "in bozza", "venduto": "venduto", "scaduto": "scaduto",
+             "assente": "non online", "sparito": "sparito (era online: venduto o cancellato?)"}
+
+
+class InventoryUnreadable(Exception):
+    """L'inventario Discogs non si può leggere (rete, errore di Discogs, campo external_id assente)."""
+
+
+@dataclass
+class Inventory:
+    by_eid: dict        # external_id -> [annunci]
+    by_listing: dict    # listing_id -> annuncio
+    unavailable: list   # stati che Discogs non ha restituito (es. "Sold")
+
+
+def fetch_inventory(api, username, statuses=INVENTORY_STATUSES):
+    """Tutto l'inventario Discogs del venditore (tutte le pagine, uno stato alla volta)."""
+    items, unavailable = {}, []
+    for status in statuses:
+        page = 1
+        while True:
+            try:
+                data = api.inventory_page(username, page, status=status)
+            except (ApiError, ApiUncertain) as e:
+                if status in ("For Sale", "Draft"):
+                    raise InventoryUnreadable(f"annunci '{status}': {e}")
+                unavailable.append(status)
+                break
+            listings = data.get("listings", [])
+            for item in listings:
+                items[item["id"]] = item
+            if not listings or page >= data.get("pagination", {}).get("pages", 1):
+                break
+            page += 1
+    if items and not any("external_id" in item for item in items.values()):
+        raise InventoryUnreadable("gli annunci restituiti da Discogs non contengono il campo external_id: "
+                                  "impossibile collegarli alle foto")
+    by_eid = {}
+    for item in items.values():
+        if item.get("external_id"):
+            by_eid.setdefault(item["external_id"], []).append(item)
+    return Inventory(by_eid, items, unavailable)
+
+
+def online_of(items):
+    """Lo stato online più "vivo" tra gli annunci di uno stesso external_id."""
+    found = {ONLINE_OF.get(i.get("status"), "scaduto") for i in items}
+    return next((o for o in ONLINE_ORDER if o in found), "scaduto")
+
+
+def verify_listings(state, inventory):
+    """Confronta righe CSV e annunci API dello stato con l'inventario Discogs e salva per ognuno
+    online (in_vendita / bozza / venduto / scaduto / assente / sparito), la data della verifica e
+    la prima volta che è stato visto online. Corregge lo status (FOR_SALE / DRAFT) in base a
+    Discogs: le righe CSV caricate come DRAFT sono in vendita, perché Discogs ignora DRAFT nei CSV.
+    Restituisce [(tabella, riga aggiornata)]."""
+    when = now()
+    for table in ("righe_csv", "annunci_api"):
+        for row in state.execute(f"SELECT * FROM {table}").fetchall():
+            items = list(inventory.by_eid.get(row["external_id"], []))
+            if table == "annunci_api" and row["listing_id"] in inventory.by_listing:
+                item = inventory.by_listing[row["listing_id"]]
+                if item not in items:
+                    items.append(item)
+            if items:
+                online = online_of(items)
+                status = {"in_vendita": "FOR_SALE", "bozza": "DRAFT"}.get(online, row["status"])
+                state.execute(f"UPDATE {table} SET online = ?, online_verificato = ?,"
+                              " online_visto = COALESCE(online_visto, ?), status = ? WHERE external_id = ?",
+                              (online, when, when, status, row["external_id"]))
+            else:
+                online = "sparito" if row["online_visto"] else "assente"
+                state.execute(f"UPDATE {table} SET online = ?, online_verificato = ? WHERE external_id = ?",
+                              (online, when, row["external_id"]))
+    state.commit()
+    return [(t, r) for t in ("righe_csv", "annunci_api")
+            for r in state.execute(f"SELECT * FROM {t}").fetchall()]
+
+
+def can_free(table, row):
+    """True se la riga non è online e non lo è mai stata: si può togliere dallo stato senza rischiare
+    doppioni (mai una riga vista online, che potrebbe essere stata venduta)."""
+    if row["online"] != "assente" or row["online_visto"]:
+        return False
+    return table == "righe_csv" or row["stato"] != "in_corso"
+
+
+def csv_members(state, row_id):
+    """Foto (external_id) di una riga CSV: tutte le copie del gruppo."""
+    members = {r[0] for r in state.execute("SELECT external_id FROM foto WHERE riga_csv = ?", (row_id,))}
+    members.add(row_id)
+    return members
+
+
+def archive_part_files(out_dir, parts, state):
+    """Mai cancellare un inventario_NNN.csv: una parte rimasta senza righe va in
+    risultati/archivio/inventario_NNN_ANNULLATO.csv; una parte che perde solo alcune righe viene
+    prima copiata in archivio (inventario_NNN_PRIMA_<data>.csv) e poi riscritta da write_outputs."""
+    import shutil
+    archive = out_dir / "archivio"
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    for part in sorted(parts):
+        path = out_dir / f"inventario_{part:03d}.csv"
+        if not path.exists():
+            continue
+        archive.mkdir(parents=True, exist_ok=True)
+        if state.execute("SELECT 1 FROM righe_csv WHERE parte = ?", (part,)).fetchone():
+            shutil.copy2(path, archive / f"inventario_{part:03d}_PRIMA_{stamp}.csv")
+        else:
+            dest = archive / f"inventario_{part:03d}_ANNULLATO.csv"
+            if dest.exists():
+                dest = archive / f"inventario_{part:03d}_ANNULLATO_{stamp}.csv"
+            shutil.move(str(path), dest)
+
+
+def free_rows(state, out_dir, rows):
+    """Toglie dallo stato righe CSV e annunci API (copiandoli nella tabella rielaborati): le loro foto
+    tornano elaborabili, con il riconoscimento già fatto. Restituisce le foto liberate."""
+    freed, parts, archive = set(), set(), []
+    for table, row in rows:
+        archive.append((table, row["external_id"], json.dumps(dict(row)), now()))
+        state.execute(f"DELETE FROM {table} WHERE external_id = ?", (row["external_id"],))
+        if table == "righe_csv":
+            members = csv_members(state, row["external_id"])
+            parts.add(row["parte"])
+            state.executemany("UPDATE foto SET riga_csv = NULL WHERE external_id = ?", [(m,) for m in members])
+            freed |= members
+        else:
+            freed.add(row["external_id"])
+    state.executemany("DELETE FROM collezionistici WHERE external_id = ?", [(r["external_id"],) for _, r in rows])
+    state.executemany("INSERT INTO rielaborati VALUES (?, ?, ?, ?)", archive)
+    state.commit()
+    archive_part_files(out_dir, parts, state)
+    return freed
 
 
 def prepare_rework(state, photos, out_dir):

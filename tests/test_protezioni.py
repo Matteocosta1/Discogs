@@ -114,6 +114,9 @@ class FakeAPI:
         self.blocked = set(blocked)    # release bloccate dal marketplace
         self.failing = set(failing)    # release per cui GET /releases/{id} fallisce (rete)
         self.log = []                  # (richiesta, release_id) fatte a Discogs per le release
+        self.inventory = []            # annunci del venditore su Discogs (come li restituisce l'inventario)
+        self.inventory_error = False   # True: la lettura dell'inventario fallisce
+        self.page_size = 100
 
     def identity(self):
         return {"username": "test"}
@@ -146,8 +149,28 @@ class FakeAPI:
         self.listings.append(args)
         return {"listing_id": len(self.listings)}
 
-    def inventory_page(self, *args, **kwargs):
-        return {"listings": [], "pagination": {"pages": 1}}
+    def inventory_page(self, username, page, status=None):
+        self.log.append(("inventory", status))
+        if self.inventory_error:
+            raise vendi.ApiError(0, "nessuna risposta da Discogs per l'inventario")
+        items = [i for i in self.inventory if status is None or i["status"] == status]
+        pages = max(1, -(-len(items) // self.page_size))
+        start = (page - 1) * self.page_size
+        return {"listings": items[start:start + self.page_size], "pagination": {"pages": pages}}
+
+    def upload_csv(self, rows):
+        """Simula il caricamento di un CSV su Discogs: le righe vanno In vendita (Discogs ignora DRAFT)."""
+        for r in rows:
+            for _ in range(int(r["quantity"])):
+                self.add_listing(r["external_id"], int(r["release_id"]), float(r["price"]), "For Sale")
+
+    def add_listing(self, external_id, release_id, price, status, **extra):
+        item = {"id": 9000 + len(self.inventory), "status": status, "external_id": external_id,
+                "release": {"id": release_id}, "price": {"value": price, "currency": "EUR"},
+                "condition": "Very Good Plus (VG+)", "sleeve_condition": "Very Good Plus (VG+)",
+                "posted": "2026-10-13T10:00:00-07:00", **extra}
+        self.inventory.append(item)
+        return item
 
 
 class FakeAI:
