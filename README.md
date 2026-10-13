@@ -571,9 +571,9 @@ e solo dopo aggiorna i prezzi.
 caffeinate -i python3 riprezza.py --applica
 ```
 
-**Come calcola.** Usa la **stessa regola di `vendi.py`** (base, minimo
-suggerito per il grado dell'annuncio, premi scarsità e richiesta a scalini,
-griglia 2,50 per eccesso), con dati di mercato aggiornati (quelli salvati più
+**Come calcola.** Usa la **stessa regola di `vendi.py`**, tre corsie comprese
+(base, minimo suggerito per il grado dell'annuncio, premi scarsità e richiesta
+a scalini, griglia 2,50; vedi "Tre corsie di prezzo"), con dati di mercato aggiornati (quelli salvati più
 vecchi di `--cache-prezzi-giorni`, default 30, si richiedono di nuovo).
 
 **I tuoi annunci non contano come concorrenza.** Le statistiche di Discogs
@@ -635,7 +635,7 @@ l'inventario a rotazione.
 | `--soglia-controllo` | 100 | prezzo nuovo oltre il quale va controllato a mano (la stessa di `vendi.py`) |
 | `--crescita-want` | 30 | crescita % dei want per segnalare un disco "in crescita" |
 | `--cache-prezzi-giorni` | 30 | dati di mercato più vecchi si richiedono a Discogs |
-| regola del prezzo | come `vendi.py` | `--premio-zero-copie`, `--copie-poche`, `--premio-poche-copie`, `--copie-alcune`, `--premio-alcune-copie`, `--scalini-richiesta`, `--passo-prezzo`, `--prezzo-minimo` |
+| regola del prezzo e corsie | come `vendi.py` | `--premio-zero-copie`, `--copie-poche`, `--premio-poche-copie`, `--copie-alcune`, `--premio-alcune-copie`, `--scalini-richiesta`, `--passo-prezzo`, `--prezzo-minimo`, `--corsia-lenta-sotto`, `--corsia-calda-sopra`, `--sconto-corsia-lenta`, `--corsie-off` |
 
 ### Verificare la modifica degli annunci (`verifica_modifica_annuncio.py`)
 
@@ -656,8 +656,10 @@ campi.
 
 ### Regola del prezzo
 
-Vale per **tutti** i dischi. Lo script usa, per ogni release, i dati del
-marketplace Discogs: copie in vendita, prezzo più basso, want/have.
+È la regola delle corsie **normale** e **calda** (vedi "Tre corsie di prezzo",
+sopra), e di tutti i dischi con `--corsie-off`. Lo script usa, per ogni
+release, i dati del marketplace Discogs: copie in vendita, prezzo più basso,
+want/have.
 
 **1. Base** = **prezzo più basso attualmente in vendita**, ma **mai sotto il
 prezzo suggerito** da Discogs per il grado del disco, che fa da soglia minima.
@@ -769,6 +771,63 @@ l'altra, ma **scadono**: prezzi suggeriti, copie in vendita e want/have dopo
 30 giorni (`--cache-prezzi-giorni`), il controllo delle release bloccate dopo
 90 (`--cache-vendibilita-giorni`). Scaduti, si richiedono di nuovo a Discogs,
 così un "0 copie in vendita, +100%" di due mesi fa non resta valido per sempre.
+
+### Tre corsie di prezzo
+
+Su 10.000 dischi il tempo è il costo maggiore. Invece di un prezzo unico, lo
+script divide i dischi in **tre corsie** secondo il rapporto **want/have**
+(quanti vogliono il disco diviso quanti ce l'hanno): i dischi lenti girano in
+fretta, su quelli richiesti si fa margine. Vale sia alla prima pubblicazione
+(`vendi.py`) sia nel riprezzamento mensile (`riprezza.py`).
+
+| Corsia | want/have | Prezzo |
+| --- | --- | --- |
+| **LENTA** | sotto 1 (`--corsia-lenta-sotto`) | **5% sotto** (`--sconto-corsia-lenta`) il prezzo più basso della **concorrenza**, griglia per **difetto** |
+| **NORMALE** | da 1 a 2 | regola standard invariata: base = più basso, mai sotto il suggerito, premi, griglia per eccesso |
+| **CALDA** | sopra 2 (`--corsia-calda-sopra`) | regola standard, con i premi richiesta a scalini alti (+25% oltre 2, +50% oltre 4) |
+
+**Regole della corsia lenta:**
+
+1. **Griglia per difetto.** Dopo lo sconto il prezzo scende al gradino da
+   2,50 **inferiore o uguale**: con l'arrotondamento per eccesso lo sconto
+   sparirebbe e torneresti sopra la concorrenza. È l'unica corsia che
+   arrotonda per difetto.
+2. **Pavimento.** Mai sotto il prezzo suggerito per il grado, né sotto il
+   prezzo minimo (2,50): meglio tenere il disco che regalarlo. Se il 5% sotto
+   la concorrenza cadrebbe sotto il suggerito, il prezzo è il suggerito
+   arrotondato alla griglia (per eccesso).
+3. **Senza concorrenza non è un disco da svendere.** Se non ci sono copie
+   della concorrenza, o il prezzo più basso in vendita potresti essere tu, non
+   c'è un prezzo da sottoquotare: il disco segue la corsia normale.
+4. **I tuoi annunci non sono concorrenza.** In `riprezza.py` lo script li
+   legge dal tuo inventario; in `vendi.py` dallo stato (righe CSV e annunci API
+   in vendita, esclusi quelli venduti, spariti o mai caricati secondo
+   `verifica_inventario.py`).
+
+La **rete di sicurezza** resta in tutte le corsie: un disco collezionistico, o
+sopra `--soglia-controllo`, riconosciuto senza barcode o catalogo esatto va
+comunque in `da_controllare.csv`. E `riprezza.py` non abbassa mai un prezzo:
+se la corsia lenta propone meno del prezzo attuale, l'annuncio resta
+invariato.
+
+**Il calcolo dice sempre la corsia e perché** (colonna `calcolo_prezzo`):
+
+| Situazione | Calcolo | Prezzo |
+| --- | --- | --- |
+| want/have 0,4; concorrenza a 20,00; suggerito 10,00 | corsia LENTA (want/have 0,40 < 1): 5% sotto concorrenza 20,00 = 19,00 → griglia per difetto 17,50 | 17,50 |
+| want/have 0,4; concorrenza a 20,00; suggerito 18,70 | 19,00 → 17,50, sotto il suggerito 18,70: prezzo = suggerito sulla griglia | 20,00 |
+| want/have 0,4; nessuna copia della concorrenza; suggerito 10,00 | corsia LENTA: nessun concorrente da sottoquotare, regola NORMALE; 0 copie +100% | 20,00 |
+| want/have 1,5; più basso 20,00; 6 copie; suggerito 10,00 | corsia NORMALE: 20,00 × (1 + 10%) = 22,00 | 22,50 |
+| want/have 3; più basso 20,00; 6 copie; suggerito 10,00 | corsia CALDA: 20,00 × (1 + 25%) = 25,00 | 25,00 |
+
+| Opzione | Default | Cosa fa |
+| --- | --- | --- |
+| `--corsia-lenta-sotto` | 1 | want/have sotto questo valore: corsia LENTA |
+| `--corsia-calda-sopra` | 2 | want/have sopra questo valore: corsia CALDA |
+| `--sconto-corsia-lenta` | 5 | % sotto il prezzo più basso della concorrenza |
+| `--corsie-off` | | niente corsie: regola unica per tutti, come prima |
+
+Le stesse opzioni valgono per `vendi.py` e `riprezza.py`.
 
 ### Dischi collezionistici (`collezionistici.csv`)
 
@@ -948,6 +1007,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | `--cache-vendibilita-giorni 90` | Dopo quanti giorni si ricontrolla se una release è bloccata dal marketplace (default 90) |
 | `--backup-da-tenere 20` | Copie dello stato da tenere in `data/backup/` (default 20) |
 | `--scalini-richiesta 1:10,2:25,4:50` | Premio richiesta a scalini (vedi "Regola del prezzo") |
+| `--corsia-lenta-sotto 1`, `--corsia-calda-sopra 2`, `--sconto-corsia-lenta 5`, `--corsie-off` | Tre corsie di prezzo (vedi "Tre corsie di prezzo") |
 | `--senza-ai` | Non usa l'AI: solo riconoscimento locale gratuito |
 | `--uscita PERCORSO` | Cartella dei risultati (default `risultati/`) |
 | `--db PERCORSO` | Database creato da `discogs_dump.py` (default `data/discogs.sqlite`) |
@@ -998,7 +1058,9 @@ titolo, e la release Various data a un'etichetta Omar-S finiscono in
 `--rielabora`, le release bloccate, la griglia dei prezzi e i punti della
 revisione prima del primo lotto (backup, verifica dell'inventario, bozze via
 API, nomi ripetuti, scadenza delle cache, stesso disco fotografato più volte,
-secondo tentativo AI) in `tests/test_lotto.py`.
+secondo tentativo AI) in `tests/test_lotto.py`, il riprezzamento in
+`tests/test_riprezza.py` e le tre corsie in `tests/test_corsie.py`. I test
+scritti per la regola unica girano con `--corsie-off`.
 
 ---
 

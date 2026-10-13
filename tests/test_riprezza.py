@@ -45,8 +45,9 @@ class RiprezzaBase(TempRun):
         return self.run.api.add_listing(f"EID_{rid}_{len(self.run.api.inventory)}", rid, price, "For Sale",
                                         comments="Copertina con firma", location="B3", allow_offers=False)
 
-    def riprezza(self, *options, answer="n"):
-        return run_script(self.run, riprezza, *options, answer=answer)
+    def riprezza(self, *options, answer="n", corsie=False):
+        """Lancia riprezza.py; questi test provano la regola unica (--corsie-off), corsie=True per le corsie."""
+        return run_script(self.run, riprezza, *options, *(() if corsie else ("--corsie-off",)), answer=answer)
 
     def results(self):
         path = self.run.out / f"riprezzamento_{dt.date.today():%Y%m%d}.csv"

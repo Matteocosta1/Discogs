@@ -268,7 +268,11 @@ class Run:
         self.out = self.tmp / "risultati"
         self.api = FakeAPI()
 
-    def main(self, *options):
+    def main(self, *options, corsie=False):
+        """Lancia vendi.py. I test scritti per la regola unica la usano con --corsie-off; corsie=True per
+        provare le tre corsie di prezzo (il default di vendi.py)."""
+        if not corsie:
+            options = (*options, "--corsie-off")
         argv = ["vendi.py", str(self.photos), "--db", str(self.db), "--uscita", str(self.out), *options]
         output = io.StringIO()
         with contextlib.ExitStack() as stack:

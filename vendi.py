@@ -1542,8 +1542,72 @@ def to_grid(price, step, minimum):
     return (steps * step).quantize(CENT)
 
 
-def compute_price(suggested, data, grade, currency, args):
-    """(prezzo, testo del calcolo).
+LANE_SLOW_BELOW = 1.0     # want/have sotto questo valore: corsia LENTA
+LANE_HOT_ABOVE = 2.0      # want/have sopra questo valore: corsia CALDA
+SLOW_DISCOUNT = 5.0       # corsia LENTA: % sotto il prezzo più basso della concorrenza
+
+
+def grid_floor(price, step):
+    """Prezzo arrotondato PER DIFETTO al gradino della griglia (solo per la corsia lenta)."""
+    step = decimal.Decimal(str(step)).quantize(CENT)
+    cents = decimal.Decimal(str(price)).quantize(CENT, rounding=decimal.ROUND_HALF_UP)
+    return ((cents / step).to_integral_value(rounding=decimal.ROUND_FLOOR) * step).quantize(CENT)
+
+
+def competition(data, my_prices, currency):
+    """(copie della concorrenza, prezzo più basso della concorrenza o None, il più basso potrei essere io).
+    Le statistiche di Discogs contano anche i miei annunci: le mie copie si tolgono, e se il prezzo più
+    basso è uguale o maggiore di un mio prezzo per la release potrei essere io, quindi non vale."""
+    copies = data.get("num_for_sale") or 0
+    lowest = data.get("lowest_price") if data.get("lowest_currency") == currency else None
+    others = max(copies - len(my_prices), 0)
+    maybe_me = bool(lowest is not None and my_prices and lowest >= min(my_prices) - 0.005)
+    return others, None if maybe_me else lowest, maybe_me
+
+
+def compute_price(suggested, data, grade, currency, args, competitors=None):
+    """(prezzo, testo del calcolo) con le TRE CORSIE in base al rapporto want/have.
+
+    - LENTA (want/have < args.corsia_lenta_sotto): si punta a vendere: args.sconto_corsia_lenta % sotto il
+      prezzo più basso della CONCORRENZA, arrotondato alla griglia PER DIFETTO (altrimenti lo sconto
+      sparirebbe), mai sotto il suggerito per il grado (sulla griglia per eccesso) né sotto il prezzo
+      minimo. Senza concorrenti da sottoquotare non è un disco da svendere: regola normale.
+    - NORMALE (tra le due soglie) e CALDA (want/have > args.corsia_calda_sopra): regola standard
+      (standard_price), che nella corsia calda applica gli scalini alti del premio richiesta.
+    competitors: (copie, prezzo più basso) della concorrenza, senza i miei annunci (competition);
+    se None si usano le statistiche così come sono. Con args.corsie_off: solo la regola standard."""
+    if data is None or args.corsie_off:
+        return standard_price(suggested, data, grade, currency, args)
+    ratio = want_have_ratio(data)
+    lane_slow, lane_hot = args.corsia_lenta_sotto, args.corsia_calda_sopra
+    if competitors is None:
+        competitors = competition(data, [], currency)[:2]
+    others, others_lowest = competitors
+    if ratio < lane_slow:
+        lane = f"corsia LENTA (want/have {fmt(ratio)} < {lane_slow:g})"
+        if others > 0 and others_lowest:
+            low = decimal.Decimal(str(others_lowest))
+            target = (low * (1 - decimal.Decimal(str(args.sconto_corsia_lenta)) / 100)).quantize(
+                CENT, rounding=decimal.ROUND_HALF_UP)
+            down = grid_floor(target, args.passo_prezzo)
+            floor = to_grid(suggested, args.passo_prezzo, args.prezzo_minimo)
+            text = (f"{lane}: {args.sconto_corsia_lenta:g}% sotto concorrenza {fmt(low)} = {fmt(target)} "
+                    f"→ griglia per difetto {fmt(down)}")
+            if down < floor:
+                return float(floor), (f"{text}; sotto il suggerito {grade} {fmt(suggested)}: prezzo = suggerito "
+                                      f"sulla griglia {fmt(floor)} {currency}")
+            return float(down), f"{text} {currency}"
+        prefix = f"{lane}: nessun concorrente da sottoquotare, regola NORMALE"
+    elif ratio > lane_hot:
+        prefix = f"corsia CALDA (want/have {fmt(ratio)} > {lane_hot:g}): premi a scalini"
+    else:
+        prefix = f"corsia NORMALE (want/have {fmt(ratio)} tra {lane_slow:g} e {lane_hot:g})"
+    price, calc = standard_price(suggested, data, grade, currency, args)
+    return price, f"{prefix}; {calc}"
+
+
+def standard_price(suggested, data, grade, currency, args):
+    """(prezzo, testo del calcolo): la regola unica (corsie normale e calda, o --corsie-off).
 
     Base = prezzo più basso in vendita, mai sotto il suggerito per il grado.
     Premio scarsità (copie in vendita): 0 -> suggerito + 100%; 1-2 -> base + 50%;
@@ -2250,6 +2314,15 @@ def add_price_args(parser):
                    help="premio richiesta a scalini, 'soglia:premio%%' separati da virgole: si applica lo scalino più "
                         f"alto superato dal rapporto want/have (default {DEMAND_STEPS}: oltre 1 +10%%, oltre 2 +25%%, "
                         "oltre 4 +50%%)")
+    g.add_argument("--corsia-lenta-sotto", type=float, default=LANE_SLOW_BELOW,
+                   help=f"want/have sotto questo valore: corsia LENTA, si sottoquota la concorrenza "
+                        f"(default {LANE_SLOW_BELOW:g})")
+    g.add_argument("--corsia-calda-sopra", type=float, default=LANE_HOT_ABOVE,
+                   help=f"want/have sopra questo valore: corsia CALDA, premi a scalini alti (default {LANE_HOT_ABOVE:g})")
+    g.add_argument("--sconto-corsia-lenta", type=float, default=SLOW_DISCOUNT,
+                   help=f"corsia LENTA: %% sotto il prezzo più basso della concorrenza (default {SLOW_DISCOUNT:g})")
+    g.add_argument("--corsie-off", action="store_true",
+                   help="niente corsie: regola unica per tutti i dischi (come prima delle corsie)")
     g.add_argument("--passo-prezzo", type=decimal.Decimal, default=decimal.Decimal("2.50"),
                    help="ultimo passaggio: il prezzo finale si arrotonda per eccesso a multipli di questa cifra "
                         "(default 2.50: 2.50, 5.00, 7.50...)")
@@ -2266,6 +2339,24 @@ def add_price_args(parser):
 def check_price_args(args):
     if args.passo_prezzo < decimal.Decimal("0.01") or args.prezzo_minimo < 0:
         raise SystemExit("--passo-prezzo deve essere almeno 0.01 e --prezzo-minimo non negativo.")
+    if args.corsia_lenta_sotto > args.corsia_calda_sopra:
+        raise SystemExit("--corsia-lenta-sotto non può essere più alta di --corsia-calda-sopra.")
+    if not 0 <= args.sconto_corsia_lenta < 100:
+        raise SystemExit("--sconto-corsia-lenta deve essere tra 0 e 100.")
+
+
+def my_listed_prices(state, release_id):
+    """Prezzi dei miei annunci in vendita per una release, secondo lo stato (una voce per copia):
+    righe CSV e annunci API in vendita, esclusi quelli venduti, spariti o mai caricati (verifica_inventario)."""
+    prices = []
+    for r in state.execute("SELECT price, quantita FROM righe_csv WHERE release_id = ? AND "
+                           "(online IS NULL OR online = 'in_vendita')", (release_id,)):
+        prices += [r["price"]] * (r["quantita"] or 1)
+    for r in state.execute("SELECT price FROM annunci_api WHERE release_id = ? AND stato = 'pubblicato' AND "
+                           "COALESCE(status, 'FOR_SALE') = 'FOR_SALE' AND (online IS NULL OR online = 'in_vendita')",
+                           (release_id,)):
+        prices.append(r["price"])
+    return prices
 
 
 def main():
@@ -2580,7 +2671,9 @@ def main():
             except ApiError as e:
                 print(f"{label} ({names}): dati del marketplace non disponibili ({e})")
 
-            price, calc = compute_price(suggested, cdata, media, currency, args)
+            competitors = (competition(cdata, my_listed_prices(state, release_id), account_currency or currency)[:2]
+                           if cdata else None)
+            price, calc = compute_price(suggested, cdata, media, currency, args, competitors)
             info = f"{label} ({names}): {price:.2f} {currency}" + (f" [COLLEZIONISTICO, punteggio {collector[0]}]"
                                                                     if collector else "")
 

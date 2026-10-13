@@ -111,6 +111,13 @@ def main():
     if saved:
         print(f"Backup dello stato: {saved}")
     state = open_state(vendi.STATE_DB)
+    try:
+        publish(state, args)
+    finally:
+        state.close()
+
+
+def publish(state, args):
     by_eid, by_listing = our_drafts(state)
     if not by_eid:
         print("Nessun annuncio creato in bozza da vendi.py (serve l'opzione --bozza).")
