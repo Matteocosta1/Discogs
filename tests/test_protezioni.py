@@ -36,6 +36,7 @@ RELEASES = [
     (3993455, "Moodymann", "Picture This Sampler 3", "Picture This", "THIS003", "US", 2012, "Vinyl, 12\", Sampler"),
     (1111111, "Moodymann", "Silentintroduction", "Planet E", "PE-TEST", "US", 1997, "Vinyl, LP, Album"),
     (4207270, "Theo Parrish", "Dance Of The Medusa", "Sound Signature", "SS049", "US", 2012, "Vinyl, 12\""),
+    (807332, "Omar-S", "Test Omar-S EP", "FXHE Records", "FXHE-TEST", "US", 2006, "Vinyl, 12\""),
 ]
 
 # Prezzo suggerito (uguale per tutti i gradi) e dati del marketplace di ogni release.
@@ -47,6 +48,7 @@ MARKET = {
     3993455: (20.0, {"want": 30, "have": 100}, {"num_for_sale": 10, "lowest_price": {"value": 18.0}}),
     1111111: (80.0, {"want": 10, "have": 100}, {"num_for_sale": 2, "lowest_price": {"value": 80.0}}),  # 120 €
     4207270: (25.0, {"want": 40, "have": 100}, {"num_for_sale": 6, "lowest_price": {"value": 25.0}}),
+    807332: (15.0, {"want": 30, "have": 100}, {"num_for_sale": 8, "lowest_price": {"value": 15.0}}),
 }
 
 # Foto: cartella/nome -> righe lette dall'OCR (testo, altezza). [] = OCR senza testo utile.
@@ -65,6 +67,8 @@ OCR = {
     # Release vendibile, trovata per catalogo.
     "IMG_0006": [("THEO PARRISH", 0.06), ("DANCE OF THE MEDUSA", 0.05), ("SS049", 0.012),
                  ("Sound Signature", 0.02)],
+    # Etichetta Omar-S al limite: l'OCR non legge nulla, il primo modello nemmeno.
+    "IMG_0007": [],
 }
 
 # Caso 1: cosa ha "letto" l'AI sbagliando (prende artista, titolo e catno dalla scaletta)
@@ -175,25 +179,43 @@ class FakeAPI:
 
 
 class FakeAI:
-    """Al posto di vendi.AIVision: risposte scritte sopra, costo finto di 0,01 € a chiamata."""
-    reads = []
+    """Al posto di vendi.AIVision: risposte scritte sopra, costo finto di 0,01 € a chiamata.
+    by_model: risposte diverse per un modello, {modello: (letture, scelte)} (es. il secondo tentativo)."""
+    reads = []        # foto lette, da tutti i modelli
+    calls = []        # (modello, foto)
+    by_model = {}
 
-    def __init__(self, model, budget, spent):
-        self.spent = spent
+    def __init__(self, model, budget, spent, wallet=None):
+        self.model = model
+        self.wallet = wallet or vendi.Wallet(budget, spent)
+
+    @property
+    def spent(self):
+        return self.wallet.spent
 
     @staticmethod
     def prepare(img):
         return img  # il nome della foto, al posto dell'immagine da inviare
 
+    def _pay(self):
+        if self.wallet.spent + 0.01 > self.wallet.budget + 1e-9:
+            raise vendi.BudgetReached()
+        self.wallet.spent += 0.01
+
+    def answers(self):
+        return FakeAI.by_model.get(self.model, (AI_READ, AI_CHOICE))
+
     def read(self, image):
+        self._pay()
         FakeAI.reads.append(image)
-        self.spent += 0.01
-        return dict(AI_READ.get(image, {})), 0.01
+        FakeAI.calls.append((self.model, image))
+        return dict(self.answers()[0].get(image, {})), 0.01
 
     def choose(self, image, candidates):
-        self.spent += 0.01
-        assert AI_CHOICE[image]["release_id"] in [c["id"] for c in candidates]
-        return dict(AI_CHOICE[image]), 0.01
+        self._pay()
+        choice = self.answers()[1][image]
+        assert choice["release_id"] in [c["id"] for c in candidates]
+        return dict(choice), 0.01
 
 
 class Run:
@@ -249,7 +271,7 @@ class TestProtezioni(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.run = Run(self._tmp.name)
-        FakeAI.reads = []
+        FakeAI.reads, FakeAI.calls, FakeAI.by_model = [], [], {}
 
     def tearDown(self):
         self._tmp.cleanup()

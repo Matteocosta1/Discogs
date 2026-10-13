@@ -51,7 +51,7 @@ class TempRun(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.run = Run(self._tmp.name, photos=self.photos)
-        tp.FakeAI.reads = []
+        tp.FakeAI.reads, tp.FakeAI.calls, tp.FakeAI.by_model = [], [], {}
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -524,6 +524,73 @@ class TestStessoDisco(TempRun):
         (self.run.photos / "VG+" / "IMG_0004.JPG").unlink()       # tengo solo il fronte
         self.main_with_exif(20)
         self.assertEqual(self.listed(), [("IMG_0003", "1")])
+
+
+# --------------------------------------------------------------------------
+# Punto 8: secondo tentativo con un modello più forte
+# --------------------------------------------------------------------------
+
+SECOND_READ = {"IMG_0007": {
+    "photo_type": "label", "compilation": False, "artist": "Omar-S", "title": "Test Omar-S EP",
+    "label": "FXHE", "catno": "FXHE-TEST", "year": "2006", "country": "US", "barcode": "",
+    "readable_text": "FXHE\nFXHE-TEST\nOmar-S", "recognized_artist": "", "recognized_title": ""}}
+
+
+class TestSecondoTentativo(TempRun):
+    photos = {"VG+": ["IMG_0007"]}
+
+    def setUp(self):
+        super().setUp()
+        tp.FakeAI.by_model = {vendi.AI_SECOND_MODEL: (SECOND_READ, {})}
+
+    def foto(self):
+        return self.state().execute("SELECT * FROM foto WHERE external_id = 'IMG_0007'").fetchone()
+
+    def test_recuperata_dal_secondo_modello(self):
+        out = self.run.main()
+        self.assertEqual(tp.FakeAI.calls, [("claude-haiku-4-5", "IMG_0007"), (vendi.AI_SECOND_MODEL, "IMG_0007")])
+        self.assertEqual([(r["external_id"], r["release_id"]) for r in self.run.inventory()], [("IMG_0007", "807332")])
+        row = self.foto()
+        self.assertEqual(row["secondo"], vendi.AI_SECOND_MODEL)
+        self.assertAlmostEqual(row["ai_costo"], 0.02)                 # primo + secondo tentativo
+        self.assertIn(f"secondo tentativo ({vendi.AI_SECOND_MODEL}): 1 foto recuperate su 1", out)
+        self.assertIn("riconosciuto al secondo tentativo", row["dettagli"])
+
+    def test_tetto_di_spesa_rispettato(self):
+        out = self.run.main("--ai-tetto", "0.015")                   # basta solo per il primo tentativo
+        self.assertEqual(tp.FakeAI.calls, [("claude-haiku-4-5", "IMG_0007")])
+        self.assertIn("TETTO DI SPESA AI RAGGIUNTO", out)
+        self.assertEqual(self.foto()["esito"], "non_trovato")
+        self.assertAlmostEqual(self.foto()["ai_costo"], 0.01)
+        # Con un tetto più alto si riprende: il primo tentativo è in cache, si paga solo il secondo
+        tp.FakeAI.calls = []
+        self.run.main("--ai-tetto", "1")
+        self.assertEqual(tp.FakeAI.calls, [(vendi.AI_SECOND_MODEL, "IMG_0007")])
+        self.assertEqual(self.foto()["esito"], "trovato")
+        self.assertAlmostEqual(self.foto()["ai_costo"], 0.02)
+
+    def test_senza_secondo_tentativo(self):
+        self.run.main("--senza-secondo-tentativo")
+        self.assertEqual(tp.FakeAI.calls, [("claude-haiku-4-5", "IMG_0007")])
+        self.assertEqual(self.foto()["esito"], "non_trovato")
+
+    def test_secondo_fallito_resta_in_cache(self):
+        tp.FakeAI.by_model = {vendi.AI_SECOND_MODEL: ({}, {})}       # anche il secondo non legge nulla
+        self.run.main()
+        self.assertEqual(len(tp.FakeAI.calls), 2)
+        self.assertEqual(self.foto()["esito"], "non_trovato")
+        tp.FakeAI.calls = []
+        self.run.main()
+        self.assertEqual(tp.FakeAI.calls, [])                          # non si paga di nuovo
+
+    def test_protezioni_valgono_anche_al_secondo_tentativo(self):
+        # Il secondo modello propone la release russa per il solo titolo: check_match la blocca
+        tp.FakeAI.by_model = {vendi.AI_SECOND_MODEL: ({"IMG_0007": {
+            **SECOND_READ["IMG_0007"], "artist": "", "title": "Wanna Ride?", "catno": "", "label": "",
+            "readable_text": "Wanna Ride?"}}, {})}
+        self.run.main()
+        self.assertEqual(self.run.inventory(), [])
+        self.assertNotEqual(self.foto()["esito"], "trovato")
 
 
 if __name__ == "__main__":

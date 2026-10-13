@@ -814,8 +814,15 @@ def search_api(api, ev, artist_titles=()):
 AI_MODELS = {
     "claude-haiku-4-5": (1.00, 5.00),
     "claude-sonnet-5": (2.00, 10.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
     "claude-opus-5": (5.00, 25.00),
 }
+AI_SECOND_MODEL = "claude-sonnet-5-5"   # secondo tentativo sulle foto non riconosciute dal primo modello
+# Questi modelli ragionano prima di rispondere (non si può spegnere su tutti): il ragionamento usa
+# token di risposta, quindi servono più token e uno sforzo dichiarato. Haiku 4.5 non ragiona.
+AI_NO_THINKING = {"claude-haiku-4-5"}
+AI_THINKING_EXTRA_TOKENS = 6000
+AI_THINKING_EFFORT = "medium"
 AI_MAX_EDGE = 1568          # lato lungo massimo della foto inviata (pixel)
 AI_MAX_CANDIDATES = 40      # candidati mostrati all'AI per la scelta finale
 
@@ -872,18 +879,37 @@ class BudgetReached(Exception):
     """Il tetto di spesa AI non permette un'altra chiamata."""
 
 
+class Wallet:
+    """Spesa AI comune a tutti i modelli usati: un solo tetto per primo e secondo tentativo."""
+
+    def __init__(self, budget_eur, spent_eur):
+        self.budget = budget_eur
+        self.spent = spent_eur
+
+
 class AIVision:
     """Chiamate al modello con visione, con tetto di spesa totale (in euro, 1 $ = 1 €)."""
 
-    def __init__(self, model, budget_eur, spent_eur):
+    def __init__(self, model, budget_eur, spent_eur, wallet=None):
         import anthropic  # libreria ufficiale di Anthropic
         self.client = anthropic.Anthropic(api_key=load_env_value(
             "ANTHROPIC_API_KEY", "la chiave API di Anthropic (serve per l'AI; per farne a meno usa --senza-ai)",
             "https://console.anthropic.com/settings/keys"))
         self.model = model
         self.price_in, self.price_out = AI_MODELS[model]
-        self.budget = budget_eur
-        self.spent = spent_eur
+        self.wallet = wallet or Wallet(budget_eur, spent_eur)
+
+    @property
+    def spent(self):
+        return self.wallet.spent
+
+    @spent.setter
+    def spent(self, value):
+        self.wallet.spent = value
+
+    @property
+    def budget(self):
+        return self.wallet.budget
 
     @staticmethod
     def prepare(img):
@@ -898,6 +924,10 @@ class AIVision:
 
     def _call(self, image, prompt, schema, max_tokens, extra_input_tokens=0):
         data, image_tokens = image
+        output_config = {"format": {"type": "json_schema", "schema": schema}}
+        if self.model not in AI_NO_THINKING:
+            max_tokens += AI_THINKING_EXTRA_TOKENS
+            output_config["effort"] = AI_THINKING_EFFORT
         max_cost = ((image_tokens + extra_input_tokens + 600) * self.price_in + max_tokens * self.price_out) / 1e6
         if self.spent + max_cost > self.budget:
             raise BudgetReached()
@@ -908,7 +938,7 @@ class AIVision:
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}},
                 {"type": "text", "text": prompt},
             ]}],
-            output_config={"format": {"type": "json_schema", "schema": schema}},
+            output_config=output_config,
         )
         cost = (response.usage.input_tokens * self.price_in + response.usage.output_tokens * self.price_out) / 1e6
         self.spent += cost
@@ -1243,6 +1273,20 @@ def identify(path, con, api, use_ocr, ai, cache, ev):
     return Recognition("trovato", f"ai-scelta+{source(chosen)}", chosen, ranked, details, cost, read, choice)
 
 
+def recognize_safely(path, con, api, use_ocr, ai, cache):
+    """recognize() con gli errori trasformati in esito "errore"; None se il tetto di spesa AI è raggiunto."""
+    try:
+        return recognize(path, con, api, use_ocr, ai, cache)
+    except BudgetReached:
+        return None
+    except (ApiError, OSError, ValueError) as e:
+        return Recognition("errore", details=str(e), ai_read=cache["read"], ai_choice=cache["choice"])
+    except Exception as e:  # errori dell'API di Anthropic
+        if type(e).__module__.split(".")[0] != "anthropic":
+            raise
+        return Recognition("errore", details=f"AI: {e}", ai_read=cache["read"], ai_choice=cache["choice"])
+
+
 def describe_release(r):
     if not r:
         return ""
@@ -1515,6 +1559,9 @@ CREATE TABLE IF NOT EXISTS foto (
     ai_costo    REAL DEFAULT 0,  -- spesa AI per questa foto (euro, 1 $ = 1 €)
     ai_scelta   TEXT,     -- scelta dell'AI tra i candidati, con sicurezza e motivo
     hash        TEXT,     -- SHA-256 del contenuto della foto (riconosce la stessa foto anche spostata)
+    ai2_dati    TEXT,     -- secondo tentativo con un modello più forte: cosa ha letto
+    ai2_scelta  TEXT,     -- secondo tentativo: scelta tra i candidati
+    secondo     TEXT,     -- modello del secondo tentativo, se è lui ad aver riconosciuto il disco
     disco       TEXT,     -- artista - titolo (etichetta, paese, anno) della release trovata
     metodo      TEXT,     -- barcode / catno / locale-testo / ai
     motivo      TEXT,     -- perché è da verificare a mano (esito da_verificare)
@@ -1645,7 +1692,8 @@ def open_state(path):
                                 ("righe_csv", "online_visto", "TEXT"), ("annunci_api", "online", "TEXT"),
                                 ("annunci_api", "online_verificato", "TEXT"), ("annunci_api", "online_visto", "TEXT"),
                                 ("righe_csv", "online_ultimo", "TEXT"), ("annunci_api", "online_ultimo", "TEXT"),
-                                ("foto", "hash", "TEXT")]:  # stato di una versione precedente
+                                ("foto", "hash", "TEXT"), ("foto", "ai2_dati", "TEXT"),
+                                ("foto", "ai2_scelta", "TEXT"), ("foto", "secondo", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
@@ -2079,7 +2127,8 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     # Come è stata riconosciuta ogni foto, con la spesa AI per disco.
     recog = []
     for r in state.execute("SELECT * FROM foto"):
-        choice = json.loads(r["ai_scelta"]) if r["ai_scelta"] and r["esito"] == "trovato" else {}
+        chosen = r["ai2_scelta"] if r["secondo"] else r["ai_scelta"]
+        choice = json.loads(chosen) if chosen and r["esito"] == "trovato" else {}
         recog.append([photo_name(r["foto"]), r["cartella"], r["esito"], r["fonte"] or "", r["release_id"] or "",
                       r["disco"] or "", CONFIDENCE_IT.get(choice.get("confidence"), ""), choice.get("reason", ""),
                       f"{r['ai_costo'] or 0:.4f}"])
@@ -2167,6 +2216,11 @@ def main():
                         help="spesa AI massima in euro, sommando tutte le esecuzioni (default 50); raggiunta, lo script si ferma")
     parser.add_argument("--ai-modello", default="claude-haiku-4-5", choices=sorted(AI_MODELS),
                         help="modello AI (default claude-haiku-4-5, il più economico)")
+    parser.add_argument("--ai-modello-secondo", default=AI_SECOND_MODEL, choices=sorted(AI_MODELS),
+                        help="modello più forte per un secondo tentativo sulle foto non trovate o con più release "
+                             f"possibili dopo il primo (default {AI_SECOND_MODEL}); stesso tetto di spesa")
+    parser.add_argument("--senza-secondo-tentativo", action="store_true",
+                        help="non fa il secondo tentativo con il modello più forte")
     parser.add_argument("--db", default=str(dd.DEFAULT_DB), help="database creato da discogs_dump.py")
     parser.add_argument("--uscita", default=str(OUT_DIR), help="cartella dei risultati (default: risultati/)")
     parser.add_argument("--backup-da-tenere", type=int, default=BACKUPS_TO_KEEP,
@@ -2216,10 +2270,12 @@ def main():
         if saved:
             print(f"Backup dello stato: {saved}")
     state = open_state(STATE_DB)
-    ai = None
+    ai = ai2 = None
     ai_spent_before = state.execute("SELECT COALESCE(SUM(ai_costo), 0) FROM foto").fetchone()[0]
     if not args.senza_ai:
         ai = AIVision(args.ai_modello, args.ai_tetto, ai_spent_before)
+        if not args.senza_secondo_tentativo and args.ai_modello_secondo != args.ai_modello:
+            ai2 = AIVision(args.ai_modello_secondo, args.ai_tetto, ai_spent_before, wallet=ai.wallet)
         print(f"AI ({args.ai_modello}) usata solo quando la parte locale non basta: "
               f"spesa finora {money(ai_spent_before)}, tetto {money(args.ai_tetto)}")
     if not args.simula:
@@ -2251,7 +2307,8 @@ def main():
     parts = PartAllocator(last_part(state) + 1)   # le righe nuove vanno sempre in file nuovi
     simulated_csv, simulated_listings, simulated_collectors, simulated_rows_info = [], [], [], []
     stats = {"collezionistici": 0, "righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0,
-             "non_vendibili": 0, "non_verificati": 0}
+             "non_vendibili": 0, "non_verificati": 0, "secondo_tentati": 0, "secondo_recuperate": 0,
+             "secondo_costo": 0.0}
     sale_errors = []
     price_calls = 0
     total = len(photos)
@@ -2271,31 +2328,49 @@ def main():
             same_photo = row is not None and row["hash"] == photo.sha256  # stesso contenuto, anche se spostata
             cache = {"read": json.loads(row["ai_dati"]) if same_photo and row["ai_dati"] else None,
                      "choice": json.loads(row["ai_scelta"]) if same_photo and row["ai_scelta"] else None}
+            cache2 = {"read": json.loads(row["ai2_dati"]) if same_photo and row["ai2_dati"] else None,
+                      "choice": json.loads(row["ai2_scelta"]) if same_photo and row["ai2_scelta"] else None}
+            unsure = row is not None and row["esito"] in ("non_trovato", "multiplo")
             if (not same_photo or row["esito"] in ("errore", "sospeso", "rielabora")
                     or (args.riprova and row["esito"] in PROBLEMS)
-                    or (ai and row["esito"] in ("non_trovato", "multiplo") and cache["read"] is None)):
-                try:
-                    rec = recognize(photo.path, con, api, use_ocr, ai, cache)
-                except BudgetReached:
+                    or (ai and unsure and cache["read"] is None)
+                    or (ai2 and unsure and cache2["read"] is None)):
+                rec = recognize_safely(photo.path, con, api, use_ocr, ai, cache)
+                if rec is None:
                     budget_stop = True
                     break
-                except (ApiError, OSError, ValueError) as e:
-                    rec = Recognition("errore", details=str(e), ai_read=cache["read"], ai_choice=cache["choice"])
-                except Exception as e:  # errori dell'API di Anthropic
-                    if type(e).__module__.split(".")[0] != "anthropic":
-                        raise
-                    rec = Recognition("errore", details=f"AI: {e}", ai_read=cache["read"], ai_choice=cache["choice"])
+                # Secondo tentativo con un modello più forte, solo se il primo non ha trovato il disco
+                rec2, second = None, False
+                if ai2 and rec.esito in ("non_trovato", "multiplo"):
+                    rec2 = recognize_safely(photo.path, con, api, use_ocr, ai2, cache2)
+                    if rec2 is None:  # tetto di spesa: salvo il primo tentativo e mi fermo
+                        budget_stop = True
+                    else:
+                        stats["secondo_tentati"] += 1
+                        stats["secondo_costo"] += rec2.ai_cost
+                        if rec2.esito not in ("non_trovato", "multiplo", "errore", "sospeso"):
+                            second = True
+                            stats["secondo_recuperate"] += 1
+                            rec2.details += f"; riconosciuto al secondo tentativo ({ai2.model})"
+                final = rec2 if second else rec
                 old_cost = row["ai_costo"] if same_photo and row["ai_costo"] else 0.0
                 state.execute(
                     "INSERT OR REPLACE INTO foto (external_id, cartella, foto, impronta, media, sleeve, esito, fonte,"
                     " release_id, candidati, dettagli, aggiornato, ai_dati, ai_costo, ai_scelta, disco, metodo, motivo,"
-                    " hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (eid, photo.folder, str(photo.path), fingerprint, photo.media, photo.sleeve, rec.esito, rec.fonte,
-                     rec.release_id, format_candidates(rec.candidates), rec.details, now(),
-                     json.dumps(rec.ai_read) if rec.ai_read is not None else None, old_cost + rec.ai_cost,
-                     json.dumps(rec.ai_choice) if rec.ai_choice is not None else None, describe_release(rec.release),
-                     rec.metodo, rec.motivo, photo.sha256),
+                    " hash, ai2_dati, ai2_scelta, secondo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (eid, photo.folder, str(photo.path), fingerprint, photo.media, photo.sleeve, final.esito,
+                     final.fonte, final.release_id, format_candidates(final.candidates), final.details, now(),
+                     json.dumps(rec.ai_read) if rec.ai_read is not None else None,
+                     old_cost + rec.ai_cost + (rec2.ai_cost if rec2 else 0.0),
+                     json.dumps(rec.ai_choice) if rec.ai_choice is not None else None, describe_release(final.release),
+                     final.metodo, final.motivo, photo.sha256,
+                     json.dumps(rec2.ai_read) if rec2 and rec2.ai_read is not None else
+                     (row["ai2_dati"] if same_photo and row else None),
+                     json.dumps(rec2.ai_choice) if rec2 and rec2.ai_choice is not None else
+                     (row["ai2_scelta"] if same_photo and row else None),
+                     ai2.model if second else None),
                 )
+                rec = final
                 state.commit()
                 row = state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
                 if rec.esito == "trovato":
@@ -2309,7 +2384,7 @@ def main():
                           f" {row['fonte']}]: {rec.motivo}")
                 else:
                     print(f"{prefix}: {row['esito']}")
-                if rec.esito == "sospeso":
+                if rec.esito == "sospeso" or budget_stop:
                     budget_stop = True
                     break
             if row["esito"] in ("trovato", "senza_prezzo", "non_verificato", "stesso_disco"):
@@ -2546,6 +2621,9 @@ def main():
         print(f"  dischi non vendibili (bloccati da Discogs): {stats['non_vendibili']} (vedi non_vendibili.csv)")
         print(f"  dischi collezionistici:      {stats['collezionistici']} (vedi collezionistici.csv)")
         print(f"  richieste API: {api.calls} (di cui prezzi e dati collezionistici: {price_calls})")
+        if ai2 and stats["secondo_tentati"]:
+            print(f"  secondo tentativo ({ai2.model}): {stats['secondo_recuperate']} foto recuperate su "
+                  f"{stats['secondo_tentati']}, costo {money(stats['secondo_costo'])}")
         if ai:
             print(f"  spesa AI: {money(ai.spent - ai_spent_before)} in questa esecuzione, {money(ai.spent)} in totale"
                   f" (tetto {money(args.ai_tetto)})")
