@@ -231,6 +231,26 @@ almeno 0,15 punti di distacco dalla seconda; altrimenti decide l'AI.
 
 **Poi, come prima:**
 - **Raggruppa** le foto con la stessa release e lo stesso grado.
+- **Controlla che la release si possa vendere.** Discogs blocca dal
+  marketplace alcune release (white label, bootleg, release non ufficiali): il
+  CSV le scarta ("release is blocked from the marketplace") e l'API le
+  rifiuta. Prima del prezzo lo script chiede a Discogs la release
+  (`GET /releases/{id}`, campo `blocked_from_sale`):
+  - **bloccata** → niente prezzo, niente statistiche di mercato, niente
+    annuncio: va in `non_vendibili.csv`. Resta salvata nello stato
+    (`non_vendibile`): ai giri successivi viene saltata senza richieste a
+    Discogs. Con `--rielabora` viene ricontrollata;
+  - **impossibile verificare** (rete, errore di Discogs, campo assente nella
+    risposta) → **non** va in vendita: finisce in `da_controllare.csv` con
+    motivo "impossibile verificare se è vendibile" e viene ricontrollata al
+    lancio successivo;
+  - **vendibile** → si prosegue come prima. La stessa risposta serve anche per
+    want/have, quindi non costa richieste in più.
+  - L'esito resta in cache per release: una sola richiesta per release, nel
+    rispetto del limite di 60 richieste al minuto.
+  - Se nel database locale la release ha il formato **Unofficial Release**,
+    lo script lo segnala già nel riconoscimento ("probabilmente non
+    vendibile"), ma decide sempre la risposta di Discogs.
 - **Prezzo** calcolato con la regola descritta più sotto (prezzo più basso in
   vendita, mai sotto il suggerito per il grado, più eventuali premi).
 - **Uscita:**
@@ -550,6 +570,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --ai-tetto 80
 | --- | --- |
 | `inventario_001.csv`, `inventario_002.csv`… | Dischi trovati in locale, al massimo 1.000 dischi per file (le copie contano), da caricare su Discogs |
 | `inventario_foto.csv` | Per ogni riga dei CSV di inventario: tutte le foto (copie) che contiene, il prezzo e il **calcolo del prezzo** |
+| `non_vendibili.csv` | Dischi riconosciuti ma **bloccati dal marketplace Discogs**, che non si possono mettere in vendita: foto, grado, release_id, artista e titolo, metodo di riconoscimento, link alla release, motivo |
 | `collezionistici.csv` | Dischi collezionistici, ordinati per punteggio, con motivi, prezzo suggerito, prezzo più basso in vendita, prezzo finale e calcolo |
 | `riconoscimento.csv` | Per ogni foto: esito, metodo (es. `locale-barcode`, `ai-scelta+locale`), disco trovato, sicurezza e motivo della scelta AI, costo AI in euro |
 | `annunci_pubblicati_api.csv` | Annunci pubblicati via API, uno per foto, con calcolo del prezzo e link |
@@ -602,10 +623,22 @@ Motivi possibili in `da_controllare.csv`:
   compatibili che non si sono potute distinguere; i candidati sono ordinati per
   punteggio.
 - **nessun prezzo suggerito da Discogs**.
+- **impossibile verificare se è vendibile**: la richiesta a Discogs per sapere
+  se la release è bloccata dal marketplace non è riuscita (rete, errore di
+  Discogs) o la risposta non conteneva il campo `blocked_from_sale`. Il disco
+  non va in vendita e viene ricontrollato al prossimo lancio. Se capita a
+  tutte le foto con "campo assente", Discogs ha cambiato il nome del campo:
+  dimmelo.
 - **pubblicazione non confermata**: lo script si è interrotto proprio durante
   la pubblicazione e non è riuscito a verificare se l'annuncio esiste.
   Controlla su Discogs cercando l'`external_id` (es. `IMG_1234`).
 - **Discogs ha rifiutato l'annuncio**, con il messaggio di Discogs.
+
+**Il riepilogo finale** di ogni esecuzione mostra: righe nel CSV di
+inventario (e copie), annunci via API, foto da controllare, foto già in
+vendita, **dischi non vendibili (bloccati da Discogs)**, dischi
+collezionistici, richieste API fatte e spesa AI. Se per qualche foto non è
+stato possibile verificare la vendibilità, lo dice in fondo con l'ultimo errore.
 
 Consiglio: in `riconoscimento.csv` guarda le righe con `sicurezza_ai` **bassa**.
 Sono dischi identificati, ma di cui l'AI ha scelto la stampa più probabile.
@@ -641,7 +674,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 
 ### Dove sta lo stato
 
-I progressi (foto riconosciute, risultati dell'AI e relativo costo, prezzi ottenuti, dati collezionistici, righe CSV, annunci creati e bozze messe in vendita) sono in
+I progressi (foto riconosciute, risultati dell'AI e relativo costo, prezzi ottenuti, release bloccate o vendibili, dati collezionistici, righe CSV, annunci creati e bozze messe in vendita) sono in
 `data/vendita_stato.sqlite`. È separato da `discogs.sqlite` perché quello viene
 ricostruito da zero ogni mese, e i progressi andrebbero persi.
 

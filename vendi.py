@@ -23,7 +23,10 @@ del file senza estensione è l'external_id.
         non una sola parola), altrimenti va in da_controllare.csv;
   2. raggruppa le foto della stessa release con lo stesso grado: sono copie
      dello stesso disco;
-  3. calcola il prezzo: base = prezzo più basso in vendita (statistiche del
+  3. controlla che la release si possa vendere (GET /releases/{id}, campo
+     blocked_from_sale): se è bloccata dal marketplace va in non_vendibili.csv,
+     senza prezzo né annuncio; se non si riesce a verificarlo, in da_controllare.csv;
+     poi calcola il prezzo: base = prezzo più basso in vendita (statistiche del
      marketplace), mai sotto il prezzo suggerito per il grado; premio scarsità
      secondo le copie in vendita (0 -> suggerito +100%, 1-2 -> +50%, 3-5 -> +25%)
      e premio richiesta se want/have > 1 (+10%), sommati, tutto configurabile;
@@ -85,7 +88,7 @@ GRADES = {
 }
 
 # Esiti del riconoscimento che finiscono nel file da controllare.
-PROBLEMS = {"non_trovato", "multiplo", "senza_prezzo", "errore", "da_verificare"}
+PROBLEMS = {"non_trovato", "multiplo", "senza_prezzo", "errore", "da_verificare", "non_verificato"}
 
 
 def now():
@@ -1066,6 +1069,8 @@ def recognize(path, con, api, use_ocr, ai=None, cache=None):
         if rec.motivo:
             rec.esito = "da_verificare"
             rec.details += f"; DA VERIFICARE: {rec.motivo}"
+    if is_unofficial(rec.release):
+        rec.details += "; formato 'Unofficial Release': probabilmente bloccata dal marketplace (decide l'API)"
     return rec
 
 
@@ -1209,16 +1214,21 @@ def api_formats_text(release):
     return "; ".join(parts)
 
 
-def get_collector_data(state, api, con, release_id, currency):
-    """Dati per il valore collezionistico di una release, dalla cache o da Discogs (2 richieste).
+def get_collector_data(state, api, con, release_id, currency, release=None):
+    """Dati per il valore collezionistico di una release, dalla cache o da Discogs.
     want/have dalla release, copie in vendita e prezzo più basso dalle statistiche del marketplace,
-    caratteristiche della stampa dal database locale (o dall'API se la release non c'è)."""
+    caratteristiche della stampa dal database locale (o dall'API se la release non c'è).
+    release: la risposta di GET /releases/{id} se già ottenuta (es. dal controllo di vendibilità).
+    Restituisce (dati, richieste fatte a Discogs)."""
     row = state.execute("SELECT dati FROM collezione WHERE release_id = ?", (release_id,)).fetchone()
     if row:
         cached = json.loads(row["dati"])
         if not cached.get("lowest_price") or cached.get("lowest_currency") == currency:
-            return cached, False  # (se la valuta dell'account è cambiata, li richiedo)
-    release = api.release(release_id)
+            return cached, 0  # (se la valuta dell'account è cambiata, li richiedo)
+    calls = 1
+    if release is None:
+        release = api.release(release_id)
+        calls += 1
     community = release.get("community", {})
     stats = api.marketplace_stats(release_id, currency)
     lowest = stats.get("lowest_price") or {}
@@ -1233,7 +1243,57 @@ def get_collector_data(state, api, con, release_id, currency):
     }
     state.execute("INSERT OR REPLACE INTO collezione VALUES (?, ?, ?)", (release_id, json.dumps(data), now()))
     state.commit()
-    return data, True
+    return data, calls
+
+
+# --------------------------------------------------------------------------
+# Release bloccate dal marketplace (white label, bootleg, release non ufficiali)
+# --------------------------------------------------------------------------
+
+# Campo della risposta di GET /releases/{id} che dice se la release non si può vendere.
+BLOCKED_FIELD = "blocked_from_sale"
+NOT_SELLABLE_REASON = "bloccata dal marketplace Discogs"
+
+
+class SaleCheckFailed(Exception):
+    """Impossibile sapere se la release si può vendere (rete, errore di Discogs, campo assente)."""
+
+
+def check_sellable(state, api, release_id, refresh=False):
+    """(vendibile, risposta di GET /releases/{id} o None se dalla cache, richieste fatte).
+    L'esito resta in cache nello stato: ai giri successivi nessuna richiesta (refresh=True la rifà).
+    Solleva SaleCheckFailed se Discogs non risponde o la risposta non contiene BLOCKED_FIELD."""
+    row = state.execute("SELECT bloccata FROM vendibilita WHERE release_id = ?", (release_id,)).fetchone()
+    if row and not refresh:
+        return not row["bloccata"], None, 0
+    try:
+        release = api.release(release_id)
+    except (ApiError, ApiUncertain) as e:
+        raise SaleCheckFailed(str(e))
+    if not isinstance(release.get(BLOCKED_FIELD), bool):
+        raise SaleCheckFailed(f"la risposta di Discogs non contiene il campo {BLOCKED_FIELD}")
+    blocked = release[BLOCKED_FIELD]
+    state.execute("INSERT OR REPLACE INTO vendibilita VALUES (?, ?, ?)", (release_id, int(blocked), now()))
+    state.commit()
+    return not blocked, release, 1
+
+
+def is_unofficial(release):
+    """True se nei formati del database locale c'è "Unofficial Release" (di solito bloccata da Discogs)."""
+    return "unofficial release" in ((release or {}).get("formats") or "").lower()
+
+
+def artist_title(disco):
+    """'Artista - Titolo' da 'Artista - Titolo (etichetta paese anno)'."""
+    disco = disco or ""
+    if not disco.endswith(")"):
+        return disco
+    depth = 0
+    for i in range(len(disco) - 1, -1, -1):  # la parentesi che apre l'ultima, anche se ne contiene altre
+        depth += {")": 1, "(": -1}.get(disco[i], 0)
+        if depth == 0:
+            return disco[:i].rstrip()
+    return disco
 
 
 def collector_score(data, suggested, price_threshold):
@@ -1335,7 +1395,8 @@ CREATE TABLE IF NOT EXISTS foto (
     impronta    TEXT,
     media       TEXT,
     sleeve      TEXT,
-    esito       TEXT,     -- trovato / multiplo / non_trovato / senza_prezzo / errore / da_verificare
+    esito       TEXT,     -- trovato / multiplo / non_trovato / senza_prezzo / errore / da_verificare /
+                          -- non_vendibile (bloccata dal marketplace) / non_verificato (vendibilità sconosciuta)
     fonte       TEXT,     -- locale-barcode / locale-catno / api-barcode / api-catno
     release_id  INTEGER,
     candidati   TEXT,
@@ -1370,6 +1431,11 @@ CREATE TABLE IF NOT EXISTS collezionistici (  -- dischi risultati collezionistic
     valuta      TEXT,
     destinazione TEXT,
     calcolo     TEXT
+);
+CREATE TABLE IF NOT EXISTS vendibilita (   -- release bloccate o no dal marketplace (GET /releases/{id})
+    release_id INTEGER PRIMARY KEY,
+    bloccata   INTEGER,   -- 1 = non si può vendere
+    ottenuto   TEXT
 );
 CREATE TABLE IF NOT EXISTS prezzi (      -- prezzi suggeriti per release, tutti i gradi
     release_id INTEGER PRIMARY KEY,
@@ -1601,6 +1667,7 @@ REASONS = {
     "senza_prezzo": "nessun prezzo suggerito da Discogs",
     "errore": "errore durante l'elaborazione",
     "da_verificare": "riconoscimento da verificare a mano",
+    "non_verificato": "impossibile verificare se è vendibile",
 }
 CHECK_HEADER = ["foto", "cartella", "motivo", "release_id_proposto", "disco_proposto", "metodo", "prezzo_calcolato",
                 "link_proposto", "dettagli", "candidati"]
@@ -1682,6 +1749,16 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     write_csv(out_dir / "riconoscimento.csv",
               ["foto", "cartella", "esito", "metodo", "release_id", "disco", "sicurezza_ai", "motivo_ai", "costo_ai_eur"],
               recog)
+
+    # Release bloccate dal marketplace: non si possono vendere su Discogs.
+    blocked = []
+    for r in state.execute("SELECT * FROM foto WHERE esito = 'non_vendibile'"):
+        blocked.append([photo_name(r["foto"]), r["media"], r["release_id"], artist_title(r["disco"]),
+                        r["metodo"] or method_of(r["fonte"], None), f"https://www.discogs.com/release/{r['release_id']}",
+                        r["motivo"] or NOT_SELLABLE_REASON])
+    blocked.sort(key=lambda r: natural_key(Path(r[0]).name))
+    write_csv(out_dir / "non_vendibili.csv",
+              ["foto", "grado", "release_id", "artista_titolo", "metodo", "link", "motivo"], blocked)
 
     write_csv(out_dir / "collezionistici.csv", COLLECTOR_HEADER,
               collector_csv_rows(tuple(r) for r in state.execute("SELECT * FROM collezionistici")))
@@ -1783,8 +1860,10 @@ def main():
               f"spesa finora {money(ai_spent_before)}, tetto {money(args.ai_tetto)}")
     if not args.simula:
         recover_pending_listings(state, api, identity["username"])
+    recheck = set()   # foto rielaborate: la vendibilità della loro release va ricontrollata
     if args.rielabora:
         redo, skipped = prepare_rework(state, photos, Path(args.uscita).expanduser())
+        recheck = set(redo)
         print(f"--rielabora: {len(redo)} foto verranno rielaborate da capo"
               + (f"; {len(skipped)} saltate perché già in vendita o in attesa di conferma: {', '.join(skipped)}"
                  if skipped else ""))
@@ -1792,7 +1871,9 @@ def main():
     max_part = state.execute("SELECT COALESCE(MAX(parte), 0) FROM righe_csv").fetchone()[0]
     parts = PartAllocator(max_part + 1)   # le righe nuove vanno sempre in file nuovi
     simulated_csv, simulated_listings, simulated_collectors, simulated_rows_info = [], [], [], []
-    stats = {"collezionistici": 0, "righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0}
+    stats = {"collezionistici": 0, "righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0,
+             "non_vendibili": 0, "non_verificati": 0}
+    sale_errors = []
     price_calls = 0
     total = len(photos)
     budget_stop = False
@@ -1842,7 +1923,8 @@ def main():
                     how = row["fonte"]
                     if rec.ai_choice and rec.ai_choice.get("confidence"):
                         how += f", sicurezza {CONFIDENCE_IT.get(rec.ai_choice['confidence'], '?')}"
-                    print(f"{prefix}: {row['disco']} [release {row['release_id']}, {how}]")
+                    print(f"{prefix}: {row['disco']} [release {row['release_id']}, {how}]"
+                          + (" - Unofficial Release: probabilmente non vendibile" if is_unofficial(rec.release) else ""))
                 elif rec.esito == "da_verificare":
                     print(f"{prefix}: DA VERIFICARE, proposto {row['disco']} [release {row['release_id']},"
                           f" {row['fonte']}]: {rec.motivo}")
@@ -1851,8 +1933,10 @@ def main():
                 if rec.esito == "sospeso":
                     budget_stop = True
                     break
-            if row["esito"] in ("trovato", "senza_prezzo"):
+            if row["esito"] in ("trovato", "senza_prezzo", "non_verificato"):
                 todo.append((photo, row))
+            elif row["esito"] == "non_vendibile":
+                stats["non_vendibili"] += 1  # già controllata: nessuna richiesta a Discogs
             elif row["esito"] != "sospeso":
                 stats["problemi"] += 1
                 if row["esito"] == "da_verificare" and row["release_id"] and row["prezzo"] is None:
@@ -1869,6 +1953,33 @@ def main():
             # Foto già da verificare: serve solo il prezzo da mostrare in da_controllare.csv
             to_check = [(p, r) for p, r in members if r["esito"] == "da_verificare"]
             members = [(p, r) for p, r in members if r["esito"] != "da_verificare"]
+
+            # La release si può vendere? Una richiesta per release (GET /releases/{id}), poi in cache.
+            # Se è bloccata: niente prezzo, niente statistiche, niente annuncio.
+            try:
+                sellable, release_data, calls = check_sellable(
+                    state, api, release_id, refresh=any(p.external_id in recheck for p, _ in members + to_check))
+            except SaleCheckFailed as e:
+                for p, _ in members:
+                    state.execute("UPDATE foto SET esito = 'non_verificato', motivo = ? WHERE external_id = ?",
+                                  (str(e), p.external_id))
+                state.commit()
+                stats["problemi"] += len(members)
+                stats["non_verificati"] += len(members)
+                sale_errors.append(str(e))
+                if members:
+                    print(f"{label} ({names}): impossibile verificare se è vendibile ({e}): va in da_controllare.csv")
+                continue
+            price_calls += calls
+            if not sellable:
+                for p, _ in members:
+                    state.execute("UPDATE foto SET esito = 'non_vendibile', motivo = ? WHERE external_id = ?",
+                                  (NOT_SELLABLE_REASON, p.external_id))
+                state.commit()
+                stats["non_vendibili"] += len(members)
+                print(f"{label} ({names}): NON VENDIBILE, {NOT_SELLABLE_REASON} (vedi non_vendibili.csv)")
+                continue
+
             refresh = args.riprova and any(r["esito"] == "senza_prezzo" for _, r in members)
             try:
                 sugg, fetched = get_price_suggestions(state, api, release_id, refresh=refresh)
@@ -1884,7 +1995,8 @@ def main():
             suggestion = sugg.get(GRADES[media])
             new_esito = "trovato" if suggestion and suggestion.get("value") else "senza_prezzo"
             for p, _ in members:
-                state.execute("UPDATE foto SET esito = ? WHERE external_id = ?", (new_esito, p.external_id))
+                state.execute("UPDATE foto SET esito = ?, motivo = NULL WHERE external_id = ?",
+                              (new_esito, p.external_id))
             state.commit()
             if new_esito == "senza_prezzo" and not members:
                 continue
@@ -1901,8 +2013,9 @@ def main():
             # Dati del marketplace (2 richieste per release, poi in cache), nella valuta dell'account
             cdata, collector = None, None
             try:
-                cdata, fetched = get_collector_data(state, api, con, release_id, account_currency or currency)
-                price_calls += fetched * 2
+                cdata, fetched = get_collector_data(state, api, con, release_id, account_currency or currency,
+                                                    release=release_data)
+                price_calls += fetched
                 score, reasons = collector_score(cdata, suggested, args.soglia_prezzo)
                 if score >= args.soglia_collezionistico:
                     lowest = cdata.get("lowest_price") if cdata.get("lowest_currency") == currency else None
@@ -2025,11 +2138,16 @@ def main():
         print(f"  annunci via API{' (simulati)' if args.simula else ''}: {stats['api']}")
         print(f"  foto da controllare:         {stats['problemi']}")
         print(f"  foto già in vendita:         {stats['gia_fatte']}")
+        print(f"  dischi non vendibili (bloccati da Discogs): {stats['non_vendibili']} (vedi non_vendibili.csv)")
         print(f"  dischi collezionistici:      {stats['collezionistici']} (vedi collezionistici.csv)")
         print(f"  richieste API: {api.calls} (di cui prezzi e dati collezionistici: {price_calls})")
         if ai:
             print(f"  spesa AI: {money(ai.spent - ai_spent_before)} in questa esecuzione, {money(ai.spent)} in totale"
                   f" (tetto {money(args.ai_tetto)})")
+        if stats["non_verificati"]:
+            print(f"\nATTENZIONE: per {stats['non_verificati']} foto non è stato possibile verificare se la release è"
+                  f" vendibile\n(ultimo errore: {sale_errors[-1]}).\nSono in da_controllare.csv e verranno ricontrollate"
+                  " al prossimo lancio.")
         if budget_stop:
             print(f"\nTETTO DI SPESA AI RAGGIUNTO ({money(args.ai_tetto)}): lo script si è fermato qui.\n"
                   "Le foto già riconosciute sono state messe in vendita normalmente. Per continuare con le altre,\n"

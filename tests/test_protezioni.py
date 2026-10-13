@@ -35,6 +35,7 @@ RELEASES = [
     (473428, "Various", "FXHE-Compulation-#1", "FXHE Records", "FXHE-COMP1", "US", 2005, "Vinyl, LP, Compilation"),
     (3993455, "Moodymann", "Picture This Sampler 3", "Picture This", "THIS003", "US", 2012, "Vinyl, 12\", Sampler"),
     (1111111, "Moodymann", "Silentintroduction", "Planet E", "PE-TEST", "US", 1997, "Vinyl, LP, Album"),
+    (4207270, "Theo Parrish", "Dance Of The Medusa", "Sound Signature", "SS049", "US", 2012, "Vinyl, 12\""),
 ]
 
 # Prezzo suggerito (uguale per tutti i gradi) e dati del marketplace di ogni release.
@@ -45,6 +46,7 @@ MARKET = {
     473428: (20.0, {"want": 5, "have": 50}, {"num_for_sale": 8, "lowest_price": {"value": 20.0}}),
     3993455: (20.0, {"want": 30, "have": 100}, {"num_for_sale": 10, "lowest_price": {"value": 18.0}}),
     1111111: (80.0, {"want": 10, "have": 100}, {"num_for_sale": 2, "lowest_price": {"value": 80.0}}),  # 120 €
+    4207270: (25.0, {"want": 40, "have": 100}, {"num_for_sale": 6, "lowest_price": {"value": 25.0}}),
 }
 
 # Foto: cartella/nome -> righe lette dall'OCR (testo, altezza). [] = OCR senza testo utile.
@@ -60,6 +62,9 @@ OCR = {
     "IMG_0004": [("MOODYMANN", 0.06), ("PICTURE THIS SAMPLER 3", 0.05)],
     # Match pulito per artista e titolo, ma il disco vale 120 €: rete di sicurezza sul prezzo.
     "IMG_0005": [("MOODYMANN", 0.06), ("SILENTINTRODUCTION", 0.05)],
+    # Release vendibile, trovata per catalogo.
+    "IMG_0006": [("THEO PARRISH", 0.06), ("DANCE OF THE MEDUSA", 0.05), ("SS049", 0.012),
+                 ("Sound Signature", 0.02)],
 }
 
 # Caso 1: cosa ha "letto" l'AI sbagliando (prende artista, titolo e catno dalla scaletta)
@@ -103,9 +108,12 @@ def build_db(path):
 class FakeAPI:
     MIN_INTERVAL = 0
 
-    def __init__(self, token=None):
+    def __init__(self, token=None, blocked=(), failing=()):
         self.calls = 0
         self.listings = []
+        self.blocked = set(blocked)    # release bloccate dal marketplace
+        self.failing = set(failing)    # release per cui GET /releases/{id} fallisce (rete)
+        self.log = []                  # (richiesta, release_id) fatte a Discogs per le release
 
     def identity(self):
         return {"username": "test"}
@@ -117,13 +125,18 @@ class FakeAPI:
         return {"results": []}
 
     def price_suggestions(self, rid):
+        self.log.append(("price_suggestions", rid))
         value = MARKET[rid][0]
         return {grade: {"value": value, "currency": "EUR"} for grade in vendi.GRADES.values()}
 
     def release(self, rid):
-        return {"community": MARKET[rid][1]}
+        self.log.append(("release", rid))
+        if rid in self.failing:
+            raise vendi.ApiError(0, f"nessuna risposta da Discogs per /releases/{rid}")
+        return {"id": rid, "community": MARKET[rid][1], vendi.BLOCKED_FIELD: rid in self.blocked}
 
     def marketplace_stats(self, rid, currency):
+        self.log.append(("marketplace_stats", rid))
         stats = dict(MARKET[rid][2])
         if "lowest_price" in stats:
             stats["lowest_price"] = {**stats["lowest_price"], "currency": "EUR"}
@@ -162,10 +175,10 @@ class FakeAI:
 class Run:
     """Ambiente di prova: cartella delle foto, database, stato e risultati in una cartella temporanea."""
 
-    def __init__(self, tmp):
+    def __init__(self, tmp, photos=PHOTOS):
         self.tmp = Path(tmp)
         self.photos = self.tmp / "Dischi"
-        for grade, names in PHOTOS.items():
+        for grade, names in photos.items():
             (self.photos / grade).mkdir(parents=True)
             for name in names:
                 (self.photos / grade / f"{name}.JPG").write_bytes(b"foto finta")
@@ -300,6 +313,81 @@ class TestProtezioni(unittest.TestCase):
         rows = self.run.inventory()
         self.assertEqual(sorted(r["external_id"] for r in rows), ["IMG_0003", "IMG_0004"])
         self.assertTrue(all(r["status"] == "FOR_SALE" for r in rows))  # nessun doppione in bozza
+
+
+class TestNonVendibili(unittest.TestCase):
+    """Release bloccate dal marketplace (es. la 3993455, scartata da Discogs al caricamento del CSV)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        # IMG_0003: Moodymann - Picture This Sampler 3 (THIS003), IMG_0006: Theo Parrish - Dance Of The Medusa (SS049)
+        self.run = Run(self._tmp.name, photos={"VG+": ["IMG_0003", "IMG_0006"]})
+        self.run.api.blocked = {3993455}
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_bloccata_in_non_vendibili_vendibile_nel_csv(self):
+        out = self.run.main("--bozza")
+        listed = {r["external_id"]: r for r in self.run.inventory()}
+
+        # 1. Bloccata: in non_vendibili.csv, non nel CSV, nessuna richiesta di prezzo o statistiche
+        self.assertNotIn("IMG_0003", listed)
+        blocked = self.run.read_csv("non_vendibili.csv")
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["foto"], "VG+/IMG_0003.JPG")
+        self.assertEqual(blocked[0]["grado"], "VG+")
+        self.assertEqual(blocked[0]["release_id"], "3993455")
+        self.assertEqual(blocked[0]["artista_titolo"], "Moodymann - Picture This Sampler 3")
+        self.assertEqual(blocked[0]["metodo"], "catno")
+        self.assertEqual(blocked[0]["link"], "https://www.discogs.com/release/3993455")
+        self.assertEqual(blocked[0]["motivo"], "bloccata dal marketplace Discogs")
+        self.assertEqual([c for c in self.run.api.log if c[1] == 3993455], [("release", 3993455)])
+        self.assertNotIn("IMG_0003", self.run.to_check())
+        self.assertIn("dischi non vendibili (bloccati da Discogs): 1", out)
+
+        # 2. Vendibile: nel CSV come prima; GET /releases/{id} fatta una volta sola (riusata per want/have)
+        self.assertEqual(listed["IMG_0006"]["release_id"], "4207270")
+        self.assertEqual(listed["IMG_0006"]["price"], "25.00")
+        self.assertEqual(self.run.api.log.count(("release", 4207270)), 1)
+
+    def test_verifica_fallita_va_in_da_controllare(self):
+        self.run.api.failing = {4207270}
+        out = self.run.main("--bozza")
+        self.assertNotIn("IMG_0006", {r["external_id"] for r in self.run.inventory()})
+        row = self.run.to_check()["IMG_0006"]
+        self.assertIn("impossibile verificare se è vendibile", row["motivo"])
+        self.assertEqual(row["release_id_proposto"], "4207270")
+        self.assertNotIn(("price_suggestions", 4207270), self.run.api.log)
+        self.assertIn("ATTENZIONE", out)
+
+        # Al giro dopo, con Discogs di nuovo raggiungibile, la verifica viene rifatta e va nel CSV
+        self.run.api.failing = set()
+        self.run.main("--bozza")
+        self.assertIn("IMG_0006", {r["external_id"] for r in self.run.inventory()})
+        self.assertNotIn("IMG_0006", self.run.to_check())
+
+    def test_campo_assente_va_in_da_controllare(self):
+        with mock.patch.object(FakeAPI, "release", lambda self, rid: {"id": rid, "community": MARKET[rid][1]}):
+            self.run.main("--bozza")
+        self.assertEqual(self.run.inventory(), [])
+        self.assertIn("blocked_from_sale", self.run.to_check()["IMG_0006"]["motivo"])
+
+    def test_secondo_giro_senza_chiamate(self):
+        self.run.main("--bozza")
+        self.run.api.log = []
+        out = self.run.main("--bozza")
+        # 4. La release non vendibile viene saltata senza nessuna richiesta a Discogs
+        self.assertEqual(self.run.api.log, [])
+        self.assertEqual(len(self.run.read_csv("non_vendibili.csv")), 1)
+        self.assertIn("dischi non vendibili (bloccati da Discogs): 1", out)
+
+        # Con --rielabora invece la vendibilità viene ricontrollata
+        self.run.api.blocked = set()
+        self.run.main("--bozza", "--rielabora")
+        self.assertIn(("release", 3993455), self.run.api.log)
+        self.assertEqual(sorted(r["external_id"] for r in self.run.inventory()), ["IMG_0003", "IMG_0006"])
+        self.assertEqual(self.run.read_csv("non_vendibili.csv"), [])
 
 
 class TestVerifica(unittest.TestCase):
