@@ -23,6 +23,7 @@ Esempio:
 """
 
 import argparse
+import datetime as dt
 from pathlib import Path
 
 import vendi
@@ -62,6 +63,34 @@ def find_drafts(api, username, by_eid, by_listing):
         page += 1
 
 
+def reworked(state):
+    """{external_id: quando} delle righe CSV e degli annunci in bozza tolti da vendi.py --rielabora."""
+    return dict(state.execute("SELECT external_id, MAX(archiviato) FROM rielaborati "
+                              "WHERE tabella IN ('righe_csv', 'annunci_api') GROUP BY external_id"))
+
+
+def drop_old_drafts(drafts, reworked_at):
+    """Toglie le bozze vecchie rimaste su Discogs dopo vendi.py --rielabora: hanno lo stesso
+    external_id delle nuove ma sono state create prima della rielaborazione, e non vanno mai
+    messe in vendita (sarebbero doppioni). Le copie di una stessa riga CSV (quantity > 1) sono
+    bozze diverse con lo stesso external_id e restano tutte. Restituisce (da mettere in vendita, vecchie)."""
+    keep, old = [], []
+    for d in drafts:
+        when = reworked_at.get(d[1])
+        if when is None:
+            keep.append(d)
+            continue
+        try:
+            posted = dt.datetime.fromisoformat(d[0].get("posted", ""))
+            if posted.tzinfo is None:
+                posted = posted.astimezone()
+            new = posted > dt.datetime.fromisoformat(when).astimezone()
+        except ValueError:
+            new = False  # data sconosciuta: meglio non metterla in vendita
+        (keep if new else old).append(d)
+    return keep, old
+
+
 def ask_confirmation(question):
     try:
         answer = input(f"{question} [s/N] ").strip().lower()
@@ -86,7 +115,12 @@ def main():
     username = api.identity()["username"]
     print(f"Collegato a Discogs come {username}")
     print(f"Annunci creati in bozza da vendi.py: {len(by_eid)}. Cerco quali sono ancora in bozza su Discogs...")
-    drafts = find_drafts(api, username, by_eid, by_listing)
+    drafts, old = drop_old_drafts(find_drafts(api, username, by_eid, by_listing), reworked(state))
+    if old:
+        print(f"\nAttenzione: {len(old)} bozze vecchie, create prima di vendi.py --rielabora per le stesse foto.\n"
+              "NON verranno messe in vendita (sarebbero doppioni): cancellale a mano su Discogs.")
+        for item, eid, _origin in old:
+            print(f"  {eid}: listing {item['id']} https://www.discogs.com/sell/item/{item['id']}")
     if not drafts:
         print("Nessuna bozza da mettere in vendita: sono già tutte in vendita o cancellate,\n"
               "oppure i CSV con le bozze non sono ancora stati caricati su Discogs.")

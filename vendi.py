@@ -16,6 +16,11 @@ del file senza estensione è l'external_id.
      d. l'AI sceglie tra i candidati reali (mai inventati) e la scelta deve
         combaciare con artista e titolo letti nella foto;
      l'AI ha un tetto di spesa totale e i suoi risultati restano in cache;
+     e. il disco si riconosce dalle scritte principali, mai dalle righe di una
+        scaletta ("C2. Artista - Brano, From the album ..."); un riconoscimento
+        senza codice (AI o artista e titolo) deve superare una verifica finale
+        (artista tra le scritte principali, Various solo per una compilation,
+        non una sola parola), altrimenti va in da_controllare.csv;
   2. raggruppa le foto della stessa release con lo stesso grado: sono copie
      dello stesso disco;
   3. calcola il prezzo: base = prezzo più basso in vendita (statistiche del
@@ -24,6 +29,8 @@ del file senza estensione è l'external_id.
      e premio richiesta se want/have > 1 (+10%), sommati, tutto configurabile;
      valute nella valuta dell'account venditore; i dischi con punteggio
      collezionistico alto sono elencati anche in collezionistici.csv;
+     un disco riconosciuto senza codice che è collezionistico o costa più di
+     --soglia-controllo (default 100) va in da_controllare.csv, non in vendita;
   4. trovato in locale -> una riga nel CSV di caricamento inventario con
      quantity = numero di foto (max 1.000 dischi per file);
      trovato solo via API -> un annuncio via API per foto (l'API non ha un
@@ -32,6 +39,8 @@ del file senza estensione è l'external_id.
 
 Tutto lo stato è salvato in data/vendita_stato.sqlite: se lo script si
 interrompe, rilanciando lo stesso comando riparte da dove era, senza annunci doppi.
+Con --rielabora --bozza le foto della cartella vengono rielaborate da capo
+(le foto già in vendita sono saltate).
 
 Esempi:
     python3 vendi.py ~/Pictures/Dischi --limite 20 --simula
@@ -76,7 +85,7 @@ GRADES = {
 }
 
 # Esiti del riconoscimento che finiscono nel file da controllare.
-PROBLEMS = {"non_trovato", "multiplo", "senza_prezzo", "errore"}
+PROBLEMS = {"non_trovato", "multiplo", "senza_prezzo", "errore", "da_verificare"}
 
 
 def now():
@@ -271,6 +280,35 @@ COUNTRY_WORDS = {
 }
 
 
+# Righe di una scaletta (tracklist): "A1 ...", "C2. ...", "B3) ...", "1. ...", "12 - ...",
+# e i riferimenti come "From the album 'Mirage' BJQD/15 [1973]". Non sono il disco.
+TRACK_LINE_RE = re.compile(r"^\s*(?:[A-Ha-h]\s?\d{1,2}|\d{1,2})\s*[.):\-–]?\s+(?!rpm\b|giri\b)\S", re.I)
+FROM_ALBUM_RE = re.compile(r"\bfrom (?:the )?(?:album|lp|ep|12\"?)\b[\s:,]*[\"'“‘«]?([^\"'”’»\[\(]+)", re.I)
+
+
+def is_track_line(text):
+    return bool(TRACK_LINE_RE.match(text or "") or FROM_ALBUM_RE.search(text or ""))
+
+
+MAIN_MIN_HEIGHT = 0.5   # scritte principali: alte almeno metà della scritta più grande...
+MAIN_TOP_LINES = 8      # ...oppure tra le 8 più grandi
+
+
+def big_lines(lines):
+    """Le scritte più grandi lette dall'OCR (di solito artista e titolo), senza le righe della scaletta."""
+    lines = [(t, h) for t, h in lines if t.strip() and not is_track_line(t)]
+    if not lines:
+        return []
+    tallest = max(h for _t, h in lines)
+    top = sorted(lines, key=lambda x: -x[1])[:MAIN_TOP_LINES]
+    return [t for t, h in lines if (tallest and h >= tallest * MAIN_MIN_HEIGHT) or (t, h) in top]
+
+
+def from_album_titles(text):
+    """Titoli citati come "From the album '...'" (album da cui viene un brano, non il disco)."""
+    return [m.group(1).strip(" .,-") for m in FROM_ALBUM_RE.finditer(text or "") if m.group(1).strip(" .,-")]
+
+
 @dataclass
 class Evidence:
     barcodes: list = field(default_factory=list)
@@ -278,16 +316,35 @@ class Evidence:
     lines: list = field(default_factory=list)    # (testo, altezza) letti dall'OCR (o dall'AI)
     ocr_done: bool = False
     ai_note: str = ""
+    main: list = field(default_factory=list)     # scritte principali: artista e titolo in grande
 
     @property
     def text(self):
         return "\n".join(t for t, _h in self.lines)
 
-    def add_lines(self, lines):
+    def add_lines(self, lines, main=None):
+        """Aggiunge righe lette nella foto. main: le scritte principali tra queste
+        (se None, le righe più grandi, senza quelle della scaletta)."""
         self.lines.extend(lines)
-        for norm, raw in catno_candidates([t for t, _h in lines]).items():
-            self.catnos.setdefault(norm, raw)
+        self.main.extend(big_lines(lines) if main is None else main)
+        # I numeri di catalogo di una scaletta ("From the album 'Mirage' BJQD/15")
+        # sono di altri dischi: non valgono mai come catno di questo.
+        texts = [t for t, _h in self.lines]
+        in_tracks = catno_candidates([t for t in texts if is_track_line(t)])
+        strong = [t for t in in_tracks if is_strong_catno(t)]
+
+        def from_tracks(norm):
+            return norm in in_tracks or any(t in norm for t in strong)
+
+        for norm, raw in catno_candidates([t for t in texts if not is_track_line(t)]).items():
+            if not from_tracks(norm):
+                self.catnos.setdefault(norm, raw)
+        for norm in [n for n in self.catnos if from_tracks(n)]:
+            del self.catnos[norm]
         self.ocr_done = True
+
+    def tracks(self):
+        return [t for t, _h in self.lines if is_track_line(t)]
 
     def describe(self):
         bits = []
@@ -403,12 +460,12 @@ def search_barcode_local(con, ev):
     ids = []
     for b in ev.barcodes:
         ids += [r["id"] for r in dd.search_by_barcode(con, b)]
-    return [{**r, "_code": True} for r in dd.get_releases(con, ids)]
+    return [{**r, "_code": "barcode"} for r in dd.get_releases(con, ids)]
 
 
 def search_catno_local(con, ev):
     confirmed, _ = local_catno_matches(con, ev)
-    return [{**r, "_code": True} for r in dd.get_releases(con, list(confirmed))]
+    return [{**r, "_code": "catno"} for r in dd.get_releases(con, list(confirmed))]
 
 
 def text_lines_for_search(con, ev, max_lines=10):
@@ -635,7 +692,7 @@ def search_api(api, ev, artist_titles=()):
     """(fonte, candidati) cercando su Discogs per barcode, poi per catno, poi per artista e titolo."""
     for b in ev.barcodes:
         res = api.search(barcode=b)
-        results = {r["id"]: {**api_result_as_release(r), "_code": True} for r in res.get("results", [])}
+        results = {r["id"]: {**api_result_as_release(r), "_code": "barcode"} for r in res.get("results", [])}
         if results:
             return "api-barcode", list(results.values())
     strong = [(norm, raw) for norm, raw in ev.catnos.items() if is_strong_catno(norm)]
@@ -643,7 +700,7 @@ def search_api(api, ev, artist_titles=()):
     for _norm, raw in strong[:3]:  # al massimo 3 tentativi per non sprecare richieste
         res = api.search(catno=raw)
         confirmed = {
-            r["id"]: {**api_result_as_release(r), "_code": True}
+            r["id"]: {**api_result_as_release(r), "_code": "catno"}
             for r in res.get("results", [])
             if any(label_in_text(l, ev.text) for l in r.get("label", []))
         }
@@ -676,19 +733,24 @@ AI_MAX_CANDIDATES = 40      # candidati mostrati all'AI per la scelta finale
 
 AI_READ_PROMPT = """This photo shows ONE vinyl record: its front cover, back cover or centre label.
 Report what you can see. Transcribe printed details exactly; use an empty string when something is not clearly readable. Never guess printed details.
+Identify THIS record only from its MAIN printed details: the artist and title printed large on the cover or label (the header), the record's own catalogue number and its barcode.
+A tracklist is NOT the record: never take artist, title or catalogue number from tracklist lines (e.g. "A1 ...", "C2. Artist - Track") or from references such as "From the album 'X' ABC/12 [1973]", which name OTHER records the tracks come from.
+If the tracklist shows several different artists, this record is probably a compilation: report the artist/title of the header (e.g. the compiler's name and the compilation title, or "Various") and set compilation to true.
 - photo_type: front, back, label or other.
-- artist, title, label, catno (catalogue number, e.g. "SHVL 804"), year (e.g. after ℗ or ©), country (where made/printed), barcode (digits).
-- readable_text: the most useful readable text, one item per line (titles, credits, codes, label, company names), at most 40 lines.
+- artist, title, label, catno (the catalogue number of THIS record, e.g. "SHVL 804"), year (e.g. after ℗ or ©), country (where made/printed), barcode (digits).
+- compilation: true if this record collects tracks by different artists.
+- readable_text: the most useful readable text, one item per line (titles, credits, codes, label, company names), at most 40 lines; copy tracklist lines as they are printed, including their position (A1, B2...).
 - recognized_artist / recognized_title: if you recognise the record from its artwork or overall look, the artist and album you believe it is, even if not printed; otherwise empty."""
 
 AI_READ_SCHEMA = {
     "type": "object",
     "properties": {
         "photo_type": {"type": "string", "enum": ["front", "back", "label", "other"]},
+        "compilation": {"type": "boolean"},
         **{k: {"type": "string"} for k in ("artist", "title", "label", "catno", "year", "country", "barcode",
                                           "readable_text", "recognized_artist", "recognized_title")},
     },
-    "required": ["photo_type", "artist", "title", "label", "catno", "year", "country", "barcode",
+    "required": ["photo_type", "compilation", "artist", "title", "label", "catno", "year", "country", "barcode",
                  "readable_text", "recognized_artist", "recognized_title"],
     "additionalProperties": False,
 }
@@ -696,6 +758,9 @@ AI_READ_SCHEMA = {
 AI_CHOOSE_PROMPT = """This photo shows ONE vinyl record (front cover, back cover or centre label).
 Below is a list of candidate Discogs releases. Choose the one this record is.
 Compare every visible clue: artist, title, label, catalogue number, barcode, country, year, format, artwork.
+Identify the record from its MAIN printed details (artist and title printed large on the cover or label, its own catalogue number, its barcode).
+Tracklist lines and references such as "From the album 'X' ABC/12 [1973]" name OTHER records the tracks come from: a candidate that matches only a tracklist line is NOT this record.
+If the tracklist shows several different artists, the record is probably a compilation: choose the candidate matching the header (compiler/title or "Various").
 If the exact pressing cannot be determined, choose the most likely one based on the visible clues and set confidence to "low".
 Only answer with an id from the list. Answer 0 only if NONE of the candidates is this record (different artist or album).
 
@@ -800,7 +865,8 @@ def ai_evidence(ev, data):
     if data.get("catno") and data.get("label"):
         lines.append((f"{data['label']} {data['catno']}", 0.0))
     lines += [(t, 0.0) for t in (data.get("readable_text") or "").splitlines() if t.strip()]
-    ev.add_lines(lines)
+    ev.add_lines(lines, main=[data[k] for k in ("artist", "title", "recognized_artist", "recognized_title")
+                              if data.get(k) and not is_track_line(data[k])])
     shown = {k: v for k, v in data.items() if v and k != "readable_text"}
     ev.ai_note = "letto dall'AI: " + ", ".join(f"{k}={v}" for k, v in shown.items())
 
@@ -837,6 +903,96 @@ def coherent(release, ai_data, ocr_text):
 
 
 # --------------------------------------------------------------------------
+# Verifica finale dei riconoscimenti senza codice (AI o artista e titolo)
+# --------------------------------------------------------------------------
+
+# Metodi di riconoscimento: con barcode o catno esatti la release è certa; con
+# l'AI o con artista e titolo (locale-testo) va verificata.
+UNVERIFIED_METHODS = ("ai", "locale-testo")
+COMPILATION_WORDS_RE = re.compile(r"\b(various artists|compilation|compiled by|v\s*/\s*a)\b", re.I)
+TRACK_ARTIST_RE = re.compile(r"^\s*(?:[A-Ha-h]\s?\d{1,2}|\d{1,2})\s*[.):\-–]?\s+(.+?)\s+[-–—]\s+\S")
+
+
+def method_of(fonte, release):
+    """barcode / catno se la release viene da un codice letto nella foto, altrimenti ai / locale-testo."""
+    code = (release or {}).get("_code")
+    if code in ("barcode", "catno"):
+        return code
+    last = (fonte or "").split("+")[-1]
+    for code in ("barcode", "catno"):
+        if last.endswith(code):
+            return code
+    if not fonte:
+        return ""
+    return "ai" if fonte.startswith("ai") else "locale-testo"
+
+
+def is_compilation(ev, ai_data=None):
+    """True se la foto mostra una compilation: lo dice l'AI, c'è scritto, o la scaletta
+    ha almeno 3 artisti diversi ("A1 Artista - Brano")."""
+    if (ai_data or {}).get("compilation") is True:
+        return True
+    if COMPILATION_WORDS_RE.search(ev.text):
+        return True
+    artists = set()
+    for line in ev.tracks():
+        m = TRACK_ARTIST_RE.match(line)
+        if m and dd.normalize_text(m.group(1)):
+            artists.add(dd.normalize_text(m.group(1)))
+    return len(artists) >= 3
+
+
+def significant_words(value):
+    return [w for w in dd.normalize_text(value).split() if w not in STOPWORDS]
+
+
+def check_match(release, ev, ai_data=None):
+    """Motivo per cui un riconoscimento senza codice (AI o artista e titolo) NON è affidabile,
+    o "" se supera i controlli:
+    - artista e titolo della release non devono essere una riga della scaletta, né il titolo
+      un "From the album ..." citato nella foto;
+    - l'artista deve comparire tra le scritte principali (tollerante a maiuscole, accenti e
+      trattini); "Various" solo se la foto mostra una compilation;
+    - il riconoscimento non può basarsi su una sola parola."""
+    artist = clean_artist(release.get("artists"))
+    title = release.get("title") or ""
+    norm_artist = dd.normalize_text(artist)
+    various = norm_artist in ("various", "various artists")
+    who = f"{artist or '?'} - {title}"
+
+    # 1. La release è un brano della scaletta, o l'album da cui viene un brano
+    for line in ev.tracks():
+        tm = TextMatcher(line)
+        if (norm_artist and not various and tm.coverage(artist) >= TEXT_MIN_COVERAGE
+                and tm.coverage(title) >= TEXT_MIN_COVERAGE):
+            return f"'{who}' è una riga della scaletta, non il disco (riga: \"{line.strip()[:80]}\"): forse una compilation"
+    for album in from_album_titles(ev.text):
+        if dd.normalize_text(album) == dd.normalize_text(title):
+            return f"'{title}' è citato come \"From the album\" nella scaletta: è l'album di un brano, non il disco"
+
+    # 2. L'artista deve comparire tra le scritte principali
+    main = TextMatcher("\n".join(ev.main))
+    if various or not artist.strip():
+        if not is_compilation(ev, ai_data):
+            return f"release '{who}' (Various) ma la foto non mostra una compilation"
+        artist_words = []
+    elif not norm_artist:  # nome in un altro alfabeto (es. cirillico): non confrontabile
+        return f"l'artista '{artist}' non si può confrontare con le scritte lette nella foto"
+    elif main.coverage(artist) < TEXT_MIN_COVERAGE:
+        return f"l'artista '{artist}' non compare tra le scritte principali della foto"
+    else:
+        artist_words = significant_words(artist) or norm_artist.split()
+
+    # 3. Non basta una sola parola
+    full = TextMatcher(ev.text + "\n" + "\n".join(ev.main))
+    matched = list(artist_words)  # l'artista è già stato ritrovato tra le scritte principali
+    matched += [w for w in (significant_words(title) or dd.normalize_text(title).split()) if full.word_found(w) >= 0.8]
+    if len(matched) < 2:
+        return f"'{who}' combacia solo per una parola ({', '.join(matched) or 'nessuna'})"
+    return ""
+
+
+# --------------------------------------------------------------------------
 # Riconoscimento di una foto
 # --------------------------------------------------------------------------
 
@@ -850,6 +1006,8 @@ class Recognition:
     ai_cost: float = 0.0
     ai_read: dict = None
     ai_choice: dict = None
+    metodo: str = ""           # barcode / catno / locale-testo / ai
+    motivo: str = ""           # perché va controllato a mano (esito da_verificare)
 
     @property
     def release_id(self):
@@ -897,9 +1055,23 @@ def merge_ranked(*lists):
 
 def recognize(path, con, api, use_ocr, ai=None, cache=None):
     """Riconosce il disco di una foto. cache: dati AI già pagati per questa foto
-    ({"read": ..., "choice": ...}), che non vengono mai richiesti di nuovo."""
-    cache = dict(cache or {})
+    ({"read": ..., "choice": ...}), che non vengono mai richiesti di nuovo.
+    Un riconoscimento senza codice (AI o artista e titolo) che non supera check_match
+    ha esito da_verificare: la release proposta resta salvata ma il disco non va in vendita."""
     ev = Evidence()
+    rec = identify(path, con, api, use_ocr, ai, cache, ev)
+    rec.metodo = method_of(rec.fonte, rec.release)
+    if rec.esito == "trovato" and rec.metodo in UNVERIFIED_METHODS:
+        rec.motivo = check_match(rec.release, ev, rec.ai_read)
+        if rec.motivo:
+            rec.esito = "da_verificare"
+            rec.details += f"; DA VERIFICARE: {rec.motivo}"
+    return rec
+
+
+def identify(path, con, api, use_ocr, ai, cache, ev):
+    """Cascata barcode -> catno -> artista/titolo -> AI. Restituisce un Recognition."""
+    cache = dict(cache or {})
     img = load_image(path)
 
     # 1. Parte locale: se il risultato è sicuro, niente AI
@@ -1163,7 +1335,7 @@ CREATE TABLE IF NOT EXISTS foto (
     impronta    TEXT,
     media       TEXT,
     sleeve      TEXT,
-    esito       TEXT,     -- trovato / multiplo / non_trovato / senza_prezzo / errore
+    esito       TEXT,     -- trovato / multiplo / non_trovato / senza_prezzo / errore / da_verificare
     fonte       TEXT,     -- locale-barcode / locale-catno / api-barcode / api-catno
     release_id  INTEGER,
     candidati   TEXT,
@@ -1173,7 +1345,10 @@ CREATE TABLE IF NOT EXISTS foto (
     ai_dati     TEXT,     -- cosa ha letto l'AI nella foto (mai richiesto due volte)
     ai_costo    REAL DEFAULT 0,  -- spesa AI per questa foto (euro, 1 $ = 1 €)
     ai_scelta   TEXT,     -- scelta dell'AI tra i candidati, con sicurezza e motivo
-    disco       TEXT      -- artista - titolo (etichetta, paese, anno) della release trovata
+    disco       TEXT,     -- artista - titolo (etichetta, paese, anno) della release trovata
+    metodo      TEXT,     -- barcode / catno / locale-testo / ai
+    motivo      TEXT,     -- perché è da verificare a mano (esito da_verificare)
+    prezzo      REAL      -- prezzo calcolato per una foto da verificare (non messa in vendita)
 );
 CREATE TABLE IF NOT EXISTS collezione (  -- dati per il valore collezionistico, per release
     release_id INTEGER PRIMARY KEY,
@@ -1226,6 +1401,12 @@ CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     calcolo     TEXT,     -- come è stato calcolato il prezzo
     status      TEXT      -- FOR_SALE / DRAFT (vuoto = FOR_SALE, versioni precedenti)
 );
+CREATE TABLE IF NOT EXISTS rielaborati (  -- stato archiviato da --rielabora (per sicurezza, mai cancellato)
+    tabella     TEXT,
+    external_id TEXT,
+    dati        TEXT,     -- la riga com'era, in JSON
+    archiviato  TEXT
+);
 CREATE TABLE IF NOT EXISTS bozze_pubblicate ( -- bozze messe in vendita da pubblica_bozze.py
     listing_id  INTEGER PRIMARY KEY,
     external_id TEXT,
@@ -1246,7 +1427,8 @@ def open_state(path):
                                 ("foto", "ai_scelta", "TEXT"), ("foto", "disco", "TEXT"),
                                 ("righe_csv", "calcolo", "TEXT"), ("annunci_api", "calcolo", "TEXT"),
                                 ("collezionistici", "calcolo", "TEXT"), ("righe_csv", "status", "TEXT"),
-                                ("annunci_api", "status", "TEXT")]:  # stato di una versione precedente
+                                ("annunci_api", "status", "TEXT"), ("foto", "metodo", "TEXT"),
+                                ("foto", "motivo", "TEXT"), ("foto", "prezzo", "REAL")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
@@ -1259,6 +1441,57 @@ def open_state(path):
 def is_local_source(fonte):
     """True se la release è stata trovata nel database locale (anche dopo la lettura dell'AI)."""
     return (fonte or "").split("+")[-1].startswith("locale")
+
+
+def prepare_rework(state, photos, out_dir):
+    """--rielabora: le foto indicate tornano da elaborare da capo (riconoscimento, AI compresa,
+    prezzo e annuncio). Le loro righe CSV e i loro annunci API in bozza vengono tolti dallo stato
+    e copiati nella tabella rielaborati. Le foto già in vendita (righe CSV o annunci For Sale,
+    bozze già messe in vendita, annunci dall'esito incerto) restano come sono: niente doppioni.
+    La spesa AI già fatta resta contata nel tetto. Restituisce (rielaborate, saltate)."""
+    ids = {p.external_id for p in photos}
+    sold = {r[0] for r in state.execute("SELECT external_id FROM bozze_pubblicate")}
+    skipped, archive = set(), []
+
+    def keep(table, row):
+        archive.append((table, row["external_id"], json.dumps(dict(row)), now()))
+
+    emptied_parts = set()
+    for row in state.execute("SELECT * FROM righe_csv").fetchall():
+        members = {r[0] for r in state.execute("SELECT external_id FROM foto WHERE riga_csv = ?", (row["external_id"],))}
+        members.add(row["external_id"])
+        if not members & ids:
+            continue
+        if row["status"] != "DRAFT" or row["external_id"] in sold:
+            skipped |= members
+            continue
+        keep("righe_csv", row)
+        state.execute("DELETE FROM righe_csv WHERE external_id = ?", (row["external_id"],))
+        emptied_parts.add(row["parte"])
+        ids |= members  # tutte le copie della riga tornano da elaborare
+    for row in state.execute("SELECT * FROM annunci_api").fetchall():
+        if row["external_id"] not in ids:
+            continue
+        if row["status"] != "DRAFT" or row["stato"] == "in_corso" or row["external_id"] in sold:
+            skipped.add(row["external_id"])
+            continue
+        keep("annunci_api", row)
+        state.execute("DELETE FROM annunci_api WHERE external_id = ?", (row["external_id"],))
+    redo = ids - skipped
+    for table in ("collezionistici", "foto"):
+        for row in state.execute(f"SELECT * FROM {table}").fetchall():
+            if row["external_id"] in redo:
+                keep(table, row)
+    state.executemany("DELETE FROM collezionistici WHERE external_id = ?", [(e,) for e in redo])
+    state.executemany("UPDATE foto SET esito = 'rielabora', riga_csv = NULL, ai_dati = NULL, ai_scelta = NULL,"
+                      " prezzo = NULL, motivo = NULL WHERE external_id = ?", [(e,) for e in redo])
+    state.executemany("INSERT INTO rielaborati VALUES (?, ?, ?, ?)", archive)
+    state.commit()
+    # I file CSV rimasti senza righe non devono restare in risultati/ (sarebbero caricati per sbaglio)
+    for part in emptied_parts:
+        if not state.execute("SELECT 1 FROM righe_csv WHERE parte = ?", (part,)).fetchone():
+            (out_dir / f"inventario_{part:03d}.csv").unlink(missing_ok=True)
+    return sorted(redo, key=natural_key), sorted(skipped, key=natural_key)
 
 
 def money(eur):
@@ -1367,8 +1600,10 @@ REASONS = {
     "multiplo": "più release possibili",
     "senza_prezzo": "nessun prezzo suggerito da Discogs",
     "errore": "errore durante l'elaborazione",
+    "da_verificare": "riconoscimento da verificare a mano",
 }
-CHECK_HEADER = ["foto", "cartella", "motivo", "dettagli", "candidati"]
+CHECK_HEADER = ["foto", "cartella", "motivo", "release_id_proposto", "disco_proposto", "metodo", "prezzo_calcolato",
+                "link_proposto", "dettagli", "candidati"]
 
 
 COLLECTOR_HEADER = ["external_id", "release_id", "grado", "quantita", "foto", "disco", "punteggio", "motivi",
@@ -1419,17 +1654,20 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     rows = []
     for r in state.execute("SELECT * FROM foto WHERE esito IN ({})".format(",".join("?" * len(PROBLEMS))),
                            sorted(PROBLEMS)):
-        rows.append([photo_name(r["foto"]), r["cartella"], REASONS[r["esito"]],
+        motivo = REASONS[r["esito"]] + (f": {r['motivo']}" if r["motivo"] else "")
+        rows.append([photo_name(r["foto"]), r["cartella"], motivo, r["release_id"] or "", r["disco"] or "",
+                     r["metodo"] or method_of(r["fonte"], None), f"{r['prezzo']:.2f}" if r["prezzo"] else "",
+                     f"https://www.discogs.com/release/{r['release_id']}" if r["release_id"] else "",
                      r["dettagli"] or "", r["candidati"] or ""])
-    for r in state.execute("SELECT a.*, f.foto, f.cartella FROM annunci_api a "
+    for r in state.execute("SELECT a.*, f.foto, f.cartella, f.disco, f.metodo, f.fonte FROM annunci_api a "
                            "LEFT JOIN foto f USING (external_id) WHERE a.stato IN ('in_corso', 'rifiutato')"):
         if r["stato"] == "in_corso":
             motivo = "pubblicazione non confermata: controlla su Discogs se l'annuncio esiste già"
         else:
             motivo = "Discogs ha rifiutato l'annuncio"
-        rows.append([photo_name(r["foto"]), r["cartella"], motivo,
-                     f"release {r['release_id']}, prezzo {r['price']:.2f}; {r['messaggio'] or ''}",
-                     f"https://www.discogs.com/release/{r['release_id']}"])
+        rows.append([photo_name(r["foto"]), r["cartella"], motivo, r["release_id"], r["disco"] or "",
+                     r["metodo"] or method_of(r["fonte"], None), f"{r['price']:.2f}",
+                     f"https://www.discogs.com/release/{r['release_id']}", r["messaggio"] or "", ""])
     rows.sort(key=lambda r: natural_key(r[0]))
     write_csv(out_dir / "da_controllare.csv", CHECK_HEADER, rows)
 
@@ -1487,6 +1725,10 @@ def main():
                              "conta come di valore (default 50)")
     parser.add_argument("--soglia-collezionistico", type=int, default=4,
                         help="per collezionistici.csv: punteggio minimo per considerare un disco collezionistico (default 4)")
+    parser.add_argument("--soglia-controllo", type=float, default=100.0,
+                        help="i dischi riconosciuti senza barcode o catalogo esatto (AI o artista e titolo) con prezzo "
+                             "finale sopra questa soglia (valuta del tuo account), o collezionistici, non vanno in "
+                             "vendita ma in da_controllare.csv (default 100)")
     parser.add_argument("--limite", type=int, help="elabora solo le prime N foto (prova)")
     parser.add_argument("--bozza", action="store_true",
                         help="crea gli annunci come bozza (Draft) invece che in vendita (For Sale), "
@@ -1495,6 +1737,9 @@ def main():
                         help="non pubblica annunci via API e non modifica i CSV veri: scrive tutto in risultati/simulazione/")
     parser.add_argument("--riprova", action="store_true",
                         help="rianalizza anche le foto finite da controllare (non trovate, più release, senza prezzo)")
+    parser.add_argument("--rielabora", action="store_true",
+                        help="ignora lo stato salvato per le foto di questa cartella e le rielabora da capo (anche l'AI, "
+                             "che viene pagata di nuovo); solo insieme a --bozza; le foto già in vendita sono saltate")
     parser.add_argument("--senza-ai", action="store_true",
                         help="non usa l'AI: solo riconoscimento locale gratuito (le foto incerte vanno da controllare)")
     parser.add_argument("--ai-tetto", type=float, default=50.0,
@@ -1505,6 +1750,12 @@ def main():
     parser.add_argument("--uscita", default=str(OUT_DIR), help="cartella dei risultati (default: risultati/)")
     args = parser.parse_args()
     status = "DRAFT" if args.bozza else "FOR_SALE"
+    if args.rielabora and not args.bozza:
+        raise SystemExit("--rielabora funziona solo insieme a --bozza: rielaborando foto già elaborate gli annunci\n"
+                         "devono essere bozze, per non mettere mai in vendita dei doppioni.")
+    if args.rielabora and args.simula:
+        raise SystemExit("--rielabora cambia lo stato vero (data/vendita_stato.sqlite) e non si può usare con --simula:\n"
+                         "per ripetere un test usa --rielabora --bozza, gli annunci restano bozze.")
 
     photos, warnings = scan_photos(args.cartella)
     for w in warnings:
@@ -1532,6 +1783,11 @@ def main():
               f"spesa finora {money(ai_spent_before)}, tetto {money(args.ai_tetto)}")
     if not args.simula:
         recover_pending_listings(state, api, identity["username"])
+    if args.rielabora:
+        redo, skipped = prepare_rework(state, photos, Path(args.uscita).expanduser())
+        print(f"--rielabora: {len(redo)} foto verranno rielaborate da capo"
+              + (f"; {len(skipped)} saltate perché già in vendita o in attesa di conferma: {', '.join(skipped)}"
+                 if skipped else ""))
 
     max_part = state.execute("SELECT COALESCE(MAX(parte), 0) FROM righe_csv").fetchone()[0]
     parts = PartAllocator(max_part + 1)   # le righe nuove vanno sempre in file nuovi
@@ -1555,7 +1811,7 @@ def main():
             same_photo = row is not None and row["impronta"] == fingerprint
             cache = {"read": json.loads(row["ai_dati"]) if same_photo and row["ai_dati"] else None,
                      "choice": json.loads(row["ai_scelta"]) if same_photo and row["ai_scelta"] else None}
-            if (not same_photo or row["esito"] in ("errore", "sospeso")
+            if (not same_photo or row["esito"] in ("errore", "sospeso", "rielabora")
                     or (args.riprova and row["esito"] in PROBLEMS)
                     or (ai and row["esito"] in ("non_trovato", "multiplo") and cache["read"] is None)):
                 try:
@@ -1572,12 +1828,13 @@ def main():
                 old_cost = row["ai_costo"] if same_photo and row["ai_costo"] else 0.0
                 state.execute(
                     "INSERT OR REPLACE INTO foto (external_id, cartella, foto, impronta, media, sleeve, esito, fonte,"
-                    " release_id, candidati, dettagli, aggiornato, ai_dati, ai_costo, ai_scelta, disco)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " release_id, candidati, dettagli, aggiornato, ai_dati, ai_costo, ai_scelta, disco, metodo, motivo)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (eid, photo.folder, str(photo.path), fingerprint, photo.media, photo.sleeve, rec.esito, rec.fonte,
                      rec.release_id, format_candidates(rec.candidates), rec.details, now(),
                      json.dumps(rec.ai_read) if rec.ai_read is not None else None, old_cost + rec.ai_cost,
-                     json.dumps(rec.ai_choice) if rec.ai_choice is not None else None, describe_release(rec.release)),
+                     json.dumps(rec.ai_choice) if rec.ai_choice is not None else None, describe_release(rec.release),
+                     rec.metodo, rec.motivo),
                 )
                 state.commit()
                 row = state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
@@ -1586,6 +1843,9 @@ def main():
                     if rec.ai_choice and rec.ai_choice.get("confidence"):
                         how += f", sicurezza {CONFIDENCE_IT.get(rec.ai_choice['confidence'], '?')}"
                     print(f"{prefix}: {row['disco']} [release {row['release_id']}, {how}]")
+                elif rec.esito == "da_verificare":
+                    print(f"{prefix}: DA VERIFICARE, proposto {row['disco']} [release {row['release_id']},"
+                          f" {row['fonte']}]: {rec.motivo}")
                 else:
                     print(f"{prefix}: {row['esito']}")
                 if rec.esito == "sospeso":
@@ -1595,6 +1855,8 @@ def main():
                 todo.append((photo, row))
             elif row["esito"] != "sospeso":
                 stats["problemi"] += 1
+                if row["esito"] == "da_verificare" and row["release_id"] and row["prezzo"] is None:
+                    todo.append((photo, row))  # solo per calcolare il prezzo da mostrare: non va in vendita
 
         # 2. Stessa release e stesso grado = copie dello stesso disco: un unico annuncio.
         groups = {}
@@ -1604,6 +1866,9 @@ def main():
         for (release_id, media, sleeve), members in groups.items():
             names = ", ".join(p.external_id for p, _ in members)
             label = f"release {release_id} {media}" + (f" x{len(members)}" if len(members) > 1 else "")
+            # Foto già da verificare: serve solo il prezzo da mostrare in da_controllare.csv
+            to_check = [(p, r) for p, r in members if r["esito"] == "da_verificare"]
+            members = [(p, r) for p, r in members if r["esito"] != "da_verificare"]
             refresh = args.riprova and any(r["esito"] == "senza_prezzo" for _, r in members)
             try:
                 sugg, fetched = get_price_suggestions(state, api, release_id, refresh=refresh)
@@ -1621,6 +1886,8 @@ def main():
             for p, _ in members:
                 state.execute("UPDATE foto SET esito = ? WHERE external_id = ?", (new_esito, p.external_id))
             state.commit()
+            if new_esito == "senza_prezzo" and not members:
+                continue
             if new_esito == "senza_prezzo":
                 stats["problemi"] += len(members)
                 print(f"{label} ({names}): nessun prezzo suggerito per {media}")
@@ -1646,6 +1913,38 @@ def main():
             price, calc = compute_price(suggested, cdata, media, currency, args)
             info = f"{label} ({names}): {price:.2f} {currency}" + (f" [COLLEZIONISTICO, punteggio {collector[0]}]"
                                                                     if collector else "")
+
+            # Rete di sicurezza: un disco riconosciuto senza codice (AI o artista e titolo)
+            # che vale molto non va in vendita senza un controllo a mano.
+            risk = ""
+            if collector:
+                risk = f"disco COLLEZIONISTICO (punteggio {collector[0]}, prezzo {price:.2f} {currency})"
+            elif price > args.soglia_controllo:
+                risk = f"prezzo {price:.2f} {currency} sopra la soglia di controllo ({args.soglia_controllo:g})"
+            blocked = []
+            for p, r in members:
+                metodo = r["metodo"] or method_of(r["fonte"], None)
+                if risk and metodo in UNVERIFIED_METHODS:
+                    blocked.append(p)
+                    state.execute("UPDATE foto SET esito = 'da_verificare', metodo = ?, motivo = ?, prezzo = ?"
+                                  " WHERE external_id = ?",
+                                  (metodo, f"riconosciuto con {metodo} (non con barcode o catalogo esatto) e {risk}",
+                                   price, p.external_id))
+            for p, _ in to_check:
+                state.execute("UPDATE foto SET prezzo = ? WHERE external_id = ?", (price, p.external_id))
+            state.commit()
+            if blocked:
+                stats["problemi"] += len(blocked)
+                print(f"{info} -> DA VERIFICARE ({', '.join(p.external_id for p in blocked)}): {risk},"
+                      " riconosciuto senza codice")
+            members = [(p, r) for p, r in members if p not in blocked]
+            if not members:
+                continue
+            if blocked or to_check:
+                names = ", ".join(p.external_id for p, _ in members)
+                info = f"release {release_id} {media}" + (f" x{len(members)}" if len(members) > 1 else "") + \
+                    f" ({names}): {price:.2f} {currency}" + (f" [COLLEZIONISTICO, punteggio {collector[0]}]"
+                                                             if collector else "")
             is_csv = any(is_local_source(r["fonte"]) for _, r in members)
             if collector:
                 stats["collezionistici"] += 1

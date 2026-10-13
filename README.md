@@ -186,6 +186,40 @@ quando la parte locale non basta.
   riconosciuti nella foto.
 - Tutto ciò che non passa questi controlli va in `da_controllare.csv`.
 
+**Scalette e compilation.** Il disco si riconosce dalle scritte
+**principali**: artista e titolo in grande su copertina o etichetta, il numero
+di catalogo del disco, il barcode.
+- Le righe di una scaletta (`A1 …`, `C2. Artista - Brano`) e i riferimenti come
+  `From the album 'Mirage' BJQD/15 [1973]` **non sono il disco**: parlano degli
+  album da cui vengono i brani. Lo script non usa mai i loro numeri di catalogo,
+  e anche all'AI viene detto di non usarli come artista, titolo o catno.
+- Se la scaletta ha artisti diversi tra loro, il disco è probabilmente una
+  **compilation**: va cercato con artista e titolo dell'intestazione.
+
+**Verifica finale dei riconoscimenti senza codice.** Quando il disco è stato
+riconosciuto dall'**AI** o per **artista e titolo** (`locale-testo`), e non
+da un barcode o da un numero di catalogo esatto, la release scelta viene
+controllata ancora una volta:
+- l'artista della release deve comparire tra le **scritte principali** lette
+  nella foto (non importano maiuscole, accenti, trattini). Un artista scritto
+  in un altro alfabeto (es. cirillico) non si può confrontare e non passa;
+- `Various` è ammesso solo se la foto mostra una **compilation** (lo dice
+  l'AI, c'è scritto, o la scaletta ha almeno 3 artisti diversi);
+- artista e titolo della release non devono essere una **riga della
+  scaletta**, né il titolo un "From the album" citato nella foto;
+- il riconoscimento **non può basarsi su una sola parola**.
+
+Se un controllo non passa, il disco **non va né nel CSV né via API**: finisce
+in `da_controllare.csv`, con la release proposta e il motivo.
+
+**Rete di sicurezza sui prezzi.** Un disco riconosciuto senza barcode o
+catalogo esatto (AI o `locale-testo`) che risulta **collezionistico**, oppure
+con prezzo finale **sopra la soglia di controllo** (default 100, nella valuta
+del tuo account, da cambiare con `--soglia-controllo`), non va in vendita: va in
+`da_controllare.csv` con il prezzo calcolato, per essere verificato a mano.
+I dischi riconosciuti con barcode o catalogo esatto vanno in vendita come
+prima, qualunque sia il prezzo.
+
 In `da_controllare.csv` finisce solo ciò che nemmeno così si riesce a
 identificare.
 
@@ -313,6 +347,28 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --bozza
 Quando le hai controllate, le metti in vendita tutte insieme con
 `pubblica_bozze.py` (vedi "Mettere in vendita le bozze" più sotto).
 
+**Ripetere un test sulle stesse foto (`--rielabora`).** Di norma le foto già
+elaborate non vengono rianalizzate. Per rifare tutto da capo sulle foto della
+cartella indicata (riconoscimento, AI compresa, prezzo e annuncio):
+
+```bash
+caffeinate -i python3 vendi.py ~/Pictures/Dischi --limite 9 --bozza --rielabora
+```
+
+- Funziona **solo insieme a `--bozza`**: senza, lo script si rifiuta di
+  partire. Così gli annunci ricreati sono sempre bozze, mai doppioni in vendita.
+- Non si può usare con `--simula`, perché cambia lo stato vero.
+- Le foto **già in vendita** (righe CSV o annunci `For Sale`, bozze già messe in
+  vendita con `pubblica_bozze.py`) vengono **saltate** e restano come sono.
+- Le righe CSV e gli annunci in bozza di quelle foto vengono tolti dallo stato
+  (una copia resta nella tabella `rielaborati`) e ricreati. Un file
+  `inventario_NNN.csv` rimasto vuoto viene cancellato.
+- L'AI viene **pagata di nuovo** per ogni foto (usa il nuovo prompt); la spesa
+  delle esecuzioni precedenti resta contata nel tetto.
+- Se avevi già caricato su Discogs le bozze vecchie, cancellale da Discogs.
+  Comunque `pubblica_bozze.py` non mette mai in vendita le bozze create prima
+  del `--rielabora` di quella foto: te le elenca, da cancellare.
+
 **Tempi:** lo script fa al massimo 60 richieste al minuto a Discogs, come
 impone il limite dell'API. Con 10.000 dischi conta diverse ore. Puoi
 interromperlo quando vuoi con **Ctrl+C**: rilanciando lo stesso comando
@@ -346,6 +402,9 @@ Cose da sapere:
   Discogs**: se in bozza hai cambiato qualcosa a mano, resta la tua modifica.
 - Le bozze che hai già messo in vendita o cancellato a mano vengono saltate,
   come le righe dei CSV non ancora caricati su Discogs.
+- Le bozze vecchie rimaste su Discogs dopo un `vendi.py --rielabora` (stesso
+  external_id, ma create prima della rielaborazione) **non vengono messe in
+  vendita**: lo script te le elenca con il link, da cancellare a mano.
 - Una riga del CSV con `quantity` 3 diventa su Discogs 3 annunci: vengono
   contati e messi in vendita tutti e 3.
 - Puoi interromperlo con **Ctrl+C** e rilanciarlo: riparte dalle bozze
@@ -494,7 +553,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --ai-tetto 80
 | `collezionistici.csv` | Dischi collezionistici, ordinati per punteggio, con motivi, prezzo suggerito, prezzo più basso in vendita, prezzo finale e calcolo |
 | `riconoscimento.csv` | Per ogni foto: esito, metodo (es. `locale-barcode`, `ai-scelta+locale`), disco trovato, sicurezza e motivo della scelta AI, costo AI in euro |
 | `annunci_pubblicati_api.csv` | Annunci pubblicati via API, uno per foto, con calcolo del prezzo e link |
-| `da_controllare.csv` | Foto da sistemare a mano: nome della foto, cartella, motivo, dettagli letti e candidati |
+| `da_controllare.csv` | Foto da sistemare a mano: nome della foto, cartella, motivo, release proposta (`release_id_proposto`, `disco_proposto`, `link_proposto`), metodo (`barcode`, `catno`, `locale-testo`, `ai`), prezzo calcolato, dettagli letti e candidati |
 
 I CSV di inventario hanno le colonne `release_id`, `price`, `media_condition`,
 `sleeve_condition`, `quantity`, `external_id` e `status`: `FOR_SALE`, oppure
@@ -527,6 +586,13 @@ Si caricano dalla pagina di caricamento dell'inventario di Discogs
 
 Motivi possibili in `da_controllare.csv`:
 
+- **riconoscimento da verificare a mano**: il disco è stato riconosciuto
+  dall'AI o per artista e titolo, ma non ha superato la verifica finale (es.
+  "è una riga della scaletta", "l'artista non compare tra le scritte
+  principali", "Various ma la foto non mostra una compilation", "combacia solo
+  per una parola"), oppure è collezionistico o costa più della soglia di
+  controllo. Trovi la release proposta con il link, il metodo e il prezzo
+  calcolato: se è giusta, mettilo in vendita a mano su Discogs.
 - **non trovato né nel database locale né su Discogs**: nemmeno con l'AI si è
   trovato un disco reale coerente con la foto. La colonna `dettagli` dice cosa
   hanno letto l'OCR e l'AI e perché è stato scartato, per esempio "nessun
@@ -545,9 +611,10 @@ Consiglio: in `riconoscimento.csv` guarda le righe con `sicurezza_ai` **bassa**.
 Sono dischi identificati, ma di cui l'AI ha scelto la stampa più probabile.
 
 Se sostituisci una foto finita da controllare con uno scatto migliore (stesso
-nome), al prossimo lancio viene rianalizzata da sola. Per rifare la parte
+nome), al prossimo lancio viene rianalizzata da sola. Rilanciando lo script
+normalmente, le foto da verificare restano fuori dal CSV. Per rifare la parte
 locale su tutte le foto da controllare (i risultati AI già pagati vengono
-riusati):
+riusati; per far rileggere la foto all'AI usa `--rielabora`):
 
 ```bash
 caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
@@ -560,10 +627,12 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | `--premio-zero-copie`, `--copie-poche`, `--premio-poche-copie`, `--copie-alcune`, `--premio-alcune-copie`, `--soglia-want-have`, `--premio-richiesta` | Regola del prezzo, vedi la tabella nella sezione "Regola del prezzo" |
 | `--soglia-prezzo 80` | Per `collezionistici.csv`: prezzo oltre il quale un disco conta come di valore (default 50, valuta del tuo account) |
 | `--soglia-collezionistico 5` | Per `collezionistici.csv`: punteggio minimo (default 4) |
+| `--soglia-controllo 150` | I dischi riconosciuti senza barcode o catalogo esatto (AI o `locale-testo`) con prezzo finale sopra questa soglia, o collezionistici, vanno in `da_controllare.csv` invece che in vendita (default 100, valuta del tuo account) |
 | `--limite N` | Elabora solo le prime N foto |
 | `--bozza` | Crea gli annunci in bozza (`Draft`) invece che in vendita (`For Sale`), sia nel CSV di inventario sia via API |
 | `--simula` | Non pubblica annunci e non tocca i CSV veri; scrive in `risultati/simulazione/` |
 | `--riprova` | Rianalizza le foto finite da controllare |
+| `--rielabora` | Ignora lo stato salvato per le foto della cartella e le rielabora da capo, AI compresa. Solo con `--bozza`, non con `--simula`; salta le foto già in vendita |
 | `--ai-tetto 80` | Spesa AI massima in euro, sommando tutte le esecuzioni (default 50); raggiunta, lo script si ferma |
 | `--ai-modello NOME` | `claude-haiku-4-5` (default), `claude-sonnet-5` o `claude-opus-5` |
 | `--senza-ai` | Non usa l'AI: solo riconoscimento locale gratuito |
@@ -577,7 +646,23 @@ I progressi (foto riconosciute, risultati dell'AI e relativo costo, prezzi otten
 ricostruito da zero ogni mese, e i progressi andrebbero persi.
 
 **Non cancellare questo file:** è quello che impedisce di pubblicare due
-volte lo stesso disco.
+volte lo stesso disco. Per ripetere un test sulle stesse foto usa
+`--rielabora --bozza` invece di cancellarlo.
+
+### Test automatici
+
+```bash
+python3 -m unittest discover tests
+```
+
+Fanno girare `vendi.py` su foto finte, con un piccolo database e con Discogs,
+OCR e AI simulati (nessuna rete, nessuna spesa). Controllano i casi reali
+visti nelle prove: il retro della compilation di Theo Parrish scambiato per
+The Awakening - Mirage, la white label abbinata a una release russa per il solo
+titolo, e la release Various data a un'etichetta Omar-S finiscono in
+`da_controllare.csv`. Un match pulito come Moodymann - Picture This Sampler 3
+(`THIS003`) resta nel CSV. I test coprono anche la soglia di controllo e
+`--rielabora`.
 
 ---
 
