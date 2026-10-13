@@ -99,6 +99,10 @@ AI_CHOICE = {"IMG_0001": {"release_id": 1901512, "confidence": "high", "reason":
 
 PHOTOS = {"VG+": ["IMG_0001", "IMG_0002", "IMG_0003", "IMG_0005"], "NM": ["IMG_0004"]}
 
+# Barcode letti nelle foto (nome -> barcode) e barcode delle release nel database di prova.
+BARCODES = {}
+RELEASE_BARCODES = [(572658, "8012345678901")]
+
 
 def build_db(path):
     con = sqlite3.connect(path)
@@ -111,6 +115,8 @@ def build_db(path):
                     (rid, title, artist, f"{label} ({catno})", catno, formats, country, str(year), year,
                      "", "", None, "Accepted", ""))
         con.execute("INSERT INTO catnos VALUES (?,?,?,?)", (rid, label, catno, dd.normalize_catno(catno)))
+    for rid, barcode in RELEASE_BARCODES:
+        con.execute("INSERT INTO barcodes VALUES (?,?,?,?)", (rid, barcode, dd.normalize_catno(barcode), ""))
     con.execute("INSERT INTO releases_fts (rowid, artists, title) "
                 "SELECT id, norm_text(artists), norm_text(title) FROM releases")
     con.execute("INSERT INTO meta VALUES ('schema_version', ?)", (str(dd.SCHEMA_VERSION),))
@@ -245,7 +251,7 @@ class FakeAI:
     """Al posto di vendi.AIVision: risposte scritte sopra, costo finto di 0,01 € a chiamata.
     by_model: risposte diverse per un modello, {modello: (letture, scelte)} (es. il secondo tentativo)."""
     reads = []        # foto lette, da tutti i modelli
-    calls = []        # (modello, foto)
+    calls = []        # (modello, foto); disco con più foto: i nomi uniti da "+" (una sola chiamata)
     by_model = {}
 
     def __init__(self, model, budget, spent, wallet=None):
@@ -269,12 +275,14 @@ class FakeAI:
         return FakeAI.by_model.get(self.model, (AI_READ, AI_CHOICE))
 
     def read(self, image):
+        image = "+".join(image) if isinstance(image, list) else image
         self._pay()
         FakeAI.reads.append(image)
         FakeAI.calls.append((self.model, image))
         return dict(self.answers()[0].get(image, {})), 0.01
 
     def choose(self, image, candidates):
+        image = "+".join(image) if isinstance(image, list) else image
         self._pay()
         choice = self.answers()[1][image]
         assert choice["release_id"] in [c["id"] for c in candidates]
@@ -311,7 +319,7 @@ class Run:
                 ("vendi.DiscogsAPI", lambda token: self.api),
                 ("vendi.AIVision", FakeAI),
                 ("vendi.load_image", lambda path: Path(path).stem),
-                ("vendi.read_barcodes", lambda img: []),
+                ("vendi.read_barcodes", lambda img: list(BARCODES.get(img, []))),
                 ("vendi.ocr_available", lambda: True),
                 ("vendi.ocr_lines", lambda img: list(OCR[img])),
             ]:

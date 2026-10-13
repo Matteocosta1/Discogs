@@ -4,7 +4,10 @@ Mette in vendita su Discogs i dischi fotografati.
 
 Struttura: Dischi/<grado>/<foto>, con i gradi M, NM, VG+, VG, G+, G e le foto
 con i nomi originali dell'iPhone (JPG o HEIC). Ogni foto è una copia; il nome
-del file senza estensione è l'external_id.
+del file senza estensione è l'external_id. Più foto dello stesso disco vanno in
+una sottocartella del grado (Dischi/VG+/disco-001/{fronte,retro,etichetta}.jpg):
+la sottocartella è UN disco (indizi di tutte le foto uniti, una sola chiamata AI),
+external_id = <sottocartella>-<impronta breve>, un file vuoto "copie-N" = N copie.
 
   1. riconosce ogni foto (fronte, retro o etichetta), senza interventi manuali:
      a. parte locale gratuita: barcode (zxing-cpp), testo con l'OCR di macOS
@@ -123,26 +126,55 @@ def read_grades(folder_name):
 
 @dataclass
 class Photo:
-    path: Path
+    """Un disco da vendere: una foto sola nella cartella del grado, oppure una sottocartella con più
+    foto dello stesso disco (fronte, retro, etichetta...)."""
+    path: Path                # la foto, o la sottocartella del disco
     folder: str
     media: str                # grado del disco (chiave di GRADES)
     sleeve: str               # grado della copertina (chiave di GRADES)
     sha256: str = None        # impronta del contenuto (riempita da check_photo_identity)
+    files: list = None        # disco in una sottocartella: le sue foto; None = una foto sola
+    copies: int = 1           # copie dello stesso disco (file "copie-N" nella sottocartella)
+    hashes: list = None       # impronte delle singole foto del disco in sottocartella
+
+    @property
+    def is_disc(self):
+        return self.files is not None
+
+    @property
+    def images(self):
+        return list(self.files) if self.is_disc else [self.path]
 
     @property
     def external_id(self):
+        if self.is_disc:  # es. "disco-001-3f2a9c1e": nome della sottocartella + impronta breve delle foto
+            return f"{self.path.name}-{self.sha256[:8]}"
         return self.path.stem  # es. "IMG_1234"
 
     @property
     def name(self):
+        if self.is_disc:
+            return f"{self.folder}/{self.path.name} ({len(self.files)} foto)"
         return f"{self.folder}/{self.path.name}"
 
     def fingerprint(self):
+        if self.is_disc:
+            stats = [f.stat() for f in self.files]
+            return (f"{self.folder}|{self.path.name}/{len(stats)}|{sum(st.st_size for st in stats)}|"
+                    f"{max(st.st_mtime_ns for st in stats)}")
         st = self.path.stat()
         return f"{self.folder}|{self.path.name}|{st.st_size}|{st.st_mtime_ns}"
 
     def content_hash(self):
+        if self.is_disc:
+            return disc_hash(self.hashes)
         return file_sha256(self.path)
+
+
+def disc_hash(hashes):
+    """Impronta di un disco in sottocartella: dalle impronte delle sue foto, in qualsiasi ordine."""
+    import hashlib
+    return hashlib.sha256("\n".join(sorted(hashes)).encode()).hexdigest()
 
 
 def file_sha256(path):
@@ -184,8 +216,9 @@ def check_photo_identity(state, photos):
     Stato di una versione precedente senza impronta: la si calcola ora; se la dimensione del file
     coincide con quella salvata è la stessa foto (niente riconoscimento né AI da rifare).
     Restituisce l'elenco dei conflitti (vuoto se va tutto bene) e aggiorna lo stato."""
-    rows = {r["external_id"]: r for r in state.execute("SELECT external_id, foto, impronta, hash FROM foto")}
-    by_hash = {r["hash"]: eid for eid, r in rows.items() if r["hash"]}
+    rows = {r["external_id"]: r for r in state.execute("SELECT external_id, foto, impronta, hash, hash_foto, n_foto"
+                                                       " FROM foto")}
+    by_hash = {h: eid for eid, r in rows.items() for h in photo_hashes(r)}
     conflicts, seen = [], {}
     for p in photos:
         row = rows.get(p.external_id)
@@ -194,15 +227,30 @@ def check_photo_identity(state, photos):
             p.sha256 = row["hash"]  # file non toccato: inutile rileggerlo
         else:
             p.sha256 = p.content_hash()
-        if p.sha256 in seen:
-            conflicts.append(f"{p.name} e {seen[p.sha256].name} sono la stessa foto con due nomi diversi "
-                             "(verrebbe messa in vendita due volte): tienine una sola")
+        # Disco in sottocartella: ogni sua foto conta come una foto (stesse regole delle foto sciolte).
+        parts = p.hashes if p.is_disc else [p.sha256]
+        if len(set(parts)) < len(parts):
+            conflicts.append(f"{p.name} contiene due volte la stessa foto: tienine una sola")
             continue
-        seen[p.sha256] = p
-        other = by_hash.get(p.sha256)
-        if other and other != p.external_id:
-            conflicts.append(f"{p.name} è la stessa foto già elaborata come {other} "
-                             f"({photo_name(rows[other]['foto'])}): tienine una sola")
+        twin = next((seen[h] for h in parts if h in seen), None)
+        if twin is not None:
+            if p.is_disc or twin.is_disc:
+                conflicts.append(f"{p.name} e {twin.name} contengono la stessa foto (lo stesso disco verrebbe "
+                                 "messo in vendita due volte): tienine una sola")
+            else:
+                conflicts.append(f"{p.name} e {twin.name} sono la stessa foto con due nomi diversi "
+                                 "(verrebbe messa in vendita due volte): tienine una sola")
+            continue
+        for h in parts:
+            seen[h] = p
+        other = next((by_hash[h] for h in parts if by_hash.get(h) not in (None, p.external_id)), None)
+        if other:
+            where = display_name(rows[other])
+            if p.is_disc:
+                conflicts.append(f"{p.name} contiene una foto già elaborata come {other} ({where}): tienine una "
+                                 "sola (se hai aggiunto o tolto foto a un disco già elaborato, rimettilo com'era)")
+            else:
+                conflicts.append(f"{p.name} è la stessa foto già elaborata come {other} ({where}): tienine una sola")
             continue
         if row is None:
             continue
@@ -213,15 +261,58 @@ def check_photo_identity(state, photos):
             same = len(parts) == 4 and parts[2] == str(p.path.stat().st_size)
         if not same:
             conflicts.append(f"{p.name}: nello stato c'è già una foto DIVERSA con lo stesso nome {p.external_id} "
-                             f"({photo_name(row['foto'])}): rinomina la nuova (es. con rinomina_foto.py)")
+                             f"({display_name(row)}): rinomina la nuova (es. con rinomina_foto.py)")
             continue
         if row["hash"] != p.sha256 or row["impronta"] != fp:
             # stessa foto (forse spostata): aggiorna impronta e cartella, il riconoscimento resta valido
-            state.execute("UPDATE foto SET hash = ?, impronta = ?, cartella = ?, foto = ?, media = ?, sleeve = ?"
-                          " WHERE external_id = ?", (p.sha256, fp, p.folder, str(p.path), p.media, p.sleeve,
-                                                     p.external_id))
+            state.execute("UPDATE foto SET hash = ?, impronta = ?, cartella = ?, foto = ?, media = ?, sleeve = ?,"
+                          " n_foto = ?, hash_foto = ? WHERE external_id = ?",
+                          (p.sha256, fp, p.folder, str(p.path), p.media, p.sleeve, *disc_columns(p), p.external_id))
     state.commit()
     return conflicts
+
+
+def photo_hashes(row):
+    """Impronte delle singole foto di una riga della tabella foto (più di una per un disco in sottocartella)."""
+    if row["hash_foto"]:
+        return json.loads(row["hash_foto"])
+    return [row["hash"]] if row["hash"] else []
+
+
+def disc_columns(p):
+    """(n_foto, hash_foto) da salvare nello stato: vuoti per una foto sola."""
+    return (len(p.files), json.dumps(p.hashes)) if p.is_disc else (None, None)
+
+
+COPIES_RE = re.compile(r"^copie-(\d+)(\.txt)?$", re.IGNORECASE)
+
+
+def scan_disc(folder, grade_folder, grades, errors, warnings):
+    """Sottocartella di un grado = UN disco: tutte le sue foto sono lo stesso disco. Un file vuoto
+    "copie-N" dice che ci sono N copie identiche. None se la sottocartella non ha foto."""
+    files, copies = [], []
+    for f in sorted(folder.iterdir(), key=lambda f: natural_key(f.name)):
+        if f.name.startswith("."):
+            continue
+        if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
+            files.append(f)
+        elif f.is_file() and COPIES_RE.match(f.name):
+            copies.append(int(COPIES_RE.match(f.name).group(1)))
+        elif f.is_dir():
+            warnings.append(f"cartella dentro un disco, ignorata: {grade_folder}/{folder.name}/{f.name}")
+    where = f"{grade_folder}/{folder.name}"
+    if not files:
+        warnings.append(f"sottocartella senza foto, ignorata: {where}")
+        return None
+    if len(copies) > 1:
+        errors.append(f"{where}: più di un file copie-N, lasciane uno solo")
+        return None
+    if copies and copies[0] < 1:
+        errors.append(f"{where}: copie-{copies[0]} non valido (almeno copie-1)")
+        return None
+    hashes = [file_sha256(f) for f in files]
+    return Photo(folder, grade_folder, grades[0], grades[1], sha256=disc_hash(hashes), files=files,
+                 copies=copies[0] if copies else 1, hashes=hashes)
 
 
 def scan_photos(root):
@@ -242,9 +333,15 @@ def scan_photos(root):
             errors.append(f"la cartella '{sub.name}' non è un grado valido ({', '.join(GRADES)})")
             continue
         for f in sorted(sub.iterdir()):
-            if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in IMAGE_EXTS:
+            if f.name.startswith("."):
+                continue
+            if f.is_dir():  # sottocartella = un disco con più foto
+                disc = scan_disc(f, sub.name, grades, errors, warnings)
+                if disc is not None:
+                    photos.append(disc)
+            elif f.is_file() and f.suffix.lower() in IMAGE_EXTS:
                 photos.append(Photo(f, sub.name, grades[0], grades[1]))
-    # Il nome della foto è l'external_id: deve essere unico in tutte le cartelle.
+    # Il nome della foto (o della sottocartella + impronta) è l'external_id: deve essere unico.
     by_id = {}
     for p in photos:
         by_id.setdefault(p.external_id, []).append(p.name)
@@ -407,6 +504,7 @@ class Evidence:
     ocr_done: bool = False
     ai_note: str = ""
     main: list = field(default_factory=list)     # scritte principali: artista e titolo in grande
+    per_photo: list = field(default_factory=list)  # disco con più foto: [(nome foto, Evidence della sola foto)]
 
     @property
     def text(self):
@@ -900,6 +998,13 @@ AI_THINKING_EXTRA_TOKENS = 6000
 AI_THINKING_EFFORT = "medium"
 AI_MAX_EDGE = 1568          # lato lungo massimo della foto inviata (pixel)
 AI_MAX_CANDIDATES = 40      # candidati mostrati all'AI per la scelta finale
+AI_MAX_PHOTOS = 4           # foto di un disco in sottocartella inviate all'AI in una sola chiamata
+
+# Disco con più foto: una sola chiamata con tutte le immagini, e il modello deve sapere che sono
+# lati diversi dello stesso disco (non dischi diversi).
+AI_MULTI_PHOTO_NOTE = """These {n} photos all show the SAME single vinyl record from different sides (for example front cover, back cover, centre label, details): they are ONE record, not {n} records.
+Combine the clues from all the photos (e.g. artist and title from the front, barcode and catalogue number from the back or the label) and answer about this one record.
+"""
 
 AI_READ_PROMPT = """This photo shows ONE vinyl record: its front cover, back cover or centre label.
 The record is ALWAYS a vinyl record (LP, 12", 10" or 7"), never a CD, cassette or digital release.
@@ -1000,7 +1105,12 @@ class AIVision:
         return base64.standard_b64encode(buf.getvalue()).decode(), small.size[0] * small.size[1] / 750
 
     def _call(self, image, prompt, schema, max_tokens, extra_input_tokens=0):
-        data, image_tokens = image
+        """image: una foto preparata (base64, token stimati) o, per un disco con più foto, una lista:
+        una sola chiamata con tutte le immagini; il costo stimato le somma tutte."""
+        images = image if isinstance(image, list) else [image]
+        if len(images) > 1:
+            prompt = multi_photo_prompt(prompt, len(images))
+        image_tokens = sum(tokens for _data, tokens in images)
         output_config = {"format": {"type": "json_schema", "schema": schema}}
         if self.model not in AI_NO_THINKING:
             max_tokens += AI_THINKING_EXTRA_TOKENS
@@ -1012,7 +1122,8 @@ class AIVision:
             model=self.model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}},
+                *({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
+                  for data, _tokens in images),
                 {"type": "text", "text": prompt},
             ]}],
             output_config=output_config,
@@ -1042,6 +1153,12 @@ class AIVision:
         text = "\n".join(lines)
         return self._call(image, AI_CHOOSE_PROMPT.format(candidates=text), AI_CHOOSE_SCHEMA, 400,
                           extra_input_tokens=len(text) // 3)
+
+
+def multi_photo_prompt(prompt, n):
+    """Il prompt per una foto, adattato a n foto dello stesso disco."""
+    prompt = prompt.replace("This photo shows ONE vinyl record", "Together, these photos show ONE vinyl record")
+    return AI_MULTI_PHOTO_NOTE.format(n=n) + prompt
 
 
 def clean_artist(artist):
@@ -1248,14 +1365,20 @@ def merge_ranked(*lists):
     return out
 
 
-def recognize(path, con, api, use_ocr, ai=None, cache=None):
-    """Riconosce il disco di una foto. cache: dati AI già pagati per questa foto
-    ({"read": ..., "choice": ...}), che non vengono mai richiesti di nuovo.
-    Un riconoscimento senza codice (AI o artista e titolo) che non supera check_match
-    ha esito da_verificare: la release proposta resta salvata ma il disco non va in vendita."""
+def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PHOTOS):
+    """Riconosce il disco di una foto, o di più foto dello stesso disco (path = lista: sottocartella).
+    cache: dati AI già pagati per questo disco ({"read": ..., "choice": ...}), che non vengono mai
+    richiesti di nuovo. Un riconoscimento senza codice (AI o artista e titolo) che non supera
+    check_match ha esito da_verificare: la release proposta resta salvata ma il disco non va in vendita.
+    Con più foto: se i codici letti in foto diverse portano a release diverse, da_verificare."""
     ev = Evidence()
-    rec = identify(path, con, api, use_ocr, ai, cache, ev)
+    rec = identify(path, con, api, use_ocr, ai, cache, ev, max_photos)
     rec.metodo = method_of(rec.fonte, rec.release)
+    if rec.esito == "trovato" and ev.per_photo:
+        rec.motivo = photos_in_contrast(con, ev.per_photo, rec.release_id)
+        if rec.motivo:
+            rec.esito = "da_verificare"
+            rec.details += f"; DA VERIFICARE: {rec.motivo}"
     if rec.esito == "trovato" and rec.metodo in UNVERIFIED_METHODS:
         rec.motivo = check_match(rec.release, ev, rec.ai_read)
         if rec.motivo:
@@ -1266,12 +1389,67 @@ def recognize(path, con, api, use_ocr, ai=None, cache=None):
     return rec
 
 
-def identify(path, con, api, use_ocr, ai, cache, ev):
-    """Cascata barcode -> catno -> artista/titolo -> AI. Restituisce un Recognition."""
+def read_all_photos(ev, paths, imgs, use_ocr):
+    """Disco con più foto: barcode e OCR di TUTTE le foto, uniti in ev (le scritte principali si
+    scelgono foto per foto). Gli indizi di ogni foto restano anche separati in ev.per_photo."""
+    for path, img in zip(paths, imgs):
+        one = Evidence(barcodes=list(read_barcodes(img)))
+        if use_ocr:
+            one.add_lines(ocr_lines(img))
+            ev.add_lines(one.lines)
+        ev.barcodes += [b for b in one.barcodes if b not in ev.barcodes]
+        ev.per_photo.append((Path(path).name, one))
+
+
+def photo_code_hits(con, one):
+    """Release a cui portano i codici letti in una sola foto: (id, descrizione) o (set(), "")."""
+    found = search_barcode_local(con, one)
+    if found:
+        return {r["id"] for r in found}, "barcode " + ", ".join(one.barcodes)
+    found = search_catno_local(con, one)
+    if found:
+        strong = [raw for norm, raw in one.catnos.items() if is_strong_catno(norm)] or list(one.catnos.values())
+        return {r["id"] for r in found}, "catalogo " + ", ".join(strong[:3])
+    return set(), ""
+
+
+def photos_in_contrast(con, per_photo, release_id=None):
+    """Foto dello stesso disco con codici (barcode, catalogo + etichetta) che portano a release
+    diverse e incompatibili, o a una release diversa da quella scelta: motivo, o "" se tutto torna."""
+    hits = []
+    for name, one in per_photo:
+        ids, what = photo_code_hits(con, one)
+        if ids:
+            hits.append((name, ids, what))
+    clash = any(not (a[1] & b[1]) for i, a in enumerate(hits) for b in hits[i + 1:])
+    if release_id is not None:
+        clash = clash or any(release_id not in ids for _n, ids, _w in hits)
+    if not clash:
+        return ""
+    return CONTRAST_REASON + ": " + "; ".join(
+        f"{name}: {what} -> release {', '.join(map(str, sorted(ids)[:5]))}" for name, ids, what in hits) + (
+        f"; release scelta {release_id}" if release_id is not None else "")
+
+
+CONTRAST_REASON = "foto della cartella in contrasto"
+
+
+def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS):
+    """Cascata barcode -> catno -> artista/titolo -> AI. Restituisce un Recognition.
+    path: una foto, o la lista delle foto di un disco in sottocartella (indizi uniti, una sola
+    chiamata AI con al massimo max_photos foto)."""
     cache = dict(cache or {})
-    img = load_image(path)
+    paths = list(path) if isinstance(path, (list, tuple)) else [path]
+    imgs = [load_image(p) for p in paths]
+    img = imgs[0] if len(imgs) == 1 else None
 
     # 1. Parte locale: se il risultato è sicuro, niente AI
+    if img is None:  # più foto: tutti gli indizi insieme; codici in contrasto = da controllare, niente AI
+        read_all_photos(ev, paths, imgs, use_ocr)
+        conflict = photos_in_contrast(con, ev.per_photo)
+        if conflict:
+            return Recognition("da_verificare", "", None, [], ev.describe() + f"; DA VERIFICARE: {conflict}",
+                               motivo=conflict)
     fonte, release, ranked = recognize_local(con, ev, img, use_ocr)
     if release is not None:
         return Recognition("trovato", fonte, release, ranked, ev.describe())
@@ -1292,7 +1470,9 @@ def identify(path, con, api, use_ocr, ai, cache, ev):
 
     # 2. L'AI guarda la foto e dice cosa vede
     cost = 0.0
-    image = AIVision.prepare(img) if ai is not None else None
+    image = None
+    if ai is not None:
+        image = AIVision.prepare(img) if img is not None else [AIVision.prepare(i) for i in imgs[:max_photos]]
     read = cache.get("read")
     if read is None:
         read, c = ai.read(image)
@@ -1350,10 +1530,10 @@ def identify(path, con, api, use_ocr, ai, cache, ev):
     return Recognition("trovato", f"ai-scelta+{source(chosen)}", chosen, ranked, details, cost, read, choice)
 
 
-def recognize_safely(path, con, api, use_ocr, ai, cache):
+def recognize_safely(path, con, api, use_ocr, ai, cache, max_photos=AI_MAX_PHOTOS):
     """recognize() con gli errori trasformati in esito "errore"; None se il tetto di spesa AI è raggiunto."""
     try:
-        return recognize(path, con, api, use_ocr, ai, cache)
+        return recognize(path, con, api, use_ocr, ai, cache, max_photos)
     except BudgetReached:
         return None
     except (ApiError, OSError, ValueError) as e:
@@ -1706,7 +1886,7 @@ def standard_price(suggested, data, grade, currency, args):
 
 STATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS foto (
-    external_id TEXT PRIMARY KEY,   -- nome della foto senza estensione
+    external_id TEXT PRIMARY KEY,   -- nome della foto senza estensione, o <sottocartella>-<impronta breve>
     cartella    TEXT,
     foto        TEXT,
     impronta    TEXT,
@@ -1730,7 +1910,9 @@ CREATE TABLE IF NOT EXISTS foto (
     disco       TEXT,     -- artista - titolo (etichetta, paese, anno) della release trovata
     metodo      TEXT,     -- barcode / catno / locale-testo / ai
     motivo      TEXT,     -- perché è da verificare a mano (esito da_verificare)
-    prezzo      REAL      -- prezzo calcolato per una foto da verificare (non messa in vendita)
+    prezzo      REAL,     -- prezzo calcolato per una foto da verificare (non messa in vendita)
+    n_foto      INTEGER,  -- disco in sottocartella: quante foto (vuoto = una foto sola)
+    hash_foto   TEXT      -- disco in sottocartella: impronte delle singole foto (JSON)
 );
 CREATE TABLE IF NOT EXISTS collezione (  -- dati per il valore collezionistico, per release
     release_id INTEGER PRIMARY KEY,
@@ -1861,7 +2043,8 @@ def open_state(path):
                                 ("righe_csv", "online_ultimo", "TEXT"), ("annunci_api", "online_ultimo", "TEXT"),
                                 ("foto", "hash", "TEXT"), ("foto", "ai2_dati", "TEXT"),
                                 ("foto", "ai2_scelta", "TEXT"), ("foto", "secondo", "TEXT"),
-                                ("righe_csv", "online_annunci", "TEXT"), ("annunci_api", "online_annunci", "TEXT")]:  # stato di una versione precedente
+                                ("righe_csv", "online_annunci", "TEXT"), ("annunci_api", "online_annunci", "TEXT"),
+                                ("foto", "n_foto", "INTEGER"), ("foto", "hash_foto", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
@@ -2089,7 +2272,7 @@ def free_rows(state, out_dir, rows):
             state.executemany("UPDATE foto SET riga_csv = NULL WHERE external_id = ?", [(m,) for m in members])
             freed |= members
         else:
-            freed.add(row["external_id"])
+            freed.add(listing_owner(row["external_id"]))
     state.executemany("DELETE FROM collezionistici WHERE external_id = ?", [(r["external_id"],) for _, r in rows])
     state.executemany("INSERT INTO rielaborati VALUES (?, ?, ?, ?)", archive)
     state.commit()
@@ -2122,13 +2305,15 @@ def prepare_rework(state, photos, out_dir, inventory, sales=None):
             ids |= members  # tutte le copie della riga tornano da elaborare
         else:
             skipped |= members
+    by_owner = {}   # un disco con copie-N ha un annuncio per copia: si rielabora solo se tutte sono libere
     for row in state.execute("SELECT * FROM annunci_api").fetchall():
-        if row["external_id"] not in ids:
-            continue
-        if inventory is not None and can_free("annunci_api", row):
-            to_free.append(("annunci_api", row))
+        if listing_owner(row["external_id"]) in ids:
+            by_owner.setdefault(listing_owner(row["external_id"]), []).append(row)
+    for owner, rows in by_owner.items():
+        if inventory is not None and all(can_free("annunci_api", row) for row in rows):
+            to_free += [("annunci_api", row) for row in rows]
         else:
-            skipped.add(row["external_id"])
+            skipped.add(owner)
     free_rows(state, out_dir, to_free)
     redo = ids - skipped
     archive = [("foto", r["external_id"], json.dumps(dict(r)), now())
@@ -2145,12 +2330,13 @@ def money(eur):
     return f"{eur:.2f} €" if eur >= 1 else f"{eur:.3f} €"
 
 
-def is_assigned(state, external_id):
-    """True se la foto è già in una riga CSV o ha già un annuncio via API."""
+def is_assigned(state, external_id, copies=1):
+    """True se la foto (o il disco) è già in una riga CSV o ha già gli annunci via API di tutte le copie."""
     row = state.execute("SELECT riga_csv FROM foto WHERE external_id = ?", (external_id,)).fetchone()
     if row and row["riga_csv"]:
         return True
-    return state.execute("SELECT 1 FROM annunci_api WHERE external_id = ?", (external_id,)).fetchone() is not None
+    return all(state.execute("SELECT 1 FROM annunci_api WHERE external_id = ?", (eid,)).fetchone() is not None
+               for eid in copy_ids(external_id, copies))
 
 
 CACHE_PRICES_DAYS = 30        # prezzi suggeriti e dati del marketplace
@@ -2276,6 +2462,27 @@ def photo_name(path):
     return f"{Path(path).parent.name}/{Path(path).name}" if path else ""
 
 
+def display_name(row):
+    """Come mostrare una riga della tabella foto: 'VG+/IMG_1234.HEIC' o 'VG+/disco-001 (3 foto)'."""
+    name = photo_name(row["foto"])
+    return f"{name} ({row['n_foto']} foto)" if name and row["n_foto"] else name
+
+
+COPY_RE = re.compile(r"^(.*)-copia\d+$")
+
+
+def listing_owner(external_id):
+    """Disco a cui appartiene un annuncio API: le copie oltre la prima di un disco con "copie-N"
+    hanno external_id '<disco>-copia2', '<disco>-copia3'..."""
+    m = COPY_RE.match(external_id or "")
+    return m.group(1) if m else external_id
+
+
+def copy_ids(external_id, copies):
+    """external_id degli annunci API di un disco con `copies` copie (l'API non ha un campo quantità)."""
+    return [external_id] + [f"{external_id}-copia{k}" for k in range(2, copies + 1)]
+
+
 def last_part(state):
     """Numero più alto mai usato per un inventario_NNN.csv, comprese le parti archiviate: un file
     nuovo non riprende mai il nome di uno vecchio (che potrebbe essere già stato caricato)."""
@@ -2360,17 +2567,18 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     for r in state.execute("SELECT * FROM foto WHERE esito IN ({})".format(",".join("?" * len(PROBLEMS))),
                            sorted(PROBLEMS)):
         motivo = REASONS[r["esito"]] + (f": {r['motivo']}" if r["motivo"] else "")
-        rows.append([photo_name(r["foto"]), r["cartella"], motivo, r["release_id"] or "", r["disco"] or "",
+        rows.append([display_name(r), r["cartella"], motivo, r["release_id"] or "", r["disco"] or "",
                      r["metodo"] or method_of(r["fonte"], None), f"{r['prezzo']:.2f}" if r["prezzo"] else "",
                      f"https://www.discogs.com/release/{r['release_id']}" if r["release_id"] else "",
                      r["dettagli"] or "", r["candidati"] or ""])
-    for r in state.execute("SELECT a.*, f.foto, f.cartella, f.disco, f.metodo, f.fonte FROM annunci_api a "
-                           "LEFT JOIN foto f USING (external_id) WHERE a.stato IN ('in_corso', 'rifiutato')"):
+    for r in state.execute("SELECT a.*, f.foto, f.n_foto, f.cartella, f.disco, f.metodo, f.fonte FROM annunci_api a "
+                           "LEFT JOIN foto f ON f.external_id = a.external_id OR a.external_id LIKE "
+                           "f.external_id || '-copia%' WHERE a.stato IN ('in_corso', 'rifiutato')"):
         if r["stato"] == "in_corso":
             motivo = "pubblicazione non confermata: controlla su Discogs se l'annuncio esiste già"
         else:
             motivo = "Discogs ha rifiutato l'annuncio"
-        rows.append([photo_name(r["foto"]), r["cartella"], motivo, r["release_id"], r["disco"] or "",
+        rows.append([display_name(r), r["cartella"], motivo, r["release_id"], r["disco"] or "",
                      r["metodo"] or method_of(r["fonte"], None), f"{r['price']:.2f}",
                      f"https://www.discogs.com/release/{r['release_id']}", r["messaggio"] or "", ""])
     rows.sort(key=lambda r: natural_key(r[0]))
@@ -2381,7 +2589,7 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     for r in state.execute("SELECT * FROM foto"):
         chosen = r["ai2_scelta"] if r["secondo"] else r["ai_scelta"]
         choice = json.loads(chosen) if chosen and r["esito"] == "trovato" else {}
-        recog.append([photo_name(r["foto"]), r["cartella"], r["esito"], r["fonte"] or "", r["release_id"] or "",
+        recog.append([display_name(r), r["cartella"], r["esito"], r["fonte"] or "", r["release_id"] or "",
                       r["disco"] or "", CONFIDENCE_IT.get(choice.get("confidence"), ""), choice.get("reason", ""),
                       f"{r['ai_costo'] or 0:.4f}"])
     recog.sort(key=lambda r: natural_key(Path(r[0]).name))
@@ -2392,7 +2600,7 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     # Release bloccate dal marketplace: non si possono vendere su Discogs.
     blocked = []
     for r in state.execute("SELECT * FROM foto WHERE esito = 'non_vendibile'"):
-        blocked.append([photo_name(r["foto"]), r["media"], r["release_id"], artist_title(r["disco"]),
+        blocked.append([display_name(r), r["media"], r["release_id"], artist_title(r["disco"]),
                         r["metodo"] or method_of(r["fonte"], None), f"https://www.discogs.com/release/{r['release_id']}",
                         r["motivo"] or NOT_SELLABLE_REASON])
     blocked.sort(key=lambda r: natural_key(Path(r[0]).name))
@@ -2501,7 +2709,7 @@ def run(opened):
                              "conta come di valore (default 50)")
     parser.add_argument("--soglia-collezionistico", type=int, default=4,
                         help="per collezionistici.csv: punteggio minimo per considerare un disco collezionistico (default 4)")
-    parser.add_argument("--limite", type=int, help="elabora solo le prime N foto (prova)")
+    parser.add_argument("--limite", type=int, help="elabora solo i primi N dischi (foto sciolte o sottocartelle; prova)")
     parser.add_argument("--bozza", action="store_true",
                         help="crea tutti gli annunci come bozza (Draft) via API, anche quelli che andrebbero nel CSV "
                              "(Discogs ignora DRAFT nei CSV e li metterebbe subito in vendita); un annuncio per foto")
@@ -2527,6 +2735,9 @@ def run(opened):
                              f"possibili dopo il primo (default {AI_SECOND_MODEL}); stesso tetto di spesa")
     parser.add_argument("--senza-secondo-tentativo", action="store_true",
                         help="non fa il secondo tentativo con il modello più forte")
+    parser.add_argument("--ai-max-foto", type=int, default=AI_MAX_PHOTOS,
+                        help="disco in sottocartella: quante foto al massimo inviare all'AI nella stessa chiamata "
+                             f"(default {AI_MAX_PHOTOS})")
     parser.add_argument("--db", default=str(dd.DEFAULT_DB), help="database creato da discogs_dump.py")
     parser.add_argument("--uscita", default=str(OUT_DIR), help="cartella dei risultati (default: risultati/)")
     parser.add_argument("--backup-da-tenere", type=int, default=BACKUPS_TO_KEEP,
@@ -2546,6 +2757,8 @@ def run(opened):
     args = parser.parse_args()
     status = "DRAFT" if args.bozza else "FOR_SALE"
     check_price_args(args)
+    if args.ai_max_foto < 1:
+        parser.error("--ai-max-foto deve essere almeno 1")
     ALLOWED_FORMATS[:] = [f.strip() for f in args.formati_ammessi.split(",") if f.strip()] or ["Vinyl"]
     if args.rielabora and not args.bozza:
         raise SystemExit("--rielabora funziona solo insieme a --bozza: rielaborando foto già elaborate gli annunci\n"
@@ -2559,7 +2772,10 @@ def run(opened):
         print(f"Attenzione: {w}")
     if args.limite:
         photos = photos[:args.limite]
-    print(f"Foto da elaborare: {len(photos)}" + (" (SIMULAZIONE: nessun annuncio verrà pubblicato)" if args.simula else "")
+    discs = sum(1 for p in photos if p.is_disc)
+    print(f"Foto da elaborare: {len(photos)}" + (f" ({discs} dischi in sottocartella, "
+                                                 f"{sum(len(p.files) for p in photos if p.is_disc)} foto)" if discs else "")
+          + (" (SIMULAZIONE: nessun annuncio verrà pubblicato)" if args.simula else "")
           + (" - annunci come BOZZA (Draft)" if args.bozza else ""))
 
     con = dd.open_db(args.db)
@@ -2617,7 +2833,7 @@ def run(opened):
     simulated_csv, simulated_listings, simulated_collectors, simulated_rows_info = [], [], [], []
     stats = {"collezionistici": 0, "righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0,
              "non_vendibili": 0, "non_verificati": 0, "secondo_tentati": 0, "secondo_recuperate": 0,
-             "secondo_costo": 0.0}
+             "secondo_costo": 0.0, "ric_locale": 0, "ric_ai": 0, "ric_secondo": 0}
     sale_errors = []
     price_calls = 0
     total = len(photos)
@@ -2629,7 +2845,7 @@ def run(opened):
         for n, photo in enumerate(photos, 1):
             eid = photo.external_id
             prefix = f"[{n}/{total}] {photo.name}"
-            if is_assigned(state, eid):
+            if is_assigned(state, eid, photo.copies):
                 stats["gia_fatte"] += 1
                 continue
             row = state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
@@ -2644,14 +2860,14 @@ def run(opened):
                     or (args.riprova and row["esito"] in PROBLEMS)
                     or (ai and unsure and cache["read"] is None)
                     or (ai2 and unsure and cache2["read"] is None)):
-                rec = recognize_safely(photo.path, con, api, use_ocr, ai, cache)
+                rec = recognize_safely(photo.images, con, api, use_ocr, ai, cache, args.ai_max_foto)
                 if rec is None:
                     budget_stop = True
                     break
                 # Secondo tentativo con un modello più forte, solo se il primo non ha trovato il disco
                 rec2, second = None, False
                 if ai2 and rec.esito in ("non_trovato", "multiplo"):
-                    rec2 = recognize_safely(photo.path, con, api, use_ocr, ai2, cache2)
+                    rec2 = recognize_safely(photo.images, con, api, use_ocr, ai2, cache2, args.ai_max_foto)
                     if rec2 is None:  # tetto di spesa: salvo il primo tentativo e mi fermo
                         budget_stop = True
                     else:
@@ -2662,11 +2878,14 @@ def run(opened):
                             stats["secondo_recuperate"] += 1
                             rec2.details += f"; riconosciuto al secondo tentativo ({ai2.model})"
                 final = rec2 if second else rec
+                if final.esito == "trovato":
+                    stats["ric_secondo" if second else "ric_ai" if final.fonte.startswith("ai") else "ric_locale"] += 1
                 old_cost = row["ai_costo"] if same_photo and row["ai_costo"] else 0.0
                 state.execute(
                     "INSERT OR REPLACE INTO foto (external_id, cartella, foto, impronta, media, sleeve, esito, fonte,"
                     " release_id, candidati, dettagli, aggiornato, ai_dati, ai_costo, ai_scelta, disco, metodo, motivo,"
-                    " hash, ai2_dati, ai2_scelta, secondo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " hash, ai2_dati, ai2_scelta, secondo, n_foto, hash_foto)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (eid, photo.folder, str(photo.path), fingerprint, photo.media, photo.sleeve, final.esito,
                      final.fonte, final.release_id, format_candidates(final.candidates), final.details, now(),
                      json.dumps(rec.ai_read) if rec.ai_read is not None else None,
@@ -2677,7 +2896,7 @@ def run(opened):
                      (row["ai2_dati"] if same_photo and row else None),
                      json.dumps(rec2.ai_choice) if rec2 and rec2.ai_choice is not None else
                      (row["ai2_scelta"] if same_photo and row else None),
-                     ai2.model if second else None),
+                     ai2.model if second else None, *disc_columns(photo)),
                 )
                 rec = final
                 state.commit()
@@ -2733,27 +2952,36 @@ def run(opened):
         for photo, row in todo:
             groups.setdefault((row["release_id"], photo.media, photo.sleeve), []).append((photo, row))
 
+        def group_label(members):
+            copies = sum(p.copies for p, _ in members)
+            return (", ".join(p.external_id for p, _ in members),
+                    f"release {release_id} {media}" + (f" x{copies}" if copies > 1 else ""))
+
         for (release_id, media, sleeve), members in groups.items():
-            names = ", ".join(p.external_id for p, _ in members)
-            label = f"release {release_id} {media}" + (f" x{len(members)}" if len(members) > 1 else "")
+            names, label = group_label(members)
             # Foto già da verificare: serve solo il prezzo da mostrare in da_controllare.csv
             to_check = [(p, r) for p, r in members if r["esito"] == "da_verificare"]
             members = [(p, r) for p, r in members if r["esito"] != "da_verificare"]
 
-            # Più foto della stessa release e grado: copie diverse o lo stesso disco fotografato più volte?
-            if len(members) >= 2 and not args.copie_consecutive:
-                close, no_exif, used = same_record_gap([p for p, _ in members], args.secondi_stesso_disco)
+            # Più foto sciolte della stessa release e grado: copie diverse o lo stesso disco fotografato più
+            # volte? Non vale per i dischi in sottocartella: lì le foto sono già dello stesso disco.
+            singles = [(p, r) for p, r in members if not p.is_disc]
+            if len(singles) >= 2 and not args.copie_consecutive:
+                close, no_exif, used = same_record_gap([p for p, _ in singles], args.secondi_stesso_disco)
                 print(f"{label}: date di scatto usate: {used}")
                 if close is not None:
                     reason = (f"probabilmente lo stesso disco fotografato più volte (scatti a {close:.0f} secondi di "
                               "distanza): tieni una sola foto per copia, o usa --copie-consecutive")
-                    for p, _ in members:
+                    for p, _ in singles:
                         state.execute("UPDATE foto SET esito = 'stesso_disco', motivo = ? WHERE external_id = ?",
                                       (reason, p.external_id))
                     state.commit()
-                    stats["problemi"] += len(members)
-                    print(f"{label} ({names}): DA CONTROLLARE, {reason}")
-                    continue
+                    stats["problemi"] += len(singles)
+                    print(f"{label} ({', '.join(p.external_id for p, _ in singles)}): DA CONTROLLARE, {reason}")
+                    members = [(p, r) for p, r in members if p.is_disc]
+                    if not members:
+                        continue
+                    names, label = group_label(members)
                 if no_exif:
                     print(f"Attenzione: {label}: data di scatto mancante (DateTimeOriginal) per {len(no_exif)} foto "
                           f"({', '.join(p.external_id for p in no_exif)}): non posso controllare se sono lo stesso "
@@ -2863,15 +3091,17 @@ def run(opened):
             if not members:
                 continue
             if blocked or to_check:
-                names = ", ".join(p.external_id for p, _ in members)
-                info = f"release {release_id} {media}" + (f" x{len(members)}" if len(members) > 1 else "") + \
-                    f" ({names}): {price:.2f} {currency}" + (f" [COLLEZIONISTICO, punteggio {collector[0]}]"
-                                                             if collector else "")
+                names, label = group_label(members)
+                info = f"{label} ({names}): {price:.2f} {currency}" + (
+                    f" [COLLEZIONISTICO, punteggio {collector[0]}]" if collector else "")
             # Trovato in locale -> CSV; ma con --bozza sempre via API, perché Discogs ignora DRAFT nei CSV.
-            is_csv = not args.bozza and any(is_local_source(r["fonte"]) for _, r in members)
+            # Un disco con alcune copie già pubblicate via API (esecuzione interrotta) resta via API.
+            started_api = any(state.execute("SELECT 1 FROM annunci_api WHERE external_id = ?",
+                                            (p.external_id,)).fetchone() for p, _ in members)
+            is_csv = not args.bozza and not started_api and any(is_local_source(r["fonte"]) for _, r in members)
             if collector:
                 stats["collezionistici"] += 1
-                c_row = [members[0][0].external_id, release_id, media, len(members),
+                c_row = [members[0][0].external_id, release_id, media, sum(p.copies for p, _ in members),
                          ", ".join(p.name for p, _ in members), members[0][1]["disco"] or "", collector[0],
                          "; ".join(collector[1]), suggested, collector[2], price, currency,
                          "CSV" if is_csv else "API", calc]
@@ -2881,9 +3111,9 @@ def run(opened):
                     state.execute("INSERT OR REPLACE INTO collezionistici VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", c_row)
 
             if is_csv:
-                # Trovato in locale: una riga nel CSV con quantity = numero di foto.
+                # Trovato in locale: una riga nel CSV con quantity = numero di copie (foto sciolte + copie-N).
                 row_id = members[0][0].external_id
-                quantity = len(members)
+                quantity = sum(p.copies for p, _ in members)
                 photos_text = ", ".join(p.name for p, _ in members)
                 if args.simula:
                     simulated_csv.append(csv_row(release_id, price, media, sleeve, quantity, row_id))
@@ -2903,9 +3133,10 @@ def run(opened):
                 print(f"{info} -> CSV")
                 continue
 
-            # Trovato solo via API: un annuncio per foto (l'API non ha un campo quantità).
-            for p, _ in members:
-                eid = p.external_id
+            # Trovato solo via API: un annuncio per copia (l'API non ha un campo quantità).
+            for p, eid in [(p, eid) for p, _ in members for eid in copy_ids(p.external_id, p.copies)]:
+                if state.execute("SELECT 1 FROM annunci_api WHERE external_id = ?", (eid,)).fetchone():
+                    continue  # copia già pubblicata in un'esecuzione interrotta
                 if args.simula:
                     simulated_listings.append([eid, release_id, f"{price:.2f}", GRADES[media], GRADES[sleeve],
                                                API_STATUS[status], calc])
@@ -2944,6 +3175,9 @@ def run(opened):
                                  simulated_rows_info)
         print()
         print("Riepilogo di questa esecuzione")
+        print(f"  dischi elaborati:            {total} (foto totali: {sum(len(p.images) for p in photos)})")
+        print(f"  riconosciuti in questa esecuzione: {stats['ric_locale']} al primo colpo (senza AI), "
+              f"{stats['ric_ai']} con l'AI, {stats['ric_secondo']} con il secondo tentativo")
         print(f"  righe nel CSV di inventario: {stats['righe_csv']} ({stats['copie_csv']} copie)")
         print(f"  annunci via API{' (simulati)' if args.simula else ''}: {stats['api']}")
         print(f"  foto da controllare:         {stats['problemi']}")

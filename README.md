@@ -8,6 +8,9 @@ Gli script:
 - **`rinomina_foto.py`**: rinomina le foto nuove con data e ora di scatto
   (`20261013_154233_IMG_2087.HEIC`), così due telefoni non producono mai due
   foto con lo stesso nome.
+- **`raggruppa_foto.py`**: divide le foto sciolte (fronte, retro, etichetta
+  di più dischi) in sottocartelle `disco-001`, `disco-002`… una per disco,
+  in base alle pause tra gli scatti.
 - **`vendi.py`**: riconosce i dischi da una foto qualsiasi (fronte, retro o
   etichetta), senza interventi manuali, calcola il prezzo dai dati del
   marketplace Discogs e prepara la vendita. I dischi trovati nel
@@ -25,7 +28,9 @@ Gli script:
 
 **Flusso consigliato per ogni lotto:**
 
-1. `python3 rinomina_foto.py ~/Pictures/Dischi` (foto nuove con nomi unici);
+1. `python3 rinomina_foto.py ~/Pictures/Dischi` (foto nuove con nomi unici), oppure, se fotografi
+   più lati di ogni disco, `python3 raggruppa_foto.py ~/Desktop/scatti --grado VG+ --destinazione
+   ~/Pictures/Dischi` (una sottocartella per disco);
 2. `caffeinate -i python3 vendi.py ~/Pictures/Dischi` (CSV + annunci API);
 3. carica i nuovi `risultati/inventario_NNN.csv` su Discogs;
 4. `python3 verifica_inventario.py` (cosa è davvero online, righe scartate).
@@ -167,6 +172,84 @@ Dischi/
 - **Controlli all'avvio.** Lo script si ferma subito se trova una cartella che
   non è un grado, o due foto con lo stesso nome in cartelle diverse (avrebbero
   lo stesso external_id: rinominane una).
+- **Più foto dello stesso disco:** mettile in una sottocartella del grado
+  (vedi "Più foto per disco: una sottocartella per disco" più sotto).
+
+### Più foto per disco: una sottocartella per disco
+
+Una foto da sola spesso non basta (il fronte ha artista e titolo, il retro il
+barcode, l'etichetta il catalogo). Dentro una cartella di grado, **una
+sottocartella (qualsiasi nome) è UN disco**: tutte le sue foto sono lo stesso
+disco, quantità 1.
+
+```
+lotto-02/
+  VG+/
+    disco-001/
+      fronte.jpg
+      retro.jpg
+      etichetta.jpg
+    disco-002/
+      IMG_2104.HEIC
+      IMG_2105.HEIC
+      copie-2          ← file vuoto: 2 copie identiche di questo disco
+    IMG_2110.HEIC      ← foto sciolta: funziona come prima (una foto = un disco)
+```
+
+- **Riconoscimento sul disco, non sulla foto.** Barcode e OCR si leggono su
+  tutte le foto della sottocartella e gli indizi si uniscono: un barcode o un
+  catalogo esatto trovato in **una qualsiasi** foto basta. Se serve l'AI, parte
+  **una sola chiamata** con tutte le foto del disco (al massimo
+  `--ai-max-foto`, default 4, ridotte come sempre), con il prompt che spiega
+  che sono lati diversi dello stesso vinile; lo stesso per il secondo
+  tentativo. Il costo di tutte le immagini è stimato e contato nel tetto.
+- **Foto in contrasto.** Se in foto diverse della stessa sottocartella ci sono
+  codici che portano a release diverse e incompatibili (es. il barcode di un
+  disco e il catalogo di un altro), il disco va in `da_controllare.csv` con
+  motivo "foto della cartella in contrasto", che elenca foto, codice e release
+  (senza spendere per l'AI).
+- **Tutte le protezioni restano:** solo vinile, verifica finale del
+  riconoscimento, compilation, soglia di controllo, collezionistici, release
+  bloccate.
+- **external_id** del disco = `<nome sottocartella>-<impronta breve del
+  contenuto delle foto>`, es. `disco-001-3f2a9c1e`: due lotti con
+  `disco-001` non si scontrano mai. Nei risultati (`da_controllare.csv`,
+  `non_vendibili.csv`, `collezionistici.csv`, `riconoscimento.csv`) il disco
+  compare come `VG+/disco-001 (3 foto)`; nel CSV di inventario con il suo
+  external_id.
+- **Copie.** Più copie dello stesso disco = più sottocartelle, oppure un file
+  vuoto `copie-2` (o `copie-3`…) nella sottocartella. Via API (es. con
+  `--bozza`) si crea un annuncio per copia: `disco-002-…`, `disco-002-…-copia2`.
+- **Stessa foto due volte** (in due sottocartelle, o una foto aggiunta a un
+  disco già elaborato): lo script si ferma prima di elaborare, come per i nomi
+  ripetuti. Non aggiungere né togliere foto a un disco già messo in vendita.
+- Il controllo sugli scatti ravvicinati ("Fronte e retro dello stesso disco")
+  **non** si applica alle sottocartelle: lì le foto sono già dello stesso disco.
+- Nel riepilogo finale: dischi elaborati, foto totali, e quanti dischi sono
+  stati riconosciuti al primo colpo (senza AI), con l'AI, con il secondo
+  tentativo.
+
+**Creare le sottocartelle in automatico: `raggruppa_foto.py`.** Fotografa i
+dischi uno dopo l'altro (fronte, retro, etichetta), con una pausa tra un disco
+e il successivo, e metti tutte le foto in una cartella. Poi:
+
+```bash
+python3 raggruppa_foto.py ~/Desktop/scatti --grado VG+ --destinazione ~/Desktop/lotto-02 --simula
+python3 raggruppa_foto.py ~/Desktop/scatti --grado VG+ --destinazione ~/Desktop/lotto-02
+```
+
+- Ordina le foto per data di scatto (**solo** EXIF `DateTimeOriginal`, anche
+  HEIC); un nuovo disco inizia quando tra due scatti consecutivi passano più di
+  `--pausa` secondi (default 20).
+- Se una foto non ha la data di scatto (es. passata da WhatsApp) **si ferma** e
+  la nomina, senza spostare niente: niente date di modifica inventate.
+- Prima mostra l'anteprima (`disco-001: 3 foto, 12:04:10-12:04:31 (…)`) e i
+  gruppi sospetti: più di 4 foto (forse due dischi) o 1 sola foto. Poi chiede
+  conferma e **sposta** (non copia) le foto in
+  `<destinazione>/<grado>/disco-NNN`; la numerazione continua dopo le
+  sottocartelle `disco-NNN` già presenti. Con `--simula` mostra solo
+  l'anteprima.
+- Controlla sempre i gruppi sospetti prima di lanciare `vendi.py`.
 
 ### Come riconosce il disco
 
@@ -1038,7 +1121,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | `--soglia-prezzo 80` | Per `collezionistici.csv`: prezzo oltre il quale un disco conta come di valore (default 50, valuta del tuo account) |
 | `--soglia-collezionistico 5` | Per `collezionistici.csv`: punteggio minimo (default 4) |
 | `--soglia-controllo 150` | I dischi riconosciuti senza barcode o catalogo esatto (AI o `locale-testo`) con prezzo finale sopra questa soglia, o collezionistici, vanno in `da_controllare.csv` invece che in vendita (default 100, valuta del tuo account) |
-| `--limite N` | Elabora solo le prime N foto |
+| `--limite N` | Elabora solo i primi N dischi (foto sciolte o sottocartelle) |
 | `--bozza` | Crea tutti gli annunci in bozza (`Draft`) **via API**, anche quelli che andrebbero nel CSV (Discogs ignora DRAFT nei CSV); un annuncio per foto |
 | `--simula` | Non pubblica annunci e non tocca i CSV veri; scrive in `risultati/simulazione/` |
 | `--riprova` | Rianalizza le foto finite da controllare |
@@ -1047,6 +1130,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | `--ai-modello NOME` | `claude-haiku-4-5` (default), `claude-sonnet-5`, `claude-sonnet-5-5` o `claude-opus-5` |
 | `--ai-modello-secondo NOME` | Modello del secondo tentativo sulle foto non riconosciute (default `claude-sonnet-5-5`) |
 | `--senza-secondo-tentativo` | Niente secondo tentativo |
+| `--ai-max-foto 4` | Disco in sottocartella: foto inviate al massimo all'AI nella stessa chiamata (default 4) |
 | `--formati-ammessi Vinyl` | Formati Discogs ammessi tra i candidati, separati da virgole (default `Vinyl`: le release solo CD, Cassette, File… vengono scartate) |
 | `--secondi-stesso-disco 90` | Due foto della stessa release e grado scattate a meno di tanti secondi vanno da controllare (default 90) |
 | `--copie-consecutive` | Disattiva il controllo sui secondi: le foto sono sempre copie diverse |
@@ -1106,8 +1190,11 @@ titolo, e la release Various data a un'etichetta Omar-S finiscono in
 revisione prima del primo lotto (backup, verifica dell'inventario, bozze via
 API, nomi ripetuti, scadenza delle cache, stesso disco fotografato più volte,
 secondo tentativo AI) in `tests/test_lotto.py`, il riprezzamento in
-`tests/test_riprezza.py` e le tre corsie in `tests/test_corsie.py`. I test
-scritti per la regola unica girano con `--corsie-off`.
+`tests/test_riprezza.py`, le tre corsie in `tests/test_corsie.py` e i dischi
+in sottocartella con `raggruppa_foto.py` in `tests/test_dischi_cartella.py`. I
+test scritti per la regola unica girano con `--corsie-off`. I test con l'EXIF
+vero (data di scatto, `raggruppa_foto.py`) richiedono Pillow e vengono saltati
+se manca.
 
 ---
 

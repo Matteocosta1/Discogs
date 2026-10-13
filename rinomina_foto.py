@@ -20,6 +20,7 @@ Esempio:
 
 import argparse
 import datetime as dt
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -42,6 +43,9 @@ def known_photos(state_path):
         ids = {r[0] for r in con.execute("SELECT external_id FROM foto")}
         hashes = ({r[0] for r in con.execute("SELECT hash FROM foto WHERE hash IS NOT NULL")}
                   if "hash" in columns else set())
+        if "hash_foto" in columns:  # foto dei dischi in sottocartella
+            for (parts,) in con.execute("SELECT hash_foto FROM foto WHERE hash_foto IS NOT NULL"):
+                hashes.update(json.loads(parts))
         return ids, hashes
     finally:
         con.close()
