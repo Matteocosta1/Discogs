@@ -303,6 +303,7 @@ class TestProtezioni(unittest.TestCase):
         self.assertIn("IMG_0001", self.run.to_check())
         # La spesa AI della prima esecuzione resta contata nel tetto
         state = sqlite3.connect(self.run.tmp / "vendita_stato.sqlite")
+        self.addCleanup(state.close)
         self.assertAlmostEqual(state.execute("SELECT SUM(ai_costo) FROM foto").fetchone()[0], 0.04)
         self.assertGreater(state.execute("SELECT COUNT(*) FROM rielaborati").fetchone()[0], 0)
 

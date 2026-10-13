@@ -399,8 +399,11 @@ def read_meta(db_path):
     if not db_path.exists():
         return {}
     try:
-        with sqlite3.connect(db_path) as con:
+        con = sqlite3.connect(db_path)
+        try:
             return dict(con.execute("SELECT key, value FROM meta"))
+        finally:
+            con.close()
     except sqlite3.Error:
         return {}
 
@@ -600,9 +603,12 @@ def cmd_info(args):
     if not db_path.exists():
         print("Nessun database ancora.")
         return
-    with sqlite3.connect(db_path) as con:
+    con = sqlite3.connect(db_path)
+    try:
         for key, value in con.execute("SELECT key, value FROM meta ORDER BY key"):
             print(f"{key}: {value}")
+    finally:
+        con.close()
     print(f"dimensione: {db_path.stat().st_size / 1e9:.2f} GB")
 
 
