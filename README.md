@@ -18,6 +18,10 @@ Gli script:
   (dopo aver caricato un CSV) e lo salva nello stato.
 - **`pubblica_bozze.py`**: mette in vendita, in blocco e dopo la tua conferma,
   le bozze che `vendi.py --bozza` ha creato via API.
+- **`riprezza.py`**: una volta al mese ricontrolla il mercato per i tuoi
+  annunci in vendita e propone prezzi nuovi, **solo al rialzo**.
+- **`verifica_modifica_annuncio.py`**: verifica su un solo annuncio che la
+  modifica via API non azzeri commenti, external_id e gli altri campi.
 
 **Flusso consigliato per ogni lotto:**
 
@@ -547,6 +551,109 @@ Cose da sapere:
 - Aggiorna `annunci_pubblicati_api.csv` (colonna `status`). I CSV di
   inventario invece non cambiano: restano quelli che hai caricato.
 
+### Riprezzamento mensile (`riprezza.py`)
+
+Una volta al mese ricontrolla il mercato per i tuoi annunci **In vendita** e
+propone un prezzo nuovo **solo se è più alto** di quello attuale. Non abbassa
+**mai** un prezzo.
+
+Prima lancialo **senza `--applica`**: propone e basta, non cambia niente.
+
+```bash
+caffeinate -i python3 riprezza.py
+```
+
+Guarda il riepilogo e `risultati/riprezzamento_AAAAMMGG.csv`. Se ti va bene,
+rilancialo con `--applica`: mostra lo stesso riepilogo, chiede conferma (`s`)
+e solo dopo aggiorna i prezzi.
+
+```bash
+caffeinate -i python3 riprezza.py --applica
+```
+
+**Come calcola.** Usa la **stessa regola di `vendi.py`** (base, minimo
+suggerito per il grado dell'annuncio, premi scarsità e richiesta a scalini,
+griglia 2,50 per eccesso), con dati di mercato aggiornati (quelli salvati più
+vecchi di `--cache-prezzi-giorni`, default 30, si richiedono di nuovo).
+
+**I tuoi annunci non contano come concorrenza.** Le statistiche di Discogs
+contano anche le tue copie: senza correzione l'aumento si alimenterebbe da
+solo (sei l'unico a 30 €, "1 copia, più basso 30 €", +50% → 45 €, il mese dopo
+67,50 €…). Quindi:
+
+- **copie della concorrenza** = copie in vendita meno le tue (tutte le
+  condizioni);
+- se il prezzo più basso è uguale o maggiore di un tuo prezzo per quella
+  release (il più basso potresti essere tu), **non lo usa**: base = suggerito;
+- con **0 copie della concorrenza** applica la regola "0 copie" sul suggerito,
+  come alla prima pubblicazione.
+
+**Esito di ogni annuncio** (colonna `esito`):
+
+| Esito | Quando | Cosa succede con `--applica` |
+| --- | --- | --- |
+| **da alzare** | il prezzo nuovo supera l'attuale di almeno un gradino (2,50) | viene alzato |
+| **invariato** | il prezzo nuovo è uguale, più basso o più alto di meno di 2,50 | niente (mai abbassato) |
+| **da controllare** | aumento oltre `--rialzo-massimo` (default 50%) o prezzo nuovo sopra `--soglia-controllo` (default 100) | niente: controlla a mano |
+| **sei il più economico** | il più basso in vendita potresti essere tu, ma ci sono altri venditori: chiedono di più e il tuo prezzo è probabilmente sotto mercato | niente: apri il link `link_vendite_release` (pagina di vendita della release) e decidi a mano |
+| **dati non disponibili** | Discogs non ha dato i dati di mercato o il prezzo suggerito | niente |
+
+**Dischi in crescita.** A ogni giro salva want e have di ogni release, con la
+data (tabella `want_storico` dello stato). Se i want sono cresciuti più di
+`--crescita-want` (default 30%) dal controllo precedente, il disco è segnato
+**in crescita** nel CSV e nel riepilogo, anche se il prezzo resta invariato.
+
+**Il CSV** `risultati/riprezzamento_AAAAMMGG.csv` ha: listing_id, external_id,
+artista – titolo, grado, prezzo attuale, prezzo proposto, aumento in %,
+esito, motivo, in crescita, want/have, creato da (script o a mano), calcolo
+del prezzo, link all'annuncio e alla pagina di vendita della release. Il
+riepilogo dice quanti annunci sono da alzare, invariati, da controllare, "sei
+il più economico" e in crescita, e di quanto aumenterebbe in totale il valore
+dell'inventario.
+
+**Come applica (`--applica`).** Per ogni annuncio da alzare: lo rilegge da
+Discogs (se non è più in vendita, o hai cambiato il prezzo a mano nel
+frattempo, lo salta), reinvia **tutti i suoi campi attuali** (commenti,
+external_id, posizione, peso, quantità, offerte, copertina) con il solo prezzo
+nuovo, lo rilegge di nuovo e **si ferma subito** se un campo diverso dal prezzo
+è cambiato. Ogni modifica resta nello storico (tabella `riprezzamenti`: data,
+prezzo vecchio, prezzo nuovo, calcolo). Puoi interromperlo con Ctrl+C: al
+prossimo lancio con `--applica` riprende dalle modifiche rimaste, senza
+ripetere quelle fatte.
+
+**Migliaia di annunci.** Servono 2-3 richieste per release e il limite è 60 al
+minuto: ogni giro controlla al massimo `--max-annunci` annunci (default 500),
+**prima quelli verificati da più tempo**. Con un giro al mese si copre tutto
+l'inventario a rotazione.
+
+| Opzione | Default | Cosa fa |
+| --- | --- | --- |
+| `--applica` | | dopo conferma aggiorna i prezzi via API (senza: propone e basta) |
+| `--solo-script` | | solo gli annunci creati da `vendi.py` (di default tutti, la colonna `creato_da` dice quali) |
+| `--max-annunci` | 500 | annunci da controllare in questo giro |
+| `--rialzo-massimo` | 50 | aumento % oltre il quale il prezzo va controllato a mano |
+| `--soglia-controllo` | 100 | prezzo nuovo oltre il quale va controllato a mano (la stessa di `vendi.py`) |
+| `--crescita-want` | 30 | crescita % dei want per segnalare un disco "in crescita" |
+| `--cache-prezzi-giorni` | 30 | dati di mercato più vecchi si richiedono a Discogs |
+| regola del prezzo | come `vendi.py` | `--premio-zero-copie`, `--copie-poche`, `--premio-poche-copie`, `--copie-alcune`, `--premio-alcune-copie`, `--scalini-richiesta`, `--passo-prezzo`, `--prezzo-minimo` |
+
+### Verificare la modifica degli annunci (`verifica_modifica_annuncio.py`)
+
+Da lanciare **una volta**, su **un solo** annuncio In vendita che abbia
+commenti ed external_id compilati, per sapere se una modifica via API che
+invia solo i campi obbligatori ne azzera altri:
+
+```bash
+python3 verifica_modifica_annuncio.py NUMERO_ANNUNCIO
+```
+
+Il numero è nel link dell'annuncio (`discogs.com/sell/item/NUMERO`). Salva
+l'annuncio com'è in `risultati/verifica_modifica_annuncio.json`, chiede
+conferma, prova una modifica "minima" e una "completa" lasciando **lo stesso
+prezzo**, e ripristina subito eventuali campi azzerati. `riprezza.py` e
+`pubblica_bozze.py` usano comunque la modifica completa, che reinvia tutti i
+campi.
+
 ### Regola del prezzo
 
 Vale per **tutti** i dischi. Lo script usa, per ogni release, i dati del
@@ -840,6 +947,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | `--cache-prezzi-giorni 30` | Dopo quanti giorni prezzi suggeriti, copie in vendita e want/have si richiedono a Discogs (default 30) |
 | `--cache-vendibilita-giorni 90` | Dopo quanti giorni si ricontrolla se una release è bloccata dal marketplace (default 90) |
 | `--backup-da-tenere 20` | Copie dello stato da tenere in `data/backup/` (default 20) |
+| `--scalini-richiesta 1:10,2:25,4:50` | Premio richiesta a scalini (vedi "Regola del prezzo") |
 | `--senza-ai` | Non usa l'AI: solo riconoscimento locale gratuito |
 | `--uscita PERCORSO` | Cartella dei risultati (default `risultati/`) |
 | `--db PERCORSO` | Database creato da `discogs_dump.py` (default `data/discogs.sqlite`) |
