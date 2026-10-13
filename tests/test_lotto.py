@@ -184,5 +184,63 @@ class TestVerificaInventario(TempRun):
         self.assertGreaterEqual(self.run.api.log.count(("inventory", "For Sale")), 4)
 
 
+# --------------------------------------------------------------------------
+# Punto 1: --rielabora non crea mai doppioni
+# --------------------------------------------------------------------------
+
+class TestRielaboraSicuro(TempRun):
+    def setUp(self):
+        super().setUp()
+        self.run.main()
+        state = self.state()
+        state.execute("UPDATE righe_csv SET status = 'DRAFT'")  # righe DRAFT come quelle di inventario_003
+        state.commit()
+        vendi.write_outputs(state, self.run.out, [], [])
+        self.csv = self.run.out / "inventario_001.csv"
+        self.before = self.csv.read_text()
+
+    def rows(self):
+        return {r["external_id"]: r for r in self.state().execute("SELECT * FROM righe_csv")}
+
+    def test_riga_draft_online_non_rielaborata(self):
+        self.run.api.upload_csv(self.run.inventory())       # caricato: Discogs le ha messe in vendita
+        tp.FakeAI.reads = []
+        out = self.run.main("--bozza", "--rielabora")
+        self.assertIn("saltate perché online", out)
+        self.assertEqual(set(self.rows()), {"IMG_0003", "IMG_0006"})
+        self.assertTrue(self.csv.exists())
+        # stesse righe e stessi prezzi; lo status passa a FOR_SALE, com'è davvero su Discogs
+        self.assertEqual(self.csv.read_text(), self.before.replace(",DRAFT", ",FOR_SALE"))
+        self.assertEqual(self.run.api.listings, [])            # nessun nuovo annuncio
+        self.assertEqual(self.rows()["IMG_0006"]["status"], "FOR_SALE")
+
+    def test_inventario_non_leggibile_nessuna_riga_toccata(self):
+        self.run.api.inventory_error = True
+        out = self.run.main("--bozza", "--rielabora")
+        self.assertIn("impossibile leggere l'inventario", out)
+        self.assertEqual(set(self.rows()), {"IMG_0003", "IMG_0006"})
+        self.assertEqual(self.csv.read_text(), self.before)
+        self.assertEqual(self.run.api.listings, [])
+
+    def test_riga_mai_caricata_archiviata_non_cancellata(self):
+        self.run.api.add_listing("IMG_0006", 4207270, 25.0, "For Sale")  # solo IMG_0006 è online
+        self.run.main("--bozza", "--rielabora")
+        rows = self.rows()
+        self.assertEqual(rows["IMG_0006"]["parte"], 1)   # online: intatta
+        self.assertGreater(rows["IMG_0003"]["parte"], 1) # non era online: rielaborata, in un file nuovo
+        archived_rows = self.state().execute("SELECT external_id FROM rielaborati WHERE tabella = 'righe_csv'")
+        self.assertEqual([r[0] for r in archived_rows], ["IMG_0003"])
+        archived = list((self.run.out / "archivio").glob("inventario_001_PRIMA_*.csv"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0].read_text(), self.before)
+
+    def test_parte_svuotata_va_in_archivio(self):
+        self.run.main("--bozza", "--rielabora")    # inventario vuoto: niente è online
+        self.assertFalse(self.csv.exists())       # nessun file nuovo con lo stesso nome
+        annullato = self.run.out / "archivio" / "inventario_001_ANNULLATO.csv"
+        self.assertEqual(annullato.read_text(), self.before)
+        self.assertEqual(min(r["parte"] for r in self.rows().values()), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1716,54 +1716,45 @@ def free_rows(state, out_dir, rows):
     return freed
 
 
-def prepare_rework(state, photos, out_dir):
+def prepare_rework(state, photos, out_dir, inventory):
     """--rielabora: le foto indicate tornano da elaborare da capo (riconoscimento, AI compresa,
-    prezzo e annuncio). Le loro righe CSV e i loro annunci API in bozza vengono tolti dallo stato
-    e copiati nella tabella rielaborati. Le foto già in vendita (righe CSV o annunci For Sale,
-    bozze già messe in vendita, annunci dall'esito incerto) restano come sono: niente doppioni.
-    La spesa AI già fatta resta contata nel tetto. Restituisce (rielaborate, saltate)."""
+    prezzo e annuncio). inventory: l'inventario Discogs letto all'inizio (None se non leggibile).
+
+    Una riga CSV o un annuncio API si rielabora SOLO se il suo external_id non è online su
+    Discogs e non lo è mai stato (can_free dopo verify_listings): un CSV caricato è in vendita
+    anche se le righe dicevano DRAFT. Se l'inventario non si legge, nessuna riga CSV né annuncio
+    viene toccato. Le righe tolte finiscono nella tabella rielaborati; i file CSV non vengono mai
+    cancellati ma archiviati in risultati/archivio/. La spesa AI già fatta resta contata nel tetto.
+    Restituisce (rielaborate, saltate)."""
     ids = {p.external_id for p in photos}
-    sold = {r[0] for r in state.execute("SELECT external_id FROM bozze_pubblicate")}
-    skipped, archive = set(), []
-
-    def keep(table, row):
-        archive.append((table, row["external_id"], json.dumps(dict(row)), now()))
-
-    emptied_parts = set()
+    if inventory is not None:
+        verify_listings(state, inventory)
+    skipped, to_free = set(), []
     for row in state.execute("SELECT * FROM righe_csv").fetchall():
-        members = {r[0] for r in state.execute("SELECT external_id FROM foto WHERE riga_csv = ?", (row["external_id"],))}
-        members.add(row["external_id"])
+        members = csv_members(state, row["external_id"])
         if not members & ids:
             continue
-        if row["status"] != "DRAFT" or row["external_id"] in sold:
+        if inventory is not None and can_free("righe_csv", row):
+            to_free.append(("righe_csv", row))
+            ids |= members  # tutte le copie della riga tornano da elaborare
+        else:
             skipped |= members
-            continue
-        keep("righe_csv", row)
-        state.execute("DELETE FROM righe_csv WHERE external_id = ?", (row["external_id"],))
-        emptied_parts.add(row["parte"])
-        ids |= members  # tutte le copie della riga tornano da elaborare
     for row in state.execute("SELECT * FROM annunci_api").fetchall():
         if row["external_id"] not in ids:
             continue
-        if row["status"] != "DRAFT" or row["stato"] == "in_corso" or row["external_id"] in sold:
+        if inventory is not None and can_free("annunci_api", row):
+            to_free.append(("annunci_api", row))
+        else:
             skipped.add(row["external_id"])
-            continue
-        keep("annunci_api", row)
-        state.execute("DELETE FROM annunci_api WHERE external_id = ?", (row["external_id"],))
+    free_rows(state, out_dir, to_free)
     redo = ids - skipped
-    for table in ("collezionistici", "foto"):
-        for row in state.execute(f"SELECT * FROM {table}").fetchall():
-            if row["external_id"] in redo:
-                keep(table, row)
+    archive = [("foto", r["external_id"], json.dumps(dict(r)), now())
+               for r in state.execute("SELECT * FROM foto").fetchall() if r["external_id"] in redo]
     state.executemany("DELETE FROM collezionistici WHERE external_id = ?", [(e,) for e in redo])
     state.executemany("UPDATE foto SET esito = 'rielabora', riga_csv = NULL, ai_dati = NULL, ai_scelta = NULL,"
                       " prezzo = NULL, motivo = NULL WHERE external_id = ?", [(e,) for e in redo])
     state.executemany("INSERT INTO rielaborati VALUES (?, ?, ?, ?)", archive)
     state.commit()
-    # I file CSV rimasti senza righe non devono restare in risultati/ (sarebbero caricati per sbaglio)
-    for part in emptied_parts:
-        if not state.execute("SELECT 1 FROM righe_csv WHERE parte = ?", (part,)).fetchone():
-            (out_dir / f"inventario_{part:03d}.csv").unlink(missing_ok=True)
     return sorted(redo, key=natural_key), sorted(skipped, key=natural_key)
 
 
@@ -1853,6 +1844,15 @@ def write_csv(path, header, rows):
 def photo_name(path):
     """'VG+/IMG_1234.HEIC' invece del percorso completo."""
     return f"{Path(path).parent.name}/{Path(path).name}" if path else ""
+
+
+def last_part(state):
+    """Numero più alto mai usato per un inventario_NNN.csv, comprese le parti archiviate: un file
+    nuovo non riprende mai il nome di uno vecchio (che potrebbe essere già stato caricato)."""
+    current = state.execute("SELECT COALESCE(MAX(parte), 0) FROM righe_csv").fetchone()[0]
+    archived = state.execute("SELECT COALESCE(MAX(json_extract(dati, '$.parte')), 0) FROM rielaborati"
+                             " WHERE tabella = 'righe_csv'").fetchone()[0]
+    return max(current, archived or 0)
 
 
 class PartAllocator:
@@ -2028,7 +2028,8 @@ def main():
                         help="rianalizza anche le foto finite da controllare (non trovate, più release, senza prezzo)")
     parser.add_argument("--rielabora", action="store_true",
                         help="ignora lo stato salvato per le foto di questa cartella e le rielabora da capo (anche l'AI, "
-                             "che viene pagata di nuovo); solo insieme a --bozza; le foto già in vendita sono saltate")
+                             "che viene pagata di nuovo); solo insieme a --bozza; prima legge l'inventario Discogs e "
+                             "salta tutte le foto online (o state online)")
     parser.add_argument("--senza-ai", action="store_true",
                         help="non usa l'AI: solo riconoscimento locale gratuito (le foto incerte vanno da controllare)")
     parser.add_argument("--ai-tetto", type=float, default=50.0,
@@ -2082,14 +2083,21 @@ def main():
         recover_pending_listings(state, api, identity["username"])
     recheck = set()   # foto rielaborate: la vendibilità della loro release va ricontrollata
     if args.rielabora:
-        redo, skipped = prepare_rework(state, photos, Path(args.uscita).expanduser())
+        # Prima di tutto: cosa è davvero online. Nessuna riga online (o che lo è stata) si rielabora.
+        try:
+            inventory = fetch_inventory(api, identity["username"])
+        except InventoryUnreadable as e:
+            inventory = None
+            print(f"--rielabora: impossibile leggere l'inventario Discogs ({e}).\n"
+                  "  Per sicurezza nessuna riga CSV né annuncio API viene rielaborato: solo le foto mai messe in "
+                  "vendita.")
+        redo, skipped = prepare_rework(state, photos, Path(args.uscita).expanduser(), inventory)
         recheck = set(redo)
         print(f"--rielabora: {len(redo)} foto verranno rielaborate da capo"
-              + (f"; {len(skipped)} saltate perché già in vendita o in attesa di conferma: {', '.join(skipped)}"
-                 if skipped else ""))
+              + (f"; {len(skipped)} saltate perché online su Discogs (o lo sono state, o l'inventario non si legge):"
+                 f" {', '.join(skipped)}" if skipped else ""))
 
-    max_part = state.execute("SELECT COALESCE(MAX(parte), 0) FROM righe_csv").fetchone()[0]
-    parts = PartAllocator(max_part + 1)   # le righe nuove vanno sempre in file nuovi
+    parts = PartAllocator(last_part(state) + 1)   # le righe nuove vanno sempre in file nuovi
     simulated_csv, simulated_listings, simulated_collectors, simulated_rows_info = [], [], [], []
     stats = {"collezionistici": 0, "righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0,
              "non_vendibili": 0, "non_verificati": 0}

@@ -332,8 +332,9 @@ class TestProtezioni(unittest.TestCase):
 
     def test_rielabora_non_tocca_le_foto_in_vendita(self):
         self.run.main()  # lancio vero, For Sale
+        self.run.api.upload_csv(self.run.inventory())  # CSV caricato su Discogs
         out = self.run.main("--bozza", "--rielabora")
-        self.assertIn("saltate perché già in vendita", out)
+        self.assertIn("saltate perché online su Discogs", out)
         rows = self.run.inventory()
         self.assertEqual(sorted(r["external_id"] for r in rows), ["IMG_0003", "IMG_0004"])
         self.assertTrue(all(r["status"] == "FOR_SALE" for r in rows))  # nessun doppione in bozza
