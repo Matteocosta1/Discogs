@@ -205,6 +205,15 @@ con lo stesso tetto di spesa e le stesse protezioni. Il risultato resta in
 cache come il primo: non si paga mai due volte. `--senza-secondo-tentativo`
 lo disattiva.
 
+**Solo vinile.** Il disco fotografato è sempre un vinile. In tutta la
+cascata (barcode, catalogo, artista e titolo, AI, secondo tentativo) i
+candidati sono solo release che hanno **Vinyl** tra i formati, nel dump locale
+o su Discogs: le release solo CD, Cassette, File, DVD… vengono scartate prima
+di qualsiasi scelta (era il caso di Francisco – Music Business, abbinato alla
+versione CD 568083 invece che all'LP 572658). Una release con più formati
+(es. Vinyl + CD) va bene perché contiene Vinyl. Anche all'AI viene detto che
+è sempre un vinile. Per allargare in futuro: `--formati-ammessi "Vinyl,CD"`.
+
 **Regola di sicurezza: l'AI non può inventare.**
 - La release scelta deve sempre esistere nel database o su Discogs: l'AI può
   solo scegliere tra i candidati trovati dallo script.
@@ -500,10 +509,25 @@ EXIF**: se due foto sono state scattate a meno di **90 secondi**
 "probabilmente lo stesso disco fotografato più volte". Togli la foto in più e
 rilancia: il disco va in vendita.
 
-- Senza data EXIF le foto si contano come copie diverse, con un avviso (la
-  data del file non vale: con AirDrop è uguale per tutte).
+- La data usata è **solo** `DateTimeOriginal` (la data di scatto), e lo
+  script stampa per ogni foto del gruppo quale data ha usato. **Nessun'altra
+  data**: il tag `DateTime` è la data di modifica, che le app di messaggistica
+  riscrivono uguale per tutte le foto (da qui gli "scatti a 0 secondi" del
+  primo lotto), e la data del file con AirDrop è uguale per tutte.
+- Senza `DateTimeOriginal` le foto si contano come copie diverse e lo script
+  stampa l'avviso "data di scatto mancante".
 - Se fotografi davvero più copie dello stesso disco una dopo l'altra, usa
   `--copie-consecutive`.
+
+**Stesso artista e titolo, release diverse.** Se nello stesso giro due o più
+foto finiscono su release **diverse** con lo stesso artista e titolo (confronto
+tollerante a maiuscole, accenti, punteggiatura), quasi sempre sono lo stesso
+disco fotografato più volte e riconosciuto in due modi (es. LP e CD). Vanno
+tutte in `da_controllare.csv` con motivo "stesso artista e titolo su release
+diverse (es. LP e CD)", prima di qualsiasi richiesta a Discogs. Togli la foto
+in più e rilancia. Attenzione: vale anche per due stampe diverse dello stesso
+album che possiedi davvero (es. originale e ristampa): in quel caso mettile in
+vendita in due giri separati.
 
 **Ripetere un test sulle stesse foto (`--rielabora`).** Di norma le foto già
 elaborate non vengono rianalizzate. Per rifare tutto da capo sulle foto della
@@ -974,7 +998,8 @@ Motivi possibili in `da_controllare.csv`:
 - **nessun prezzo suggerito da Discogs**.
 - **probabilmente lo stesso disco fotografato più volte**: due foto della
   stessa release e grado scattate a pochi secondi di distanza (vedi "Fronte e
-  retro dello stesso disco").
+  retro dello stesso disco"), oppure foto con lo stesso artista e titolo su
+  release diverse (es. LP e CD).
 - **impossibile verificare se è vendibile**: la richiesta a Discogs per sapere
   se la release è bloccata dal marketplace non è riuscita (rete, errore di
   Discogs) o la risposta non conteneva il campo `blocked_from_sale`. Il disco
@@ -1022,6 +1047,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | `--ai-modello NOME` | `claude-haiku-4-5` (default), `claude-sonnet-5`, `claude-sonnet-5-5` o `claude-opus-5` |
 | `--ai-modello-secondo NOME` | Modello del secondo tentativo sulle foto non riconosciute (default `claude-sonnet-5-5`) |
 | `--senza-secondo-tentativo` | Niente secondo tentativo |
+| `--formati-ammessi Vinyl` | Formati Discogs ammessi tra i candidati, separati da virgole (default `Vinyl`: le release solo CD, Cassette, File… vengono scartate) |
 | `--secondi-stesso-disco 90` | Due foto della stessa release e grado scattate a meno di tanti secondi vanno da controllare (default 90) |
 | `--copie-consecutive` | Disattiva il controllo sui secondi: le foto sono sempre copie diverse |
 | `--cache-prezzi-giorni 30` | Dopo quanti giorni prezzi suggeriti, copie in vendita e want/have si richiedono a Discogs (default 30) |
