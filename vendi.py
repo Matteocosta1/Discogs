@@ -30,6 +30,7 @@ del file senza estensione è l'external_id.
      marketplace), mai sotto il prezzo suggerito per il grado; premio scarsità
      secondo le copie in vendita (0 -> suggerito +100%, 1-2 -> +50%, 3-5 -> +25%)
      e premio richiesta se want/have > 1 (+10%), sommati, tutto configurabile;
+     ultimo passaggio: arrotondamento per eccesso alla griglia di 2,50 (minimo 2,50);
      valute nella valuta dell'account venditore; i dischi con punteggio
      collezionistico alto sono elencati anche in collezionistici.csv;
      un disco riconosciuto senza codice che è collezionistico o costa più di
@@ -53,6 +54,7 @@ Esempi:
 import argparse
 import csv
 import datetime as dt
+import decimal
 import json
 import os
 import re
@@ -1330,7 +1332,21 @@ def collector_score(data, suggested, price_threshold):
 # --------------------------------------------------------------------------
 
 def fmt(x):
-    return f"{x:.2f}".replace(".", ",")
+    return f"{float(x):.2f}".replace(".", ",")
+
+
+CENT = decimal.Decimal("0.01")
+
+
+def to_grid(price, step, minimum):
+    """Prezzo arrotondato PER ECCESSO al gradino della griglia (multipli di step) uguale o
+    immediatamente superiore, mai sotto minimum. In Decimal, sui centesimi: prima il prezzo
+    viene portato al centesimo (10,000000001 -> 10,00), poi al gradino (10,00 resta 10,00)."""
+    step = decimal.Decimal(str(step)).quantize(CENT)
+    minimum = decimal.Decimal(str(minimum)).quantize(CENT)
+    cents = max(decimal.Decimal(str(price)).quantize(CENT, rounding=decimal.ROUND_HALF_UP), minimum)
+    steps = (cents / step).to_integral_value(rounding=decimal.ROUND_CEILING)
+    return (steps * step).quantize(CENT)
 
 
 def compute_price(suggested, data, grade, currency, args):
@@ -1339,10 +1355,17 @@ def compute_price(suggested, data, grade, currency, args):
     Base = prezzo più basso in vendita, mai sotto il suggerito per il grado.
     Premio scarsità (copie in vendita): 0 -> suggerito + 100%; 1-2 -> base + 50%;
     3-5 -> base + 25%; oltre -> nulla. Premio richiesta: want/have sopra 1 -> +10%.
-    I premi si sommano; nessun tetto. Tutti i numeri vengono da args."""
+    I premi si sommano; nessun tetto. Ultimo passaggio: arrotondamento per eccesso alla griglia
+    (passo args.passo_prezzo, minimo args.prezzo_minimo). Tutti i numeri vengono da args."""
+
+    def finish(raw, steps):
+        price = to_grid(raw, args.passo_prezzo, args.prezzo_minimo)
+        steps[-1] += f" → arrotondato a griglia {fmt(args.passo_prezzo)} = {fmt(price)} {currency}"
+        return float(price), "; ".join(steps)
+
     steps = [f"suggerito {grade} {fmt(suggested)}"]
     if data is None:
-        return round(suggested, 2), f"dati del marketplace non disponibili: prezzo = suggerito {fmt(suggested)} {currency}"
+        return finish(suggested, [f"dati del marketplace non disponibili: prezzo = suggerito {fmt(suggested)} {currency}"])
     copies = data.get("num_for_sale") or 0
     lowest = data.get("lowest_price") if data.get("lowest_currency") == currency else None
     if copies == 0 or not lowest:
@@ -1378,9 +1401,10 @@ def compute_price(suggested, data, grade, currency, args):
         steps.append(f"{ratio_text}: nessun premio richiesta")
 
     total = sum(premiums)
-    price = round(base * (1 + total / 100), 2)
-    steps.append(f"prezzo = {fmt(base)} × (1 + {total:g}%) = {fmt(price)} {currency}")
-    return price, "; ".join(steps)
+    raw = (decimal.Decimal(str(base)) * (1 + decimal.Decimal(str(total)) / 100)).quantize(
+        CENT, rounding=decimal.ROUND_HALF_UP)
+    steps.append(f"prezzo = {fmt(base)} × (1 + {total:g}%) = {fmt(raw)} {currency}")
+    return finish(raw, steps)
 
 
 # --------------------------------------------------------------------------
@@ -1797,6 +1821,11 @@ def main():
     g.add_argument("--soglia-want-have", type=float, default=1.0,
                    help="rapporto want/have oltre il quale scatta il premio richiesta (default 1)")
     g.add_argument("--premio-richiesta", type=float, default=10.0, help="premio richiesta in %% (default 10)")
+    g.add_argument("--passo-prezzo", type=decimal.Decimal, default=decimal.Decimal("2.50"),
+                   help="ultimo passaggio: il prezzo finale si arrotonda per eccesso a multipli di questa cifra "
+                        "(default 2.50: 2.50, 5.00, 7.50...)")
+    g.add_argument("--prezzo-minimo", type=decimal.Decimal, default=decimal.Decimal("2.50"),
+                   help="nessun annuncio sotto questa cifra (default 2.50)")
     parser.add_argument("--soglia-prezzo", type=float, default=50.0,
                         help="per collezionistici.csv: prezzo (valuta del tuo account) oltre il quale un disco "
                              "conta come di valore (default 50)")
@@ -1827,6 +1856,8 @@ def main():
     parser.add_argument("--uscita", default=str(OUT_DIR), help="cartella dei risultati (default: risultati/)")
     args = parser.parse_args()
     status = "DRAFT" if args.bozza else "FOR_SALE"
+    if args.passo_prezzo < decimal.Decimal("0.01") or args.prezzo_minimo < 0:
+        raise SystemExit("--passo-prezzo deve essere almeno 0.01 e --prezzo-minimo non negativo.")
     if args.rielabora and not args.bozza:
         raise SystemExit("--rielabora funziona solo insieme a --bozza: rielaborando foto già elaborate gli annunci\n"
                          "devono essere bozze, per non mettere mai in vendita dei doppioni.")

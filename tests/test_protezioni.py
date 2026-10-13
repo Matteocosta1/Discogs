@@ -390,6 +390,74 @@ class TestNonVendibili(unittest.TestCase):
         self.assertEqual(self.run.read_csv("non_vendibili.csv"), [])
 
 
+class TestGriglia(unittest.TestCase):
+    """Arrotondamento per eccesso alla griglia di 2,50 €, ultimo passaggio del prezzo."""
+
+    EXAMPLES = [("1.80", "2.50"), ("2.50", "2.50"), ("3.00", "5.00"), ("6.10", "7.50"), ("10.00", "10.00"),
+                ("10.40", "12.50"), ("19.50", "20.00"), ("21.50", "22.50"), ("23.00", "25.00"),
+                ("29.15", "30.00"), ("37.91", "40.00"), ("99.99", "100.00"), ("100.01", "102.50")]
+
+    def test_esempi(self):
+        for price, expected in self.EXAMPLES:
+            with self.subTest(price=price):
+                self.assertEqual(str(vendi.to_grid(price, "2.50", "2.50")), expected)
+                self.assertEqual(str(vendi.to_grid(float(price), "2.50", "2.50")), expected)
+
+    def test_errori_di_virgola_mobile(self):
+        self.assertEqual(str(vendi.to_grid(10.000000001, "2.50", "2.50")), "10.00")
+        self.assertEqual(str(vendi.to_grid(0.1 + 0.2 + 9.7, "2.50", "2.50")), "10.00")  # 10.000000000000002
+
+    def test_minimo_e_passo_configurabili(self):
+        self.assertEqual(str(vendi.to_grid("0.50", "2.50", "2.50")), "2.50")
+        self.assertEqual(str(vendi.to_grid("0", "2.50", "2.50")), "2.50")
+        self.assertEqual(str(vendi.to_grid("10.40", "1.00", "2.50")), "11.00")
+        self.assertEqual(str(vendi.to_grid("1.20", "1.00", "4.00")), "4.00")
+
+    def test_calcolo_prezzo(self):
+        args = mock.Mock(premio_zero_copie=100.0, copie_poche=2, premio_poche_copie=50.0, copie_alcune=5,
+                         premio_alcune_copie=25.0, soglia_want_have=1.0, premio_richiesta=10.0,
+                         passo_prezzo=vendi.decimal.Decimal("2.50"), prezzo_minimo=vendi.decimal.Decimal("2.50"))
+        data = {"num_for_sale": 6, "lowest_price": 10.40, "lowest_currency": "EUR", "want": 10, "have": 100}
+        price, calc = vendi.compute_price(10.40, data, "M", "EUR", args)
+        self.assertEqual(price, 12.50)
+        self.assertTrue(calc.endswith("= 10,40 EUR → arrotondato a griglia 2,50 = 12,50 EUR"), calc)
+        price, calc = vendi.compute_price(1.80, None, "VG", "EUR", args)  # senza dati del marketplace
+        self.assertEqual(price, 2.50)
+        self.assertIn("arrotondato a griglia 2,50 = 2,50 EUR", calc)
+
+    def run_photos(self, photos, *options):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Run(tmp, photos=photos)
+            run.main("--bozza", *options)
+            return run.inventory(), run.to_check(), run.read_csv("inventario_foto.csv")
+
+    def test_end_to_end_csv(self):
+        # 4207270: suggerito M 10,40, nessun premio -> 12.50 nel CSV per Discogs
+        market = (10.40, {"want": 10, "have": 100}, {"num_for_sale": 6, "lowest_price": {"value": 10.40}})
+        with mock.patch.dict(MARKET, {4207270: market}):
+            rows, check, info = self.run_photos({"M": ["IMG_0006"]})
+        self.assertEqual([(r["release_id"], r["price"], r["media_condition"]) for r in rows],
+                         [("4207270", "12.50", "Mint (M)")])
+        self.assertEqual(check, {})
+        self.assertIn("= 10,40 EUR → arrotondato a griglia 2,50 = 12,50 EUR", info[0]["calcolo_prezzo"])
+
+    def test_soglia_sul_prezzo_arrotondato(self):
+        # IMG_0005 (Moodymann - Silentintroduction) riconosciuto per artista e titolo
+        market = (100.01, {"want": 10, "have": 100}, {"num_for_sale": 10, "lowest_price": {"value": 100.01}})
+        with mock.patch.dict(MARKET, {1111111: market}):
+            rows, check, _ = self.run_photos({"VG+": ["IMG_0005"]})
+        self.assertEqual(rows, [])
+        self.assertEqual(check["IMG_0005"]["prezzo_calcolato"], "102.50")
+        self.assertIn("prezzo 102.50 EUR sopra la soglia di controllo (100)", check["IMG_0005"]["motivo"])
+
+        # 98,00 prima dell'arrotondamento è sotto una soglia di 99, ma il prezzo finale (100,00) no
+        market = (98.0, {"want": 10, "have": 100}, {"num_for_sale": 10, "lowest_price": {"value": 98.0}})
+        with mock.patch.dict(MARKET, {1111111: market}):
+            rows, check, _ = self.run_photos({"VG+": ["IMG_0005"]}, "--soglia-controllo", "99")
+        self.assertEqual(rows, [])
+        self.assertEqual(check["IMG_0005"]["prezzo_calcolato"], "100.00")
+
+
 class TestVerifica(unittest.TestCase):
     """check_match da solo, con il testo letto nella foto simulato."""
 

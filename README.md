@@ -459,14 +459,41 @@ quanti lo hanno) è **sopra 1**, **+10%**.
 
 > prezzo = base × (1 + premio scarsità + premio richiesta)
 
-Esempi:
+**4. Arrotondamento a griglia (ultimo passaggio).** Il prezzo finale non ha
+mai centesimi "strani": si arrotonda **sempre per eccesso** al gradino uguale
+o immediatamente superiore di una griglia a passo **2,50**: 2,50 – 5,00 –
+7,50 – 10,00 – 12,50 – … senza limite superiore.
+- Se il prezzo è già esattamente su un gradino, resta com'è. Mai per difetto.
+- **Minimo assoluto 2,50**: nessun annuncio sotto questa cifra.
+- Si applica dopo base, minimo suggerito per grado e premi. Anche quando i
+  dati del marketplace non sono disponibili e il prezzo è il suggerito.
+- La **soglia di controllo** (`--soglia-controllo`) e il prezzo finale in
+  `collezionistici.csv` usano il prezzo già arrotondato.
+- Il calcolo usa i centesimi esatti (Decimal), non i numeri con la virgola
+  del computer: un 10,000000001 resta 10,00 e non salta a 12,50.
 
-| Situazione | Calcolo | Prezzo |
+| Prezzo calcolato | Prezzo finale |
+| --- | --- |
+| 1,80 | 2,50 |
+| 2,50 | 2,50 |
+| 3,00 | 5,00 |
+| 6,10 | 7,50 |
+| 10,40 | 12,50 |
+| 29,15 | 30,00 |
+| 99,99 | 100,00 |
+| 100,01 | 102,50 |
+
+Esempi completi:
+
+| Situazione | Calcolo | Prezzo finale |
 | --- | --- | --- |
-| suggerito 24,20; più basso 50,00; 2 copie; want/have 3 | 50,00 × (1 + 50% + 10%) | 80,00 |
-| suggerito 64,10; nessuna copia; want/have 6 | 64,10 × (1 + 100% + 10%) | 134,61 |
-| suggerito 32,10; più basso 40,00; 4 copie; want/have 0,05 | 40,00 × (1 + 25%) | 50,00 |
-| suggerito 13,10; più basso 8,00; 40 copie | 13,10 (soglia minima) | 13,10 |
+| suggerito 24,20; più basso 50,00; 2 copie; want/have 3 | 50,00 × (1 + 50% + 10%) = 80,00 | 80,00 |
+| suggerito 64,10; nessuna copia; want/have 6 | 64,10 × (1 + 100% + 10%) = 134,61 | 135,00 |
+| suggerito 32,10; più basso 40,00; 4 copie; want/have 0,05 | 40,00 × (1 + 25%) = 50,00 | 50,00 |
+| suggerito 13,10; più basso 8,00; 40 copie | 13,10 (soglia minima) | 15,00 |
+
+Nel CSV per Discogs il prezzo esce sempre con due decimali e il punto (es.
+`12.50`).
 
 **Valute:** tutti i prezzi sono nella **valuta del tuo account venditore**,
 che lo script legge da Discogs all'avvio. I prezzi suggeriti arrivano già in
@@ -480,7 +507,7 @@ want/have, premi applicati e conto finale. Per esempio:
 ```
 suggerito NM 24,20; più basso in vendita 50,00; base = più basso in vendita 50,00;
 2 copie in vendita (1-2) +50%; want/have 300/100 = 3,00 > 1 +10%;
-prezzo = 50,00 × (1 + 60%) = 80,00 EUR
+prezzo = 50,00 × (1 + 60%) = 80,00 EUR → arrotondato a griglia 2,50 = 80,00 EUR
 ```
 
 La colonna si trova in `inventario_foto.csv`, `annunci_pubblicati_api.csv` e
@@ -498,6 +525,8 @@ su Discogs, che devono contenere solo le colonne previste da Discogs.
 | `--premio-alcune-copie` | 25 | premio % con alcune copie |
 | `--soglia-want-have` | 1 | rapporto want/have oltre il quale scatta il premio richiesta |
 | `--premio-richiesta` | 10 | premio richiesta % |
+| `--passo-prezzo` | 2.50 | passo della griglia: il prezzo finale si arrotonda per eccesso a un suo multiplo |
+| `--prezzo-minimo` | 2.50 | prezzo minimo assoluto di un annuncio |
 
 Attenzione: il prezzo più basso in vendita è quello di una copia qualsiasi, in
 qualunque grado. Per un disco in grado basso la base può quindi risultare alta.
