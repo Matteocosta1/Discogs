@@ -2,12 +2,12 @@
 """
 Mette in vendita (For Sale) le bozze (Draft) create da vendi.py --bozza.
 
-  1. prende da data/vendita_stato.sqlite gli annunci creati in bozza da
-     vendi.py: righe dei CSV di inventario con status DRAFT (dopo che li hai
-     caricati su Discogs) e annunci creati via API in bozza;
+  1. prende da data/vendita_stato.sqlite gli annunci creati in bozza via API da
+     vendi.py --bozza (le bozze esistono solo via API: Discogs ignora DRAFT nei
+     CSV e mette subito in vendita le righe caricate);
   2. cerca nel tuo inventario Discogs le bozze con quegli external_id: le
      bozze che hai già messo in vendita o cancellato a mano non ci sono più e
-     vengono saltate, come le righe di CSV non ancora caricati;
+     vengono saltate;
   3. mostra quante bozze sta per mettere in vendita (e il totale dei prezzi) e
      chiede conferma;
   4. le mette in vendita via API una per una, con il prezzo e i gradi che
@@ -33,11 +33,10 @@ EXAMPLES = 10  # quante bozze mostrare prima della conferma
 
 
 def our_drafts(state):
-    """{external_id: origine} degli annunci che vendi.py ha creato in bozza, e {listing_id: external_id} di quelli
-    creati via API (per ritrovarli anche se Discogs non restituisce l'external_id)."""
+    """{external_id: origine} degli annunci che vendi.py ha creato in bozza via API, e {listing_id: external_id}
+    (per ritrovarli anche se Discogs non restituisce l'external_id). Le righe CSV non c'entrano: Discogs
+    ignora DRAFT nei CSV, quindi una riga caricata è già in vendita."""
     by_eid, by_listing = {}, {}
-    for r in state.execute("SELECT external_id FROM righe_csv WHERE status = 'DRAFT'"):
-        by_eid[r["external_id"]] = "CSV"
     for r in state.execute("SELECT external_id, listing_id FROM annunci_api "
                            "WHERE status = 'DRAFT' AND stato = 'pubblicato'"):
         by_eid[r["external_id"]] = "API"
@@ -127,14 +126,12 @@ def main():
         for item, eid, _origin in old:
             print(f"  {eid}: listing {item['id']} https://www.discogs.com/sell/item/{item['id']}")
     if not drafts:
-        print("Nessuna bozza da mettere in vendita: sono già tutte in vendita o cancellate,\n"
-              "oppure i CSV con le bozze non sono ancora stati caricati su Discogs.")
+        print("Nessuna bozza da mettere in vendita: sono già tutte in vendita o cancellate.")
         return
 
-    from_csv = sum(1 for _, _, o in drafts if o == "CSV")
     currencies = {(item.get("price") or {}).get("currency", "") for item, _, _ in drafts}
     total = sum((item.get("price") or {}).get("value") or 0 for item, _, _ in drafts)
-    print(f"\nBozze da mettere in vendita: {len(drafts)} ({from_csv} dai CSV, {len(drafts) - from_csv} create via API)")
+    print(f"\nBozze da mettere in vendita: {len(drafts)}")
     if len(currencies) == 1:
         print(f"Totale dei prezzi: {fmt(total)} {currencies.pop()}")
     for item, eid, origin in drafts[:EXAMPLES]:

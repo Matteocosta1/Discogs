@@ -7,16 +7,17 @@ Controlla cosa è davvero online su Discogs tra i dischi preparati da vendi.py.
      in bozza e, se Discogs li restituisce, venduti e scaduti;
   3. per ogni riga dei CSV di inventario e ogni annuncio creato via API dice se
      l'external_id è online e in che stato, e lo salva in data/vendita_stato.sqlite
-     (in_vendita / bozza / venduto / scaduto / assente / sparito);
+     (in_vendita / bozza / venduto / scaduto / assente / bozza_cancellata / sparito);
   4. corregge lo status delle righe CSV caricate come DRAFT: Discogs ignora DRAFT
      nei CSV e le mette subito in vendita;
   5. stampa un riepilogo e, soprattutto, le righe generate ma NON online, divise per
      file CSV (CSV mai caricato o righe scartate da Discogs); scrive anche
      risultati/verifica_inventario.csv con l'esito di ogni riga;
-  6. con --libera, dopo conferma, toglie dallo stato le righe mai state online: le
-     loro foto tornano elaborabili al prossimo vendi.py, senza rifare il
-     riconoscimento e senza pagare di nuovo l'AI. Le righe che erano online e ora
-     non ci sono più ("sparito": vendute o cancellate) non vengono mai liberate.
+  6. con --libera, dopo conferma, toglie dallo stato le righe mai state online (o
+     bozze poi cancellate): le loro foto tornano elaborabili al prossimo vendi.py,
+     senza rifare il riconoscimento e senza pagare di nuovo l'AI. Le righe che
+     erano in vendita e ora non ci sono più ("sparito": vendute o cancellate) non
+     vengono mai liberate.
 
 Esempi:
     python3 verifica_inventario.py
@@ -81,13 +82,14 @@ def main():
             copies = row["quantita"] if table == "righe_csv" else 1
             counts[row["online"]] = counts.get(row["online"], 0) + copies
             where, text = describe(table, row)
-            if row["online"] == "assente":
-                not_online.setdefault(where, []).append(text)
+            if row["online"] in ("assente", "bozza_cancellata"):
+                not_online.setdefault(where, []).append(text + (" (bozza cancellata)"
+                                                                if row["online"] == "bozza_cancellata" else ""))
             elif row["online"] == "sparito":
                 gone.append(f"{where}: {text}")
 
         print("\nRiepilogo (dischi, contando le copie)")
-        for key in ("in_vendita", "bozza", "venduto", "scaduto", "assente", "sparito"):
+        for key in ("in_vendita", "bozza", "venduto", "scaduto", "assente", "bozza_cancellata", "sparito"):
             if counts.get(key):
                 print(f"  {ONLINE_IT[key]}: {counts[key]}")
         if not rows:

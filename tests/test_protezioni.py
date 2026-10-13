@@ -145,9 +145,10 @@ class FakeAPI:
             stats["lowest_price"] = {**stats["lowest_price"], "currency": "EUR"}
         return stats
 
-    def create_listing(self, *args, **kwargs):
-        self.listings.append(args)
-        return {"listing_id": len(self.listings)}
+    def create_listing(self, release_id, condition, sleeve_condition, price, external_id, status="For Sale"):
+        self.listings.append((release_id, condition, sleeve_condition, price, external_id, status))
+        item = self.add_listing(external_id, release_id, price, status)  # su Discogs compare subito
+        return {"listing_id": item["id"]}
 
     def inventory_page(self, username, page, status=None):
         self.log.append(("inventory", status))
@@ -254,7 +255,7 @@ class TestProtezioni(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_casi_reali(self):
-        self.run.main("--bozza")
+        self.run.main()
         listed = {r["external_id"]: r for r in self.run.inventory()}
         check = self.run.to_check()
 
@@ -278,7 +279,7 @@ class TestProtezioni(unittest.TestCase):
         # Match pulito per catalogo: nel CSV come prima
         self.assertEqual(listed["IMG_0003"]["release_id"], "3993455")
         self.assertEqual(listed["IMG_0003"]["price"], "20.00")
-        self.assertEqual(listed["IMG_0003"]["status"], "DRAFT")
+        self.assertEqual(listed["IMG_0003"]["status"], "FOR_SALE")
         self.assertNotIn("IMG_0003", check)
 
         # Match pulito per artista e titolo: supera la verifica e va nel CSV
@@ -298,11 +299,11 @@ class TestProtezioni(unittest.TestCase):
         self.assertEqual(self.run.read_csv("collezionistici.csv"), [])
 
         # Rilanciando, le foto da verificare restano fuori dal CSV
-        self.run.main("--bozza")
+        self.run.main()
         self.assertEqual(sorted(r["external_id"] for r in self.run.inventory()), ["IMG_0003", "IMG_0004"])
 
     def test_soglia_controllo_configurabile(self):
-        self.run.main("--bozza", "--soglia-controllo", "150")
+        self.run.main("--soglia-controllo", "150")
         listed = {r["external_id"]: r for r in self.run.inventory()}
         self.assertEqual(listed["IMG_0005"]["price"], "120.00")  # 120 € sotto la soglia di 150
         self.assertIn("IMG_0001", self.run.to_check())           # il caso 1 resta da controllare
@@ -313,21 +314,30 @@ class TestProtezioni(unittest.TestCase):
         self.assertIn("--bozza", str(e.exception))
 
     def test_rielabora_ripete_le_foto(self):
-        self.run.main("--bozza")
+        self.run.main("--bozza")  # IMG_0003 e IMG_0004 diventano bozze via API
         self.assertEqual(FakeAI.reads, ["IMG_0001"])
         out = self.run.main("--bozza")  # senza --rielabora: tutto già fatto, l'AI non viene richiamata
         self.assertEqual(FakeAI.reads, ["IMG_0001"])
         self.assertIn("foto già in vendita:         2", out)
 
+        # Le bozze sono online su Discogs: --rielabora non le tocca, rielabora solo le altre 3 foto
+        out = self.run.main("--bozza", "--rielabora")
+        self.assertIn("3 foto verranno rielaborate", out)
+        self.assertIn("saltate perché online", out)
+        self.assertEqual(FakeAI.reads, ["IMG_0001", "IMG_0001"])  # l'AI rilegge la foto
+        self.assertEqual(len(self.run.api.listings), 2)            # nessun doppione
+
+        # Cancellate le bozze su Discogs, si rielabora tutto
+        self.run.api.inventory = []
         out = self.run.main("--bozza", "--rielabora")
         self.assertIn("5 foto verranno rielaborate", out)
-        self.assertEqual(FakeAI.reads, ["IMG_0001", "IMG_0001"])  # l'AI rilegge la foto
-        self.assertEqual(sorted(r["external_id"] for r in self.run.inventory()), ["IMG_0003", "IMG_0004"])
+        self.assertEqual(sorted(l[4] for l in self.run.api.listings), ["IMG_0003", "IMG_0003", "IMG_0004", "IMG_0004"])
+        self.assertEqual(self.run.inventory(), [])
         self.assertIn("IMG_0001", self.run.to_check())
-        # La spesa AI della prima esecuzione resta contata nel tetto
+        # La spesa AI delle esecuzioni precedenti resta contata nel tetto
         state = sqlite3.connect(self.run.tmp / "vendita_stato.sqlite")
         self.addCleanup(state.close)
-        self.assertAlmostEqual(state.execute("SELECT SUM(ai_costo) FROM foto").fetchone()[0], 0.04)
+        self.assertAlmostEqual(state.execute("SELECT SUM(ai_costo) FROM foto").fetchone()[0], 0.06)
         self.assertGreater(state.execute("SELECT COUNT(*) FROM rielaborati").fetchone()[0], 0)
 
     def test_rielabora_non_tocca_le_foto_in_vendita(self):
@@ -353,7 +363,7 @@ class TestNonVendibili(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_bloccata_in_non_vendibili_vendibile_nel_csv(self):
-        out = self.run.main("--bozza")
+        out = self.run.main()
         listed = {r["external_id"]: r for r in self.run.inventory()}
 
         # 1. Bloccata: in non_vendibili.csv, non nel CSV, nessuna richiesta di prezzo o statistiche
@@ -378,7 +388,7 @@ class TestNonVendibili(unittest.TestCase):
 
     def test_verifica_fallita_va_in_da_controllare(self):
         self.run.api.failing = {4207270}
-        out = self.run.main("--bozza")
+        out = self.run.main()
         self.assertNotIn("IMG_0006", {r["external_id"] for r in self.run.inventory()})
         row = self.run.to_check()["IMG_0006"]
         self.assertIn("impossibile verificare se è vendibile", row["motivo"])
@@ -388,30 +398,32 @@ class TestNonVendibili(unittest.TestCase):
 
         # Al giro dopo, con Discogs di nuovo raggiungibile, la verifica viene rifatta e va nel CSV
         self.run.api.failing = set()
-        self.run.main("--bozza")
+        self.run.main()
         self.assertIn("IMG_0006", {r["external_id"] for r in self.run.inventory()})
         self.assertNotIn("IMG_0006", self.run.to_check())
 
     def test_campo_assente_va_in_da_controllare(self):
         with mock.patch.object(FakeAPI, "release", lambda self, rid: {"id": rid, "community": MARKET[rid][1]}):
-            self.run.main("--bozza")
+            self.run.main()
         self.assertEqual(self.run.inventory(), [])
         self.assertIn("blocked_from_sale", self.run.to_check()["IMG_0006"]["motivo"])
 
     def test_secondo_giro_senza_chiamate(self):
-        self.run.main("--bozza")
+        self.run.main()
         self.run.api.log = []
-        out = self.run.main("--bozza")
+        out = self.run.main()
         # 4. La release non vendibile viene saltata senza nessuna richiesta a Discogs
         self.assertEqual(self.run.api.log, [])
         self.assertEqual(len(self.run.read_csv("non_vendibili.csv")), 1)
         self.assertIn("dischi non vendibili (bloccati da Discogs): 1", out)
 
-        # Con --rielabora invece la vendibilità viene ricontrollata
+        # Con --rielabora invece la vendibilità viene ricontrollata (il CSV non era stato caricato)
         self.run.api.blocked = set()
         self.run.main("--bozza", "--rielabora")
         self.assertIn(("release", 3993455), self.run.api.log)
-        self.assertEqual(sorted(r["external_id"] for r in self.run.inventory()), ["IMG_0003", "IMG_0006"])
+        self.assertEqual(self.run.inventory(), [])
+        self.assertEqual(sorted((l[4], l[5]) for l in self.run.api.listings),
+                         [("IMG_0003", "Draft"), ("IMG_0006", "Draft")])
         self.assertEqual(self.run.read_csv("non_vendibili.csv"), [])
 
 
@@ -453,7 +465,7 @@ class TestGriglia(unittest.TestCase):
     def run_photos(self, photos, *options):
         with tempfile.TemporaryDirectory() as tmp:
             run = Run(tmp, photos=photos)
-            run.main("--bozza", *options)
+            run.main(*options)
             return run.inventory(), run.to_check(), run.read_csv("inventario_foto.csv")
 
     def test_end_to_end_csv(self):

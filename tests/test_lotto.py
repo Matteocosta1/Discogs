@@ -227,7 +227,8 @@ class TestRielaboraSicuro(TempRun):
         self.run.main("--bozza", "--rielabora")
         rows = self.rows()
         self.assertEqual(rows["IMG_0006"]["parte"], 1)   # online: intatta
-        self.assertGreater(rows["IMG_0003"]["parte"], 1) # non era online: rielaborata, in un file nuovo
+        self.assertNotIn("IMG_0003", rows)                # non era online: rielaborata, ora bozza via API
+        self.assertEqual([(l[4], l[5]) for l in self.run.api.listings], [("IMG_0003", "Draft")])
         archived_rows = self.state().execute("SELECT external_id FROM rielaborati WHERE tabella = 'righe_csv'")
         self.assertEqual([r[0] for r in archived_rows], ["IMG_0003"])
         archived = list((self.run.out / "archivio").glob("inventario_001_PRIMA_*.csv"))
@@ -239,7 +240,56 @@ class TestRielaboraSicuro(TempRun):
         self.assertFalse(self.csv.exists())       # nessun file nuovo con lo stesso nome
         annullato = self.run.out / "archivio" / "inventario_001_ANNULLATO.csv"
         self.assertEqual(annullato.read_text(), self.before)
-        self.assertEqual(min(r["parte"] for r in self.rows().values()), 2)
+        self.assertEqual(self.rows(), {})                  # con --bozza le foto diventano bozze via API
+        self.assertEqual(sorted(l[4] for l in self.run.api.listings), ["IMG_0003", "IMG_0006"])
+
+
+# --------------------------------------------------------------------------
+# Punto 2: --bozza crea bozze vere via API, il CSV è sempre FOR_SALE
+# --------------------------------------------------------------------------
+
+class TestBozza(TempRun):
+    photos = {"VG+": ["IMG_0003", "IMG_0006"], "NM": ["IMG_0004"]}
+
+    def test_bozza_solo_via_api(self):
+        out = self.run.main("--bozza")
+        self.assertEqual(self.run.inventory(), [])                     # nessuna riga nel CSV
+        self.assertEqual(sorted((l[4], l[5]) for l in self.run.api.listings),
+                         [("IMG_0003", "Draft"), ("IMG_0004", "Draft"), ("IMG_0006", "Draft")])
+        state = self.state()
+        self.assertEqual({r["external_id"]: (r["stato"], r["status"])
+                          for r in state.execute("SELECT * FROM annunci_api")},
+                         {e: ("pubblicato", "DRAFT") for e in ("IMG_0003", "IMG_0004", "IMG_0006")})
+        self.assertIn("creato in bozza", out)
+
+    def test_senza_bozza_csv_for_sale(self):
+        self.run.main()
+        rows = self.run.inventory()
+        self.assertEqual(sorted(r["external_id"] for r in rows), ["IMG_0003", "IMG_0004", "IMG_0006"])
+        self.assertTrue(all(r["status"] == "FOR_SALE" for r in rows))
+        self.assertEqual(self.run.api.listings, [])
+
+    def test_nessun_csv_con_draft(self):
+        self.run.main()
+        state = self.state()
+        state.execute("UPDATE righe_csv SET status = 'DRAFT'")  # righe del vecchio --bozza nello stato
+        state.commit()
+        vendi.write_outputs(state, self.run.out, [], [])
+        text = "".join(p.read_text() for p in self.run.out.glob("inventario_*.csv"))
+        self.assertNotIn("DRAFT", text)
+
+    def test_salvato_in_corso_prima_dell_invio(self):
+        seen = []
+        original = self.run.api.create_listing
+
+        def create(release_id, *args):
+            row = self.state().execute("SELECT stato FROM annunci_api WHERE external_id = ?", (args[3],)).fetchone()
+            seen.append(row["stato"])
+            return original(release_id, *args)
+
+        self.run.api.create_listing = create
+        self.run.main("--bozza")
+        self.assertEqual(seen, ["in_corso"] * 3)
 
 
 if __name__ == "__main__":

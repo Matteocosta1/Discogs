@@ -39,12 +39,14 @@ del file senza estensione è l'external_id.
      quantity = numero di foto (max 1.000 dischi per file);
      trovato solo via API -> un annuncio via API per foto (l'API non ha un
      campo quantità), con external_id = nome della foto;
-     con --bozza gli annunci sono in bozza (Draft) invece che in vendita.
+     con --bozza TUTTI gli annunci si creano via API in bozza (Draft), uno per
+     foto: Discogs ignora DRAFT nei CSV e li metterebbe subito in vendita.
+     Il CSV contiene sempre e solo righe FOR_SALE.
 
 Tutto lo stato è salvato in data/vendita_stato.sqlite: se lo script si
 interrompe, rilanciando lo stesso comando riparte da dove era, senza annunci doppi.
 Con --rielabora --bozza le foto della cartella vengono rielaborate da capo
-(le foto già in vendita sono saltate).
+(le foto online su Discogs, o che lo sono state, sono saltate).
 
 Esempi:
     python3 vendi.py ~/Pictures/Dischi --limite 20 --simula
@@ -1479,7 +1481,8 @@ CREATE TABLE IF NOT EXISTS righe_csv (   -- righe già assegnate a un file CSV
     status      TEXT,     -- FOR_SALE / DRAFT (vuoto = FOR_SALE, versioni precedenti)
     online      TEXT,     -- da verifica_inventario.py: in_vendita / bozza / venduto / scaduto / assente / sparito
     online_verificato TEXT,  -- data dell'ultima verifica
-    online_visto TEXT     -- prima volta che è stata vista online su Discogs
+    online_visto TEXT,    -- prima volta che è stata vista online su Discogs
+    online_ultimo TEXT    -- ultimo stato visto online (in_vendita / bozza / ...)
 );
 CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     external_id TEXT PRIMARY KEY,   -- nome della foto
@@ -1495,7 +1498,8 @@ CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     status      TEXT,     -- FOR_SALE / DRAFT (vuoto = FOR_SALE, versioni precedenti)
     online      TEXT,     -- come in righe_csv
     online_verificato TEXT,
-    online_visto TEXT
+    online_visto TEXT,
+    online_ultimo TEXT
 );
 CREATE TABLE IF NOT EXISTS rielaborati (  -- stato archiviato da --rielabora (per sicurezza, mai cancellato)
     tabella     TEXT,
@@ -1556,7 +1560,8 @@ def open_state(path):
                                 ("foto", "motivo", "TEXT"), ("foto", "prezzo", "REAL"),
                                 ("righe_csv", "online", "TEXT"), ("righe_csv", "online_verificato", "TEXT"),
                                 ("righe_csv", "online_visto", "TEXT"), ("annunci_api", "online", "TEXT"),
-                                ("annunci_api", "online_verificato", "TEXT"), ("annunci_api", "online_visto", "TEXT")]:  # stato di una versione precedente
+                                ("annunci_api", "online_verificato", "TEXT"), ("annunci_api", "online_visto", "TEXT"),
+                                ("righe_csv", "online_ultimo", "TEXT"), ("annunci_api", "online_ultimo", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
@@ -1581,7 +1586,8 @@ INVENTORY_STATUSES = ["For Sale", "Draft", "Sold", "Expired"]
 ONLINE_OF = {"For Sale": "in_vendita", "Draft": "bozza", "Sold": "venduto", "Expired": "scaduto"}
 ONLINE_ORDER = ["in_vendita", "bozza", "venduto", "scaduto"]
 ONLINE_IT = {"in_vendita": "in vendita", "bozza": "in bozza", "venduto": "venduto", "scaduto": "scaduto",
-             "assente": "non online", "sparito": "sparito (era online: venduto o cancellato?)"}
+             "assente": "non online", "bozza_cancellata": "bozza cancellata",
+             "sparito": "sparito (era online: venduto o cancellato?)"}
 
 
 class InventoryUnreadable(Exception):
@@ -1632,8 +1638,10 @@ def online_of(items):
 
 def verify_listings(state, inventory):
     """Confronta righe CSV e annunci API dello stato con l'inventario Discogs e salva per ognuno
-    online (in_vendita / bozza / venduto / scaduto / assente / sparito), la data della verifica e
-    la prima volta che è stato visto online. Corregge lo status (FOR_SALE / DRAFT) in base a
+    online (in_vendita / bozza / venduto / scaduto / assente / bozza_cancellata / sparito), la data
+    della verifica, la prima volta che è stato visto online e l'ultimo stato visto online.
+    Non più online: "assente" se non lo è mai stato, "bozza_cancellata" se l'ultima volta era una
+    bozza (una bozza non si vende: è stata cancellata), "sparito" se era in vendita (venduto?). Corregge lo status (FOR_SALE / DRAFT) in base a
     Discogs: le righe CSV caricate come DRAFT sono in vendita, perché Discogs ignora DRAFT nei CSV.
     Restituisce [(tabella, riga aggiornata)]."""
     when = now()
@@ -1647,11 +1655,14 @@ def verify_listings(state, inventory):
             if items:
                 online = online_of(items)
                 status = {"in_vendita": "FOR_SALE", "bozza": "DRAFT"}.get(online, row["status"])
-                state.execute(f"UPDATE {table} SET online = ?, online_verificato = ?,"
+                state.execute(f"UPDATE {table} SET online = ?, online_ultimo = ?, online_verificato = ?,"
                               " online_visto = COALESCE(online_visto, ?), status = ? WHERE external_id = ?",
-                              (online, when, when, status, row["external_id"]))
+                              (online, online, when, when, status, row["external_id"]))
             else:
-                online = "sparito" if row["online_visto"] else "assente"
+                if not row["online_visto"]:
+                    online = "assente"
+                else:
+                    online = "bozza_cancellata" if row["online_ultimo"] == "bozza" else "sparito"
                 state.execute(f"UPDATE {table} SET online = ?, online_verificato = ? WHERE external_id = ?",
                               (online, when, row["external_id"]))
     state.commit()
@@ -1660,9 +1671,10 @@ def verify_listings(state, inventory):
 
 
 def can_free(table, row):
-    """True se la riga non è online e non lo è mai stata: si può togliere dallo stato senza rischiare
-    doppioni (mai una riga vista online, che potrebbe essere stata venduta)."""
-    if row["online"] != "assente" or row["online_visto"]:
+    """True se la riga non è online e non è mai stata in vendita: mai online, o bozza poi cancellata.
+    Si può togliere dallo stato senza rischiare doppioni. Mai una riga vista in vendita e poi
+    sparita, che potrebbe essere stata venduta."""
+    if row["online"] not in ("assente", "bozza_cancellata"):
         return False
     return table == "righe_csv" or row["stato"] != "in_corso"
 
@@ -1829,8 +1841,11 @@ LISTING_HEADER = ["external_id", "release_id", "price", "media_condition", "slee
                   "calcolo_prezzo"]
 
 
-def csv_row(release_id, price, media, sleeve, quantity, external_id, status):
-    return [release_id, f"{price:.2f}", GRADES[media], GRADES[sleeve], quantity, external_id, status or "FOR_SALE"]
+def csv_row(release_id, price, media, sleeve, quantity, external_id):
+    """Riga del CSV di inventario. Lo status è sempre FOR_SALE: Discogs ignora DRAFT nei CSV e mette
+    comunque in vendita, quindi un DRAFT nel file darebbe solo una falsa sicurezza (le bozze vere
+    si creano via API con --bozza)."""
+    return [release_id, f"{price:.2f}", GRADES[media], GRADES[sleeve], quantity, external_id, "FOR_SALE"]
 
 
 def write_csv(path, header, rows):
@@ -1907,15 +1922,15 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     for part, rows in parts.items():
         rows.sort(key=lambda r: natural_key(r["external_id"]))
         write_csv(out_dir / f"inventario_{part:03d}.csv", CSV_HEADER,
-                  [csv_row(r["release_id"], r["price"], r["media"], r["sleeve"], r["quantita"], r["external_id"],
-                           r["status"]) for r in rows])
+                  [csv_row(r["release_id"], r["price"], r["media"], r["sleeve"], r["quantita"], r["external_id"])
+                   for r in rows])
     # Quali foto sono finite in ogni riga (per ritrovare le copie).
     all_rows = sorted(state.execute("SELECT * FROM righe_csv").fetchall(),
                       key=lambda r: (r["parte"], natural_key(r["external_id"])))
     write_csv(out_dir / "inventario_foto.csv",
               ["file", "external_id", "release_id", "quantity", "prezzo", "status", "foto", "calcolo_prezzo"],
               [[f"inventario_{r['parte']:03d}.csv", r["external_id"], r["release_id"], r["quantita"],
-                f"{r['price']:.2f}", r["status"] or "FOR_SALE", r["foto"], r["calcolo"] or ""] for r in all_rows])
+                f"{r['price']:.2f}", "FOR_SALE", r["foto"], r["calcolo"] or ""] for r in all_rows])
 
     published = sorted(state.execute("SELECT * FROM annunci_api WHERE stato = 'pubblicato'").fetchall(),
                        key=lambda r: natural_key(r["external_id"]))
@@ -2020,8 +2035,8 @@ def main():
                              "vendita ma in da_controllare.csv (default 100)")
     parser.add_argument("--limite", type=int, help="elabora solo le prime N foto (prova)")
     parser.add_argument("--bozza", action="store_true",
-                        help="crea gli annunci come bozza (Draft) invece che in vendita (For Sale), "
-                             "sia nel CSV di inventario sia via API")
+                        help="crea tutti gli annunci come bozza (Draft) via API, anche quelli che andrebbero nel CSV "
+                             "(Discogs ignora DRAFT nei CSV e li metterebbe subito in vendita); un annuncio per foto")
     parser.add_argument("--simula", action="store_true",
                         help="non pubblica annunci via API e non modifica i CSV veri: scrive tutto in risultati/simulazione/")
     parser.add_argument("--riprova", action="store_true",
@@ -2286,7 +2301,8 @@ def main():
                 info = f"release {release_id} {media}" + (f" x{len(members)}" if len(members) > 1 else "") + \
                     f" ({names}): {price:.2f} {currency}" + (f" [COLLEZIONISTICO, punteggio {collector[0]}]"
                                                              if collector else "")
-            is_csv = any(is_local_source(r["fonte"]) for _, r in members)
+            # Trovato in locale -> CSV; ma con --bozza sempre via API, perché Discogs ignora DRAFT nei CSV.
+            is_csv = not args.bozza and any(is_local_source(r["fonte"]) for _, r in members)
             if collector:
                 stats["collezionistici"] += 1
                 c_row = [members[0][0].external_id, release_id, media, len(members),
@@ -2304,21 +2320,21 @@ def main():
                 quantity = len(members)
                 photos_text = ", ".join(p.name for p, _ in members)
                 if args.simula:
-                    simulated_csv.append(csv_row(release_id, price, media, sleeve, quantity, row_id, status))
-                    simulated_rows_info.append([row_id, release_id, quantity, f"{price:.2f}", status, photos_text,
+                    simulated_csv.append(csv_row(release_id, price, media, sleeve, quantity, row_id))
+                    simulated_rows_info.append([row_id, release_id, quantity, f"{price:.2f}", "FOR_SALE", photos_text,
                                                 calc])
                 else:
                     state.execute(
                         "INSERT INTO righe_csv (external_id, parte, release_id, price, media, sleeve, quantita, foto,"
                         " calcolo, status) VALUES (?,?,?,?,?,?,?,?,?,?)",
                         (row_id, parts.assign(quantity), release_id, price, media, sleeve, quantity, photos_text, calc,
-                         status))
+                         "FOR_SALE"))
                     for p, _ in members:
                         state.execute("UPDATE foto SET riga_csv = ? WHERE external_id = ?", (row_id, p.external_id))
                 state.commit()
                 stats["righe_csv"] += 1
                 stats["copie_csv"] += quantity
-                print(f"{info} -> CSV" + (" (bozza)" if args.bozza else ""))
+                print(f"{info} -> CSV")
                 continue
 
             # Trovato solo via API: un annuncio per foto (l'API non ha un campo quantità).
