@@ -474,5 +474,57 @@ class TestCacheScadenza(TempRun):
         self.assertEqual(self.calls(4207270), ["price_suggestions"])
 
 
+# --------------------------------------------------------------------------
+# Punto 6: fronte e retro dello stesso disco non diventano 2 copie
+# --------------------------------------------------------------------------
+
+class TestStessoDisco(TempRun):
+    # IMG_0003 e IMG_0004 sono entrambe 3993455 (Moodymann - Picture This Sampler 3), stesso grado
+    photos = {"VG+": ["IMG_0003", "IMG_0004"]}
+    BASE = vendi.dt.datetime(2026, 10, 13, 15, 0, 0)
+
+    def main_with_exif(self, seconds, *options):
+        taken = {"IMG_0003": self.BASE,
+                 "IMG_0004": None if seconds is None else self.BASE + vendi.dt.timedelta(seconds=seconds)}
+        with mock.patch("vendi.photo_taken_at", lambda path: taken.get(Path(path).stem)):
+            return self.run.main(*options)
+
+    def listed(self):
+        return [(r["external_id"], r["quantity"]) for r in self.run.inventory()]
+
+    def test_scatti_a_20_secondi_da_controllare(self):
+        out = self.main_with_exif(20)
+        self.assertEqual(self.listed(), [])
+        check = self.run.to_check()
+        self.assertEqual(set(check), {"IMG_0003", "IMG_0004"})
+        self.assertIn("stesso disco fotografato più volte (scatti a 20 secondi di distanza)",
+                      check["IMG_0003"]["motivo"])
+        self.assertIn("DA CONTROLLARE", out)
+        self.assertNotIn(("price_suggestions", 3993455), self.run.api.log)   # nessuna richiesta a Discogs
+
+    def test_scatti_a_10_minuti_due_copie(self):
+        self.main_with_exif(600)
+        self.assertEqual(self.listed(), [("IMG_0003", "2")])
+
+    def test_senza_exif_due_copie_con_avviso(self):
+        out = self.main_with_exif(None)
+        self.assertEqual(self.listed(), [("IMG_0003", "2")])
+        self.assertIn("senza data di scatto EXIF (IMG_0004)", out)
+
+    def test_copie_consecutive(self):
+        self.main_with_exif(20, "--copie-consecutive")
+        self.assertEqual(self.listed(), [("IMG_0003", "2")])
+
+    def test_soglia_configurabile_e_ripresa(self):
+        self.main_with_exif(20, "--secondi-stesso-disco", "10")   # 20 s > 10 s: copie diverse
+        self.assertEqual(self.listed(), [("IMG_0003", "2")])
+
+    def test_tolta_la_foto_doppia_va_in_vendita(self):
+        self.main_with_exif(20)
+        (self.run.photos / "VG+" / "IMG_0004.JPG").unlink()       # tengo solo il fronte
+        self.main_with_exif(20)
+        self.assertEqual(self.listed(), [("IMG_0003", "1")])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -92,7 +92,7 @@ GRADES = {
 }
 
 # Esiti del riconoscimento che finiscono nel file da controllare.
-PROBLEMS = {"non_trovato", "multiplo", "senza_prezzo", "errore", "da_verificare", "non_verificato"}
+PROBLEMS = {"non_trovato", "multiplo", "senza_prezzo", "errore", "da_verificare", "non_verificato", "stesso_disco"}
 
 
 def now():
@@ -1870,6 +1870,22 @@ CACHE_PRICES_DAYS = 30        # prezzi suggeriti e dati del marketplace
 CACHE_SELLABLE_DAYS = 90      # vendibilità (blocked_from_sale)
 
 
+SAME_RECORD_SECONDS = 90
+
+
+def same_record_gap(photos, seconds):
+    """Foto della stessa release e dello stesso grado: (secondi tra i due scatti più vicini se sotto
+    `seconds`, altrimenti None; foto senza data di scatto EXIF). Due scatti a pochi secondi sono quasi
+    sempre lo stesso disco (fronte e retro), non due copie. Senza EXIF non si decide: la data del file
+    non vale (con AirDrop è uguale per tutte)."""
+    taken = [(photo_taken_at(p.path), p) for p in photos]
+    missing = [p for t, p in taken if t is None]
+    times = sorted(t for t, _p in taken if t is not None)
+    gaps = [(b - a).total_seconds() for a, b in zip(times, times[1:])]
+    close = min((g for g in gaps if g < seconds), default=None)
+    return close, missing
+
+
 def is_stale(when, max_age_days):
     """True se un dato salvato il `when` (ISO) è più vecchio di max_age_days giorni (None = mai)."""
     if max_age_days is None:
@@ -1989,6 +2005,7 @@ REASONS = {
     "errore": "errore durante l'elaborazione",
     "da_verificare": "riconoscimento da verificare a mano",
     "non_verificato": "impossibile verificare se è vendibile",
+    "stesso_disco": "probabilmente lo stesso disco fotografato più volte",
 }
 CHECK_HEADER = ["foto", "cartella", "motivo", "release_id_proposto", "disco_proposto", "metodo", "prezzo_calcolato",
                 "link_proposto", "dettagli", "candidati"]
@@ -2154,6 +2171,12 @@ def main():
     parser.add_argument("--uscita", default=str(OUT_DIR), help="cartella dei risultati (default: risultati/)")
     parser.add_argument("--backup-da-tenere", type=int, default=BACKUPS_TO_KEEP,
                         help=f"copie dello stato da tenere in data/backup/ (default {BACKUPS_TO_KEEP})")
+    parser.add_argument("--secondi-stesso-disco", type=float, default=SAME_RECORD_SECONDS,
+                        help="due foto della stessa release e grado scattate a meno di tanti secondi sono considerate "
+                             f"lo stesso disco (es. fronte e retro) e vanno da controllare (default {SAME_RECORD_SECONDS})")
+    parser.add_argument("--copie-consecutive", action="store_true",
+                        help="disattiva il controllo sui secondi: le foto della stessa release e grado sono sempre "
+                             "copie diverse (quando fotografi davvero più copie una dopo l'altra)")
     parser.add_argument("--cache-prezzi-giorni", type=float, default=CACHE_PRICES_DAYS,
                         help="dopo quanti giorni prezzi suggeriti, copie in vendita e want/have salvati si richiedono "
                              f"di nuovo a Discogs (default {CACHE_PRICES_DAYS})")
@@ -2289,7 +2312,7 @@ def main():
                 if rec.esito == "sospeso":
                     budget_stop = True
                     break
-            if row["esito"] in ("trovato", "senza_prezzo", "non_verificato"):
+            if row["esito"] in ("trovato", "senza_prezzo", "non_verificato", "stesso_disco"):
                 todo.append((photo, row))
             elif row["esito"] == "non_vendibile":
                 checked = state.execute("SELECT ottenuto FROM vendibilita WHERE release_id = ?",
@@ -2314,6 +2337,24 @@ def main():
             # Foto già da verificare: serve solo il prezzo da mostrare in da_controllare.csv
             to_check = [(p, r) for p, r in members if r["esito"] == "da_verificare"]
             members = [(p, r) for p, r in members if r["esito"] != "da_verificare"]
+
+            # Più foto della stessa release e grado: copie diverse o lo stesso disco fotografato più volte?
+            if len(members) >= 2 and not args.copie_consecutive:
+                close, no_exif = same_record_gap([p for p, _ in members], args.secondi_stesso_disco)
+                if close is not None:
+                    reason = (f"probabilmente lo stesso disco fotografato più volte (scatti a {close:.0f} secondi di "
+                              "distanza): tieni una sola foto per copia, o usa --copie-consecutive")
+                    for p, _ in members:
+                        state.execute("UPDATE foto SET esito = 'stesso_disco', motivo = ? WHERE external_id = ?",
+                                      (reason, p.external_id))
+                    state.commit()
+                    stats["problemi"] += len(members)
+                    print(f"{label} ({names}): DA CONTROLLARE, {reason}")
+                    continue
+                if no_exif:
+                    print(f"Attenzione: {label}: {len(no_exif)} foto senza data di scatto EXIF "
+                          f"({', '.join(p.external_id for p in no_exif)}): non posso controllare se sono lo stesso "
+                          "disco, le conto come copie diverse")
 
             # La release si può vendere? Una richiesta per release (GET /releases/{id}), poi in cache.
             # Se è bloccata: niente prezzo, niente statistiche, niente annuncio.
