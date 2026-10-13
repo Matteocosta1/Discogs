@@ -1,17 +1,32 @@
 # Discogs: database locale e messa in vendita
 
-Tre script:
+Gli script:
 
 - **`discogs_dump.py`**: scarica il dump mensile delle release di Discogs e lo
   importa in un database SQLite locale (`data/discogs.sqlite`), con indici su
   barcode, numero di catalogo e parole di artista e titolo.
+- **`rinomina_foto.py`**: rinomina le foto nuove con data e ora di scatto
+  (`20261013_154233_IMG_2087.HEIC`), così due telefoni non producono mai due
+  foto con lo stesso nome.
 - **`vendi.py`**: riconosce i dischi da una foto qualsiasi (fronte, retro o
   etichetta), senza interventi manuali, calcola il prezzo dai dati del
   marketplace Discogs e prepara la vendita. I dischi trovati nel
   database locale finiscono nei CSV di caricamento dell'inventario. Quelli
-  trovati solo via API vengono pubblicati direttamente via API.
+  trovati solo via API vengono pubblicati direttamente via API. Con `--bozza`
+  tutti diventano bozze via API.
+- **`verifica_inventario.py`**: controlla cosa è davvero online su Discogs
+  (dopo aver caricato un CSV) e lo salva nello stato.
 - **`pubblica_bozze.py`**: mette in vendita, in blocco e dopo la tua conferma,
-  gli annunci che `vendi.py --bozza` ha creato in bozza.
+  le bozze che `vendi.py --bozza` ha creato via API.
+
+**Flusso consigliato per ogni lotto:**
+
+1. `python3 rinomina_foto.py ~/Pictures/Dischi` (foto nuove con nomi unici);
+2. `caffeinate -i python3 vendi.py ~/Pictures/Dischi` (CSV + annunci API);
+3. carica i nuovi `risultati/inventario_NNN.csv` su Discogs;
+4. `python3 verifica_inventario.py` (cosa è davvero online, righe scartate).
+
+Ogni script che modifica lo stato ne fa prima una copia in `data/backup/`.
 
 Il database, i token e le chiavi (`.env`) e i risultati sono nel `.gitignore`, quindi non
 finiscono mai nella repository.
@@ -178,6 +193,13 @@ quando la parte locale non basta.
    può determinare, sceglie la più probabile in base agli indizi visibili.
    - Se dopo il passo 3 c'è un solo candidato, o uno è chiaramente il migliore,
      lo script salta questa seconda chiamata e risparmia.
+
+**Secondo tentativo con un modello più forte.** Se dopo il modello principale
+(`claude-haiku-4-5`) una foto resta non trovata o con più release possibili,
+lo script riprova una volta con `claude-sonnet-5-5` (`--ai-modello-secondo`),
+con lo stesso tetto di spesa e le stesse protezioni. Il risultato resta in
+cache come il primo: non si paga mai due volte. `--senza-secondo-tentativo`
+lo disattiva.
 
 **Regola di sicurezza: l'AI non può inventare.**
 - La release scelta deve sempre esistere nel database o su Discogs: l'AI può
@@ -364,8 +386,100 @@ metterli in vendita:
 caffeinate -i python3 vendi.py ~/Pictures/Dischi --bozza
 ```
 
+- **Discogs ignora `DRAFT` nei CSV**: una riga caricata con status DRAFT va
+  subito in vendita. Per questo con `--bozza` **nessun disco va nel CSV**:
+  tutti diventano bozze vere **via API**, un annuncio per foto (l'API non ha
+  il campo quantità). Senza `--bozza` il CSV resta come sempre, con `FOR_SALE`.
+  Nessun CSV contiene più `DRAFT`.
+- Con migliaia di bozze serve tempo: una richiesta per foto, al massimo 60 al
+  minuto.
+
 Quando le hai controllate, le metti in vendita tutte insieme con
 `pubblica_bozze.py` (vedi "Mettere in vendita le bozze" più sotto).
+
+### Dopo il caricamento del CSV: `verifica_inventario.py`
+
+Per lo script "riga nel CSV" non vuol dire "online": il CSV potrebbe non
+essere mai stato caricato, o Discogs potrebbe aver scartato delle righe (per
+esempio le release bloccate). Dopo ogni caricamento lancia:
+
+```bash
+python3 verifica_inventario.py
+```
+
+1. Fa un backup dello stato e scarica **tutto il tuo inventario** Discogs,
+   tutte le pagine: in vendita, bozze e, se Discogs li restituisce, venduti e
+   scaduti.
+2. Per ogni riga dei CSV e ogni annuncio API salva nello stato se è online e
+   come: **in vendita**, **in bozza**, **venduto**, **scaduto**, **non online**
+   (mai visto su Discogs), **bozza cancellata** o **sparito** (era in vendita e
+   non c'è più: venduto o cancellato a mano).
+3. Corregge lo status delle righe caricate come DRAFT: su Discogs sono in
+   vendita.
+4. Stampa il riepilogo e le **righe generate ma non online**, divise per file
+   CSV (CSV mai caricato o righe scartate). Il dettaglio è in
+   `risultati/verifica_inventario.csv`.
+
+Le righe mai state online si possono **liberare**: le loro foto tornano
+elaborabili al prossimo `vendi.py`, senza rifare il riconoscimento e senza
+pagare di nuovo l'AI.
+
+```bash
+python3 verifica_inventario.py --libera
+```
+
+- Chiede conferma (`s`) prima di toccare qualcosa.
+- Non libera mai una riga che è stata **in vendita** e poi è sparita: potrebbe
+  essere stata venduta, e rimetterla in vendita creerebbe un doppione. Una
+  bozza cancellata invece si può liberare: una bozza non si vende.
+- **Non cancella mai un file CSV**: un file rimasto senza righe va in
+  `risultati/archivio/inventario_NNN_ANNULLATO.csv` (non caricarlo), uno che
+  perde solo alcune righe viene prima copiato in archivio
+  (`inventario_NNN_PRIMA_<data>.csv`) e poi riscritto.
+- Se l'inventario non si legge (rete, errore di Discogs) si ferma senza
+  modificare niente.
+
+### Nomi delle foto: `rinomina_foto.py`
+
+Il nome della foto è l'`external_id`. Con due telefoni, o quando il
+contatore dell'iPhone ricomincia, due foto diverse possono chiamarsi entrambe
+`IMG_2087`. `vendi.py` ora se ne accorge: salva un'**impronta del contenuto**
+(SHA-256) di ogni foto e, **prima di elaborare qualsiasi foto**, si ferma e
+mostra i conflitti se trova:
+
+- un nome già usato da una foto **diversa**;
+- la **stessa foto con due nomi** (andrebbe in vendita due volte).
+
+La stessa foto spostata in un'altra cartella invece viene riconosciuta come la
+stessa: niente da rifare, nessun costo AI.
+
+Per evitare i conflitti, rinomina ogni lotto nuovo prima di `vendi.py`:
+
+```bash
+python3 rinomina_foto.py ~/Pictures/Dischi
+```
+
+- Nuovo nome: `AAAAMMGG_HHMMSS_<nome originale>`, con la **data di scatto
+  EXIF** (anche dalle HEIC). Se manca (foto passate da WhatsApp o simili) usa
+  la data del file e lo segnala.
+- Mostra l'anteprima e rinomina solo dopo conferma (`s`).
+- **Non tocca mai le foto già presenti nello stato**: il loro nome è
+  l'external_id di annunci già creati.
+
+### Fronte e retro dello stesso disco
+
+Le foto della stessa release con lo stesso grado sono copie dello stesso
+disco. Ma se hai fotografato fronte e retro di **un** disco diventerebbero
+"x2". Quando un gruppo ha 2 o più foto, lo script legge la **data di scatto
+EXIF**: se due foto sono state scattate a meno di **90 secondi**
+(`--secondi-stesso-disco`), tutto il gruppo va in `da_controllare.csv` con
+"probabilmente lo stesso disco fotografato più volte". Togli la foto in più e
+rilancia: il disco va in vendita.
+
+- Senza data EXIF le foto si contano come copie diverse, con un avviso (la
+  data del file non vale: con AirDrop è uguale per tutte).
+- Se fotografi davvero più copie dello stesso disco una dopo l'altra, usa
+  `--copie-consecutive`.
 
 **Ripetere un test sulle stesse foto (`--rielabora`).** Di norma le foto già
 elaborate non vengono rianalizzate. Per rifare tutto da capo sulle foto della
@@ -378,16 +492,19 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --limite 9 --bozza --rielabora
 - Funziona **solo insieme a `--bozza`**: senza, lo script si rifiuta di
   partire. Così gli annunci ricreati sono sempre bozze, mai doppioni in vendita.
 - Non si può usare con `--simula`, perché cambia lo stato vero.
-- Le foto **già in vendita** (righe CSV o annunci `For Sale`, bozze già messe in
-  vendita con `pubblica_bozze.py`) vengono **saltate** e restano come sono.
-- Le righe CSV e gli annunci in bozza di quelle foto vengono tolti dallo stato
-  (una copia resta nella tabella `rielaborati`) e ricreati. Un file
-  `inventario_NNN.csv` rimasto vuoto viene cancellato.
+- **Prima di tutto legge il tuo inventario Discogs.** Una foto il cui
+  external_id è online (in vendita, in bozza, venduto…) o è stato in vendita
+  viene **saltata**: un CSV caricato è in vendita anche se diceva DRAFT. Se
+  l'inventario non si legge, nessuna riga CSV né annuncio viene toccato e lo
+  script lo dice: si rielaborano solo le foto mai messe in vendita.
+- Le righe CSV e gli annunci di quelle foto vengono tolti dallo stato (una
+  copia resta nella tabella `rielaborati`) e ricreati come bozze. I file CSV
+  non vengono mai cancellati: vanno in `risultati/archivio/` (vedi sotto) e i
+  file nuovi non riprendono mai il nome di uno vecchio.
 - L'AI viene **pagata di nuovo** per ogni foto (usa il nuovo prompt); la spesa
   delle esecuzioni precedenti resta contata nel tetto.
-- Se avevi già caricato su Discogs le bozze vecchie, cancellale da Discogs.
-  Comunque `pubblica_bozze.py` non mette mai in vendita le bozze create prima
-  del `--rielabora` di quella foto: te le elenca, da cancellare.
+- Per rifare una foto che è già una bozza su Discogs, cancella prima la bozza
+  da Discogs: a quel punto risulta "bozza cancellata" e si può rielaborare.
 
 **Tempi:** lo script fa al massimo 60 richieste al minuto a Discogs, come
 impone il limite dell'API. Con 10.000 dischi conta diverse ore. Puoi
@@ -398,8 +515,8 @@ annunci già pubblicati non vengono mai ripubblicati.
 ### Mettere in vendita le bozze (`pubblica_bozze.py`)
 
 Mette in vendita (`For Sale`), via API, **tutte le bozze create da
-`vendi.py --bozza`**: quelle dei CSV di inventario (dopo che li hai caricati
-su Discogs) e quelle create via API.
+`vendi.py --bozza`**. Le bozze esistono solo via API: le righe dei CSV
+caricati sono già in vendita (Discogs ignora DRAFT nei CSV).
 
 ```bash
 caffeinate -i python3 pubblica_bozze.py
@@ -408,9 +525,8 @@ caffeinate -i python3 pubblica_bozze.py
 1. Cerca nel tuo inventario Discogs le bozze create dallo script (le
    riconosce dall'`external_id`, cioè il nome della foto). Le altre bozze
    del tuo inventario non vengono toccate.
-2. Ti mostra **quante bozze sta per mettere in vendita** (quante dai CSV e
-   quante create via API), il totale dei prezzi, le prime 10 e il tempo
-   stimato.
+2. Ti mostra **quante bozze sta per mettere in vendita**, il totale dei
+   prezzi, le prime 10 e il tempo stimato.
 3. **Chiede conferma**: scrivi `s` e premi Invio per procedere. Qualsiasi
    altra risposta annulla senza toccare nulla.
 4. Le mette in vendita una per una e alla fine dice quante ci sono riuscite
@@ -420,13 +536,10 @@ Cose da sapere:
 
 - Prezzo e gradi sono quelli che l'annuncio ha **in quel momento su
   Discogs**: se in bozza hai cambiato qualcosa a mano, resta la tua modifica.
-- Le bozze che hai già messo in vendita o cancellato a mano vengono saltate,
-  come le righe dei CSV non ancora caricati su Discogs.
+- Le bozze che hai già messo in vendita o cancellato a mano vengono saltate.
 - Le bozze vecchie rimaste su Discogs dopo un `vendi.py --rielabora` (stesso
   external_id, ma create prima della rielaborazione) **non vengono messe in
   vendita**: lo script te le elenca con il link, da cancellare a mano.
-- Una riga del CSV con `quantity` 3 diventa su Discogs 3 annunci: vengono
-  contati e messi in vendita tutti e 3.
 - Puoi interromperlo con **Ctrl+C** e rilanciarlo: riparte dalle bozze
   rimaste, senza doppioni. Lo stesso vale per quelle non riuscite.
 - Va al ritmo di 60 richieste al minuto: 1.000 bozze richiedono circa 18
@@ -534,8 +647,11 @@ Controlla la colonna `calcolo_prezzo` prima di caricare il CSV.
 
 **Tempi:** servono 2 richieste per ogni release diversa (dati della release e
 statistiche del marketplace), oltre a quella del prezzo suggerito, sempre entro
-il limite di 60 al minuto. Tutti i dati restano in cache: ogni release viene
-chiesta una volta sola, anche tra un'esecuzione e l'altra.
+il limite di 60 al minuto. I dati restano in cache anche tra un'esecuzione e
+l'altra, ma **scadono**: prezzi suggeriti, copie in vendita e want/have dopo
+30 giorni (`--cache-prezzi-giorni`), il controllo delle release bloccate dopo
+90 (`--cache-vendibilita-giorni`). Scaduti, si richiedono di nuovo a Discogs,
+così un "0 copie in vendita, +100%" di due mesi fa non resta valido per sempre.
 
 ### Dischi collezionistici (`collezionistici.csv`)
 
@@ -590,14 +706,21 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --ai-tetto 80
   guarda la spesa reale dopo la prova con `--limite 20`.
 - **Il tetto conta 1 $ = 1 €** (Anthropic fattura in dollari), quindi la spesa
   reale in euro è un po' più bassa del tetto.
-- **Modello più preciso:** `--ai-modello claude-sonnet-5` costa circa il
-  doppio, `claude-opus-5` circa 5 volte.
+- **Modello più preciso:** `--ai-modello claude-sonnet-5` o `claude-sonnet-5-5`
+  costano circa il doppio, `claude-opus-5` circa 5 volte. Questi modelli
+  ragionano prima di rispondere: lo script lascia loro più token di risposta,
+  quindi una chiamata può costare qualche centesimo in più.
+- **Secondo tentativo:** solo per le foto che il primo modello non riconosce,
+  con `claude-sonnet-5-5`; stessa cache e stesso tetto. Il riepilogo dice
+  quante foto ha recuperato e quanto è costato.
 
 ### I risultati (cartella `risultati/`)
 
 | File | Cosa contiene |
 | --- | --- |
-| `inventario_001.csv`, `inventario_002.csv`… | Dischi trovati in locale, al massimo 1.000 dischi per file (le copie contano), da caricare su Discogs |
+| `inventario_001.csv`, `inventario_002.csv`… | Dischi trovati in locale, al massimo 1.000 dischi per file (le copie contano), da caricare su Discogs; status sempre `FOR_SALE` |
+| `archivio/` | File CSV annullati (`inventario_NNN_ANNULLATO.csv`, da non caricare) e copie dei file prima di una modifica (`inventario_NNN_PRIMA_<data>.csv`) |
+| `verifica_inventario.csv` | Scritto da `verifica_inventario.py`: per ogni riga CSV e annuncio API, se è online su Discogs e come |
 | `inventario_foto.csv` | Per ogni riga dei CSV di inventario: tutte le foto (copie) che contiene, il prezzo e il **calcolo del prezzo** |
 | `non_vendibili.csv` | Dischi riconosciuti ma **bloccati dal marketplace Discogs**, che non si possono mettere in vendita: foto, grado, release_id, artista e titolo, metodo di riconoscimento, link alla release, motivo |
 | `collezionistici.csv` | Dischi collezionistici, ordinati per punteggio, con motivi, prezzo suggerito, prezzo più basso in vendita, prezzo finale e calcolo |
@@ -652,6 +775,9 @@ Motivi possibili in `da_controllare.csv`:
   compatibili che non si sono potute distinguere; i candidati sono ordinati per
   punteggio.
 - **nessun prezzo suggerito da Discogs**.
+- **probabilmente lo stesso disco fotografato più volte**: due foto della
+  stessa release e grado scattate a pochi secondi di distanza (vedi "Fronte e
+  retro dello stesso disco").
 - **impossibile verificare se è vendibile**: la richiesta a Discogs per sapere
   se la release è bloccata dal marketplace non è riuscita (rete, errore di
   Discogs) o la risposta non conteneva il campo `blocked_from_sale`. Il disco
@@ -691,12 +817,19 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | `--soglia-collezionistico 5` | Per `collezionistici.csv`: punteggio minimo (default 4) |
 | `--soglia-controllo 150` | I dischi riconosciuti senza barcode o catalogo esatto (AI o `locale-testo`) con prezzo finale sopra questa soglia, o collezionistici, vanno in `da_controllare.csv` invece che in vendita (default 100, valuta del tuo account) |
 | `--limite N` | Elabora solo le prime N foto |
-| `--bozza` | Crea gli annunci in bozza (`Draft`) invece che in vendita (`For Sale`), sia nel CSV di inventario sia via API |
+| `--bozza` | Crea tutti gli annunci in bozza (`Draft`) **via API**, anche quelli che andrebbero nel CSV (Discogs ignora DRAFT nei CSV); un annuncio per foto |
 | `--simula` | Non pubblica annunci e non tocca i CSV veri; scrive in `risultati/simulazione/` |
 | `--riprova` | Rianalizza le foto finite da controllare |
-| `--rielabora` | Ignora lo stato salvato per le foto della cartella e le rielabora da capo, AI compresa. Solo con `--bozza`, non con `--simula`; salta le foto già in vendita |
+| `--rielabora` | Ignora lo stato salvato per le foto della cartella e le rielabora da capo, AI compresa. Solo con `--bozza`, non con `--simula`; prima legge l'inventario Discogs e salta le foto online o state in vendita |
 | `--ai-tetto 80` | Spesa AI massima in euro, sommando tutte le esecuzioni (default 50); raggiunta, lo script si ferma |
-| `--ai-modello NOME` | `claude-haiku-4-5` (default), `claude-sonnet-5` o `claude-opus-5` |
+| `--ai-modello NOME` | `claude-haiku-4-5` (default), `claude-sonnet-5`, `claude-sonnet-5-5` o `claude-opus-5` |
+| `--ai-modello-secondo NOME` | Modello del secondo tentativo sulle foto non riconosciute (default `claude-sonnet-5-5`) |
+| `--senza-secondo-tentativo` | Niente secondo tentativo |
+| `--secondi-stesso-disco 90` | Due foto della stessa release e grado scattate a meno di tanti secondi vanno da controllare (default 90) |
+| `--copie-consecutive` | Disattiva il controllo sui secondi: le foto sono sempre copie diverse |
+| `--cache-prezzi-giorni 30` | Dopo quanti giorni prezzi suggeriti, copie in vendita e want/have si richiedono a Discogs (default 30) |
+| `--cache-vendibilita-giorni 90` | Dopo quanti giorni si ricontrolla se una release è bloccata dal marketplace (default 90) |
+| `--backup-da-tenere 20` | Copie dello stato da tenere in `data/backup/` (default 20) |
 | `--senza-ai` | Non usa l'AI: solo riconoscimento locale gratuito |
 | `--uscita PERCORSO` | Cartella dei risultati (default `risultati/`) |
 | `--db PERCORSO` | Database creato da `discogs_dump.py` (default `data/discogs.sqlite`) |
@@ -711,6 +844,26 @@ ricostruito da zero ogni mese, e i progressi andrebbero persi.
 volte lo stesso disco. Per ripetere un test sulle stesse foto usa
 `--rielabora --bozza` invece di cancellarlo.
 
+**Backup automatico.** `vendi.py` (non in `--simula`), `verifica_inventario.py`
+e `pubblica_bozze.py`, prima di modificare qualcosa, copiano lo stato in
+`data/backup/vendita_stato_AAAAMMGG_HHMMSS.sqlite`. Restano le ultime 20 copie
+(`--backup-da-tenere`).
+
+**Ripristinare un backup** (se lo stato si rovina o dopo un errore):
+
+1. assicurati che nessuno script sia in esecuzione;
+2. metti da parte lo stato attuale e copia al suo posto il backup scelto,
+   per esempio il più recente:
+
+```bash
+cd ~/Discogs
+mv data/vendita_stato.sqlite data/vendita_stato_rovinato.sqlite
+cp data/backup/vendita_stato_20261013_154233.sqlite data/vendita_stato.sqlite
+```
+
+3. lancia `python3 verifica_inventario.py`: riallinea lo stato con quello che
+   è davvero online su Discogs (le modifiche fatte dopo il backup).
+
 ### Test automatici
 
 ```bash
@@ -723,8 +876,11 @@ visti nelle prove: il retro della compilation di Theo Parrish scambiato per
 The Awakening - Mirage, la white label abbinata a una release russa per il solo
 titolo, e la release Various data a un'etichetta Omar-S finiscono in
 `da_controllare.csv`. Un match pulito come Moodymann - Picture This Sampler 3
-(`THIS003`) resta nel CSV. I test coprono anche la soglia di controllo e
-`--rielabora`.
+(`THIS003`) resta nel CSV. I test coprono anche la soglia di controllo,
+`--rielabora`, le release bloccate, la griglia dei prezzi e i punti della
+revisione prima del primo lotto (backup, verifica dell'inventario, bozze via
+API, nomi ripetuti, scadenza delle cache, stesso disco fotografato più volte,
+secondo tentativo AI) in `tests/test_lotto.py`.
 
 ---
 
