@@ -509,7 +509,7 @@ class TestGriglia(unittest.TestCase):
 
     def test_calcolo_prezzo(self):
         args = mock.Mock(premio_zero_copie=100.0, copie_poche=2, premio_poche_copie=50.0, copie_alcune=5,
-                         premio_alcune_copie=25.0, soglia_want_have=1.0, premio_richiesta=10.0,
+                         premio_alcune_copie=25.0, scalini_richiesta=vendi.parse_steps(vendi.DEMAND_STEPS),
                          passo_prezzo=vendi.decimal.Decimal("2.50"), prezzo_minimo=vendi.decimal.Decimal("2.50"))
         data = {"num_for_sale": 6, "lowest_price": 10.40, "lowest_currency": "EUR", "want": 10, "have": 100}
         price, calc = vendi.compute_price(10.40, data, "M", "EUR", args)

@@ -1403,7 +1403,7 @@ def get_collector_data(state, api, con, release_id, currency, release=None, max_
     community = release.get("community", {})
     stats = api.marketplace_stats(release_id, currency)
     lowest = stats.get("lowest_price") or {}
-    local = dd.get_releases(con, [release_id])
+    local = dd.get_releases(con, [release_id]) if con is not None else []
     data = {
         "want": community.get("want") or 0,
         "have": community.get("have") or 0,
@@ -1506,6 +1506,29 @@ def fmt(x):
 
 
 CENT = decimal.Decimal("0.01")
+DEMAND_STEPS = "1:10,2:25,4:50"   # want/have oltre 1 -> +10%, oltre 2 -> +25%, oltre 4 -> +50%
+
+
+def parse_steps(text):
+    """'1:10,2:25,4:50' -> [(1.0, 10.0), (2.0, 25.0), (4.0, 50.0)] (soglia want/have, premio %)."""
+    try:
+        steps = sorted((float(a), float(b)) for a, b in (part.split(":") for part in text.split(",") if part.strip()))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"scalini non validi: {text!r} (esempio: 1:10,2:25,4:50)")
+    if not steps:
+        raise argparse.ArgumentTypeError("serve almeno uno scalino (esempio: 1:10,2:25,4:50)")
+    return steps
+
+
+def want_have_ratio(data):
+    want, have = data.get("want") or 0, data.get("have") or 0
+    return want / have if have else (float("inf") if want else 0.0)
+
+
+def demand_step(ratio, steps):
+    """Lo scalino più alto superato dal rapporto want/have (strettamente maggiore): (soglia, premio) o None."""
+    passed = [s for s in steps if ratio > s[0]]
+    return passed[-1] if passed else None
 
 
 def to_grid(price, step, minimum):
@@ -1563,10 +1586,11 @@ def compute_price(suggested, data, grade, currency, args):
         steps.append(f"{copies} copie in vendita: nessun premio scarsità")
 
     want, have = data.get("want") or 0, data.get("have") or 0
-    ratio = want / have if have else (float("inf") if want else 0.0)
+    ratio = want_have_ratio(data)
     ratio_text = f"want/have {want}/{have}" + (f" = {fmt(ratio)}" if have else "")
-    if ratio > args.soglia_want_have:
-        premium(args.premio_richiesta, f"{ratio_text} > {args.soglia_want_have:g}")
+    step = demand_step(ratio, args.scalini_richiesta)
+    if step:
+        premium(step[1], f"{ratio_text} > {step[0]:g}")
     else:
         steps.append(f"{ratio_text}: nessun premio richiesta")
 
@@ -2213,9 +2237,8 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
 # Programma principale
 # --------------------------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(description="Metti in vendita su Discogs i dischi fotografati")
-    parser.add_argument("cartella", help="cartella che contiene le sottocartelle dei gradi (M, NM, VG+, VG, G+, G)")
+def add_price_args(parser):
+    """Opzioni della regola del prezzo, comuni a vendi.py e riprezza.py (stessa regola e stessi default)."""
     g = parser.add_argument_group("regola del prezzo (base = più basso in vendita, mai sotto il suggerito per il grado)")
     g.add_argument("--premio-zero-copie", type=float, default=100.0,
                    help="nessuna copia in vendita: suggerito + questa %% (default 100)")
@@ -2223,23 +2246,37 @@ def main():
     g.add_argument("--premio-poche-copie", type=float, default=50.0, help="premio %% con poche copie (default 50)")
     g.add_argument("--copie-alcune", type=int, default=5, help="fino a quante copie in vendita sono 'alcune' (default 5)")
     g.add_argument("--premio-alcune-copie", type=float, default=25.0, help="premio %% con alcune copie (default 25)")
-    g.add_argument("--soglia-want-have", type=float, default=1.0,
-                   help="rapporto want/have oltre il quale scatta il premio richiesta (default 1)")
-    g.add_argument("--premio-richiesta", type=float, default=10.0, help="premio richiesta in %% (default 10)")
+    g.add_argument("--scalini-richiesta", type=parse_steps, default=parse_steps(DEMAND_STEPS),
+                   help="premio richiesta a scalini, 'soglia:premio%%' separati da virgole: si applica lo scalino più "
+                        f"alto superato dal rapporto want/have (default {DEMAND_STEPS}: oltre 1 +10%%, oltre 2 +25%%, "
+                        "oltre 4 +50%%)")
     g.add_argument("--passo-prezzo", type=decimal.Decimal, default=decimal.Decimal("2.50"),
                    help="ultimo passaggio: il prezzo finale si arrotonda per eccesso a multipli di questa cifra "
                         "(default 2.50: 2.50, 5.00, 7.50...)")
     g.add_argument("--prezzo-minimo", type=decimal.Decimal, default=decimal.Decimal("2.50"),
                    help="nessun annuncio sotto questa cifra (default 2.50)")
+    parser.add_argument("--soglia-controllo", type=float, default=100.0,
+                        help="i dischi riconosciuti senza barcode o catalogo esatto (AI o artista e titolo) con prezzo "
+                             "finale sopra questa soglia (valuta del tuo account), o collezionistici, non vanno in "
+                             "vendita ma in da_controllare.csv (default 100); in riprezza.py: un prezzo nuovo sopra "
+                             "questa soglia va controllato a mano")
+    return g
+
+
+def check_price_args(args):
+    if args.passo_prezzo < decimal.Decimal("0.01") or args.prezzo_minimo < 0:
+        raise SystemExit("--passo-prezzo deve essere almeno 0.01 e --prezzo-minimo non negativo.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Metti in vendita su Discogs i dischi fotografati")
+    parser.add_argument("cartella", help="cartella che contiene le sottocartelle dei gradi (M, NM, VG+, VG, G+, G)")
+    add_price_args(parser)
     parser.add_argument("--soglia-prezzo", type=float, default=50.0,
                         help="per collezionistici.csv: prezzo (valuta del tuo account) oltre il quale un disco "
                              "conta come di valore (default 50)")
     parser.add_argument("--soglia-collezionistico", type=int, default=4,
                         help="per collezionistici.csv: punteggio minimo per considerare un disco collezionistico (default 4)")
-    parser.add_argument("--soglia-controllo", type=float, default=100.0,
-                        help="i dischi riconosciuti senza barcode o catalogo esatto (AI o artista e titolo) con prezzo "
-                             "finale sopra questa soglia (valuta del tuo account), o collezionistici, non vanno in "
-                             "vendita ma in da_controllare.csv (default 100)")
     parser.add_argument("--limite", type=int, help="elabora solo le prime N foto (prova)")
     parser.add_argument("--bozza", action="store_true",
                         help="crea tutti gli annunci come bozza (Draft) via API, anche quelli che andrebbero nel CSV "
@@ -2281,8 +2318,7 @@ def main():
                              f"(default {CACHE_SELLABLE_DAYS})")
     args = parser.parse_args()
     status = "DRAFT" if args.bozza else "FOR_SALE"
-    if args.passo_prezzo < decimal.Decimal("0.01") or args.prezzo_minimo < 0:
-        raise SystemExit("--passo-prezzo deve essere almeno 0.01 e --prezzo-minimo non negativo.")
+    check_price_args(args)
     if args.rielabora and not args.bozza:
         raise SystemExit("--rielabora funziona solo insieme a --bozza: rielaborando foto già elaborate gli annunci\n"
                          "devono essere bozze, per non mettere mai in vendita dei doppioni.")

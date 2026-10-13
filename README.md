@@ -565,8 +565,19 @@ Se non ci sono copie in vendita, la base è il prezzo suggerito.
 | 3-5 | base **+25%** |
 | oltre 5 | nessun premio |
 
-**3. Premio richiesta:** se il rapporto **want/have** (quanti lo cercano /
-quanti lo hanno) è **sopra 1**, **+10%**.
+**3. Premio richiesta, a scalini**, in base al rapporto **want/have** (quanti
+lo cercano / quanti lo hanno). Si applica lo scalino più alto superato:
+
+| want/have | Premio |
+| --- | --- |
+| fino a 1 | nessun premio |
+| oltre 1 | **+10%** |
+| oltre 2 | **+25%** |
+| oltre 4 | **+50%** |
+
+Soglie e percentuali si cambiano con `--scalini-richiesta` (default
+`1:10,2:25,4:50`, cioè `soglia:premio%` separati da virgole). La regola è la
+stessa in `vendi.py` e in `riprezza.py`.
 
 **I premi si sommano**, e non c'è un tetto massimo:
 
@@ -600,8 +611,8 @@ Esempi completi:
 
 | Situazione | Calcolo | Prezzo finale |
 | --- | --- | --- |
-| suggerito 24,20; più basso 50,00; 2 copie; want/have 3 | 50,00 × (1 + 50% + 10%) = 80,00 | 80,00 |
-| suggerito 64,10; nessuna copia; want/have 6 | 64,10 × (1 + 100% + 10%) = 134,61 | 135,00 |
+| suggerito 24,20; più basso 50,00; 2 copie; want/have 3 | 50,00 × (1 + 50% + 25%) = 87,50 | 87,50 |
+| suggerito 64,10; nessuna copia; want/have 6 | 64,10 × (1 + 100% + 50%) = 160,25 | 162,50 |
 | suggerito 32,10; più basso 40,00; 4 copie; want/have 0,05 | 40,00 × (1 + 25%) = 50,00 | 50,00 |
 | suggerito 13,10; più basso 8,00; 40 copie | 13,10 (soglia minima) | 15,00 |
 
@@ -619,8 +630,8 @@ want/have, premi applicati e conto finale. Per esempio:
 
 ```
 suggerito NM 24,20; più basso in vendita 50,00; base = più basso in vendita 50,00;
-2 copie in vendita (1-2) +50%; want/have 300/100 = 3,00 > 1 +10%;
-prezzo = 50,00 × (1 + 60%) = 80,00 EUR → arrotondato a griglia 2,50 = 80,00 EUR
+2 copie in vendita (1-2) +50%; want/have 300/100 = 3,00 > 2 +25%;
+prezzo = 50,00 × (1 + 75%) = 87,50 EUR → arrotondato a griglia 2,50 = 87,50 EUR
 ```
 
 La colonna si trova in `inventario_foto.csv`, `annunci_pubblicati_api.csv` e
@@ -636,8 +647,7 @@ su Discogs, che devono contenere solo le colonne previste da Discogs.
 | `--premio-poche-copie` | 50 | premio % con poche copie |
 | `--copie-alcune` | 5 | fino a quante copie sono "alcune" |
 | `--premio-alcune-copie` | 25 | premio % con alcune copie |
-| `--soglia-want-have` | 1 | rapporto want/have oltre il quale scatta il premio richiesta |
-| `--premio-richiesta` | 10 | premio richiesta % |
+| `--scalini-richiesta` | 1:10,2:25,4:50 | premio richiesta a scalini: want/have oltre 1 +10%, oltre 2 +25%, oltre 4 +50% |
 | `--passo-prezzo` | 2.50 | passo della griglia: il prezzo finale si arrotonda per eccesso a un suo multiplo |
 | `--prezzo-minimo` | 2.50 | prezzo minimo assoluto di un annuncio |
 
@@ -812,7 +822,7 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 
 | Opzione | Cosa fa |
 | --- | --- |
-| `--premio-zero-copie`, `--copie-poche`, `--premio-poche-copie`, `--copie-alcune`, `--premio-alcune-copie`, `--soglia-want-have`, `--premio-richiesta` | Regola del prezzo, vedi la tabella nella sezione "Regola del prezzo" |
+| `--premio-zero-copie`, `--copie-poche`, `--premio-poche-copie`, `--copie-alcune`, `--premio-alcune-copie`, `--scalini-richiesta`, `--passo-prezzo`, `--prezzo-minimo` | Regola del prezzo, vedi la tabella nella sezione "Regola del prezzo" |
 | `--soglia-prezzo 80` | Per `collezionistici.csv`: prezzo oltre il quale un disco conta come di valore (default 50, valuta del tuo account) |
 | `--soglia-collezionistico 5` | Per `collezionistici.csv`: punteggio minimo (default 4) |
 | `--soglia-controllo 150` | I dischi riconosciuti senza barcode o catalogo esatto (AI o `locale-testo`) con prezzo finale sopra questa soglia, o collezionistici, vanno in `da_controllare.csv` invece che in vendita (default 100, valuta del tuo account) |
