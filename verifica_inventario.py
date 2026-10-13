@@ -5,31 +5,38 @@ Controlla cosa è davvero online su Discogs tra i dischi preparati da vendi.py.
   1. fa un backup dello stato (data/backup/);
   2. scarica tutto il tuo inventario Discogs, tutte le pagine: annunci in vendita,
      in bozza e, se Discogs li restituisce, venduti e scaduti;
-  3. per ogni riga dei CSV di inventario e ogni annuncio creato via API dice se
-     l'external_id è online e in che stato, e lo salva in data/vendita_stato.sqlite
-     (in_vendita / bozza / venduto / scaduto / assente / bozza_cancellata / sparito);
-  4. corregge lo status delle righe CSV caricate come DRAFT: Discogs ignora DRAFT
+  3. legge i tuoi ordini (tutte le pagine, tutti gli stati): l'inventario NON mostra
+     i dischi venduti, quindi un annuncio che compare in un ordine non annullato è
+     "venduto" (collegamento: l'id dell'annuncio di ogni articolo dell'ordine);
+  4. per ogni riga dei CSV di inventario e ogni annuncio creato via API salva nello
+     stato se è online e come: in vendita, in bozza, venduto, forse venduto (la
+     release è in un ordine ma l'annuncio non è mai stato visto), bloccata da
+     Discogs, non online (mai caricato o scartato), bozza cancellata, rimosso a mano
+     (era in vendita e non è in nessun ordine), sparito (ordini non letti);
+  5. corregge lo status delle righe CSV caricate come DRAFT: Discogs ignora DRAFT
      nei CSV e le mette subito in vendita;
-  5. stampa un riepilogo e, soprattutto, le righe generate ma NON online, divise per
-     file CSV (CSV mai caricato o righe scartate da Discogs); scrive anche
-     risultati/verifica_inventario.csv con l'esito di ogni riga;
-  6. con --libera, dopo conferma, toglie dallo stato le righe mai state online (o
-     bozze poi cancellate): le loro foto tornano elaborabili al prossimo vendi.py,
-     senza rifare il riconoscimento e senza pagare di nuovo l'AI. Le righe che
-     erano in vendita e ora non ci sono più ("sparito": vendute o cancellate) non
-     vengono mai liberate.
+  6. stampa il riepilogo (in vendita / in bozza / venduti / bloccati da Discogs / non
+     online per altri motivi) con il dettaglio per file CSV, e lo scrive in
+     risultati/verifica_inventario.csv;
+  7. con --libera (o --libera-solo EXTERNAL_ID per righe precise), dopo conferma,
+     toglie dallo stato le righe non online e NON vendute: mai caricate, bozze
+     cancellate, rimosse a mano. Le loro foto tornano elaborabili al prossimo
+     vendi.py, senza rifare il riconoscimento né pagare l'AI. Mai un disco venduto
+     o forse venduto, mai una release bloccata (liberarla non servirebbe). Se gli
+     ordini non si leggono, --libera e --libera-solo non partono.
 
 Esempi:
     python3 verifica_inventario.py
     python3 verifica_inventario.py --libera
+    python3 verifica_inventario.py --libera-solo IMG_2087
 """
 
 import argparse
 from pathlib import Path
 
 import vendi
-from vendi import (ONLINE_IT, DiscogsAPI, InventoryUnreadable, can_free, fetch_inventory, free_rows, load_token,
-                   open_state, verify_listings, write_csv, write_outputs)
+from vendi import (ONLINE_IT, DiscogsAPI, InventoryUnreadable, OrdersUnreadable, can_free, fetch_inventory,
+                   fetch_sales, free_rows, load_token, open_state, verify_listings, write_csv, write_outputs)
 
 EXAMPLES = 10
 
@@ -50,16 +57,25 @@ def describe(table, row):
             f"listing {row['listing_id'] or '-'}, {row['stato']})")
 
 
+# Gruppi del riepilogo: stato online -> gruppo
+GROUPS = [("in_vendita", "in vendita"), ("bozza", "in bozza"), ("venduto", "venduti"),
+          ("bloccata", "bloccati da Discogs"), ("altro", "non online per altri motivi")]
+GROUP_OF = {"in_vendita": "in_vendita", "bozza": "bozza", "venduto": "venduto", "bloccata": "bloccata"}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Controlla cosa è davvero online su Discogs")
     parser.add_argument("--libera", action="store_true",
-                        help="dopo conferma, toglie dallo stato le righe mai state online: le foto tornano elaborabili "
-                             "al prossimo vendi.py, senza rifare il riconoscimento")
+                        help="dopo conferma, toglie dallo stato le righe non online e non vendute (mai caricate, "
+                             "bozze cancellate, rimosse a mano): le foto tornano elaborabili al prossimo vendi.py")
+    parser.add_argument("--libera-solo", action="append", default=[], metavar="EXTERNAL_ID",
+                        help="come --libera ma solo per la riga con questo external_id (ripetibile)")
     parser.add_argument("--uscita", default=str(vendi.OUT_DIR), help="cartella dei risultati (default: risultati/)")
     parser.add_argument("--backup-da-tenere", type=int, default=vendi.BACKUPS_TO_KEEP,
                         help=f"copie dello stato da tenere in data/backup/ (default {vendi.BACKUPS_TO_KEEP})")
     args = parser.parse_args()
     out_dir = Path(args.uscita).expanduser()
+    freeing = args.libera or bool(args.libera_solo)
 
     saved = vendi.backup_state(vendi.STATE_DB, args.backup_da_tenere)
     if saved:
@@ -75,63 +91,86 @@ def main():
             raise SystemExit(f"Impossibile leggere l'inventario Discogs: {e}\nNiente è stato modificato.")
         print(f"Annunci nel tuo inventario: {len(inventory.by_listing)}"
               + (f" (Discogs non ha restituito: {', '.join(inventory.unavailable)})" if inventory.unavailable else ""))
+        # L'inventario non mostra i dischi venduti: li riconosco dai miei ordini.
+        try:
+            sales = fetch_sales(api)
+            print(f"Ordini letti: {len(sales.listing_ids)} annunci venduti (ordini annullati esclusi)")
+        except OrdersUnreadable as e:
+            sales = None
+            if freeing:
+                raise SystemExit(f"Impossibile leggere i tuoi ordini Discogs ({e}).\nSenza ordini non posso "
+                                 "distinguere un disco VENDUTO da uno rimosso a mano o mai caricato: --libera e "
+                                 "--libera-solo non partono, per non rimettere in vendita un disco che non hai più.\n"
+                                 "Niente è stato modificato.")
+            print(f"Attenzione: impossibile leggere i tuoi ordini ({e}): i dischi spariti dall'inventario non "
+                  "si possono distinguere tra venduti e rimossi a mano.")
 
-        rows = verify_listings(state, inventory)
-        counts, not_online, gone = {}, {}, []
+        rows = verify_listings(state, inventory, sales)
+        counts, details = {}, {}
         for table, row in rows:
             copies = row["quantita"] if table == "righe_csv" else 1
-            counts[row["online"]] = counts.get(row["online"], 0) + copies
-            where, text = describe(table, row)
-            if row["online"] in ("assente", "bozza_cancellata"):
-                not_online.setdefault(where, []).append(text + (" (bozza cancellata)"
-                                                                if row["online"] == "bozza_cancellata" else ""))
-            elif row["online"] == "sparito":
-                gone.append(f"{where}: {text}")
+            group = GROUP_OF.get(row["online"], "altro")
+            counts[group] = counts.get(group, 0) + copies
+            if group != "in_vendita":
+                where, text = describe(table, row)
+                details.setdefault(group, {}).setdefault(where, []).append(f"{text}: {ONLINE_IT[row['online']]}")
 
         print("\nRiepilogo (dischi, contando le copie)")
-        for key in ("in_vendita", "bozza", "venduto", "scaduto", "assente", "bozza_cancellata", "sparito"):
-            if counts.get(key):
-                print(f"  {ONLINE_IT[key]}: {counts[key]}")
-        if not rows:
-            print("  nessuna riga CSV né annuncio API nello stato")
-
-        if not_online:
-            print("\nRighe generate ma NON online (CSV mai caricato o righe scartate da Discogs):")
-            for where, texts in sorted(not_online.items()):
+        for key, title in GROUPS:
+            print(f"  {title}: {counts.get(key, 0)}")
+        for key, title in GROUPS[1:]:
+            if not details.get(key):
+                continue
+            print(f"\n{title[0].upper() + title[1:]}:")
+            for where, texts in sorted(details[key].items()):
                 print(f"  {where}: {len(texts)}")
                 for t in texts[:EXAMPLES]:
                     print(f"    {t}")
                 if len(texts) > EXAMPLES:
                     print(f"    ... e altre {len(texts) - EXAMPLES}")
-        if gone:
-            print("\nErano online e ora non ci sono più (vendute o cancellate a mano?): restano nello stato, "
-                  "così non vengono rimesse in vendita.")
-            for g in gone[:EXAMPLES]:
-                print(f"  {g}")
 
         write_csv(out_dir / "verifica_inventario.csv",
-                  ["origine", "external_id", "release_id", "quantita", "prezzo", "status", "online",
-                   "verificato", "visto_online_la_prima_volta"],
+                  ["origine", "external_id", "release_id", "quantita", "prezzo", "status", "gruppo", "online",
+                   "liberabile", "verificato", "visto_online_la_prima_volta"],
                   [[describe(t, r)[0], r["external_id"], r["release_id"], r["quantita"] if t == "righe_csv" else 1,
-                    f"{r['price']:.2f}", r["status"] or "FOR_SALE", ONLINE_IT.get(r["online"], r["online"]),
+                    f"{r['price']:.2f}", r["status"] or "FOR_SALE", dict(GROUPS)[GROUP_OF.get(r["online"], "altro")],
+                    ONLINE_IT.get(r["online"], r["online"]), "sì" if can_free(t, r) else "no",
                     r["online_verificato"] or "", r["online_visto"] or ""] for t, r in rows])
         write_outputs(state, out_dir, [], [])
         print(f"\nDettaglio in {out_dir / 'verifica_inventario.csv'}")
 
-        if args.libera:
-            freeable = [(t, r) for t, r in rows if can_free(t, r)]
-            if not freeable:
-                print("\n--libera: nessuna riga da liberare.")
-                return
-            print(f"\n--libera: {len(freeable)} righe mai state online verranno tolte dallo stato; le loro foto "
-                  "torneranno elaborabili al prossimo vendi.py (il riconoscimento resta).")
-            if not ask_confirmation("Procedere?"):
-                print("Annullato: niente è stato modificato.")
-                return
-            freed = free_rows(state, out_dir, freeable)
-            write_outputs(state, out_dir, [], [])
-            print(f"Liberate {len(freeable)} righe ({len(freed)} foto). I file CSV svuotati sono in "
-                  f"{out_dir / 'archivio'}/ con _ANNULLATO nel nome: non caricarli.")
+        if not freeing:
+            return
+        if args.libera_solo:
+            wanted = set(args.libera_solo)
+            chosen = [(t, r) for t, r in rows if r["external_id"] in wanted]
+            for eid in sorted(wanted - {r["external_id"] for _, r in chosen}):
+                print(f"\n--libera-solo: {eid} non è nello stato (né riga CSV né annuncio API).")
+        else:
+            chosen = rows
+        freeable = [(t, r) for t, r in chosen if can_free(t, r)]
+        if args.libera_solo:
+            for t, r in chosen:
+                if not can_free(t, r):
+                    print(f"\n--libera-solo: {r['external_id']} NON si libera: {ONLINE_IT[r['online']]}"
+                          + (" (mai liberare un disco venduto)" if r["online"] in ("venduto", "forse_venduto") else ""))
+        if not freeable:
+            print("\nNessuna riga da liberare.")
+            return
+        print(f"\nRighe da liberare: {len(freeable)}. Verranno tolte dallo stato e le loro foto torneranno "
+              "elaborabili al prossimo vendi.py (il riconoscimento resta):")
+        for t, r in freeable[:EXAMPLES]:
+            where, text = describe(t, r)
+            print(f"  {where}: {text} - {ONLINE_IT[r['online']]}")
+        if len(freeable) > EXAMPLES:
+            print(f"  ... e altre {len(freeable) - EXAMPLES}")
+        if not ask_confirmation("Procedere?"):
+            print("Annullato: niente è stato modificato.")
+            return
+        freed = free_rows(state, out_dir, freeable)
+        write_outputs(state, out_dir, [], [])
+        print(f"Liberate {len(freeable)} righe ({len(freed)} foto). I file CSV svuotati sono in "
+              f"{out_dir / 'archivio'}/ con _ANNULLATO nel nome: non caricarli.")
     finally:
         state.close()
 

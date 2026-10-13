@@ -412,30 +412,50 @@ python3 verifica_inventario.py
 ```
 
 1. Fa un backup dello stato e scarica **tutto il tuo inventario** Discogs,
-   tutte le pagine: in vendita, bozze e, se Discogs li restituisce, venduti e
-   scaduti.
-2. Per ogni riga dei CSV e ogni annuncio API salva nello stato se è online e
-   come: **in vendita**, **in bozza**, **venduto**, **scaduto**, **non online**
-   (mai visto su Discogs), **bozza cancellata** o **sparito** (era in vendita e
-   non c'è più: venduto o cancellato a mano).
-3. Corregge lo status delle righe caricate come DRAFT: su Discogs sono in
-   vendita.
-4. Stampa il riepilogo e le **righe generate ma non online**, divise per file
-   CSV (CSV mai caricato o righe scartate). Il dettaglio è in
-   `risultati/verifica_inventario.csv`.
+   tutte le pagine: in vendita, bozze e, se Discogs li restituisce, scaduti.
+2. **Legge i tuoi ordini** (tutte le pagine, tutti gli stati). L'inventario
+   **non mostra i dischi venduti**: senza gli ordini un disco venduto sembrerebbe
+   uguale a uno rimosso a mano o mai caricato. Un annuncio che compare in un
+   ordine **non annullato** è venduto. Il collegamento è l'**id dell'annuncio**
+   di ogni articolo dell'ordine (e l'external_id, se Discogs lo restituisce).
+3. Per ogni riga dei CSV e ogni annuncio API salva nello stato com'è:
 
-Le righe mai state online si possono **liberare**: le loro foto tornano
-elaborabili al prossimo `vendi.py`, senza rifare il riconoscimento e senza
-pagare di nuovo l'AI.
+   | Stato | Cosa vuol dire | Si può liberare? |
+   | --- | --- | --- |
+   | in vendita / in bozza | online su Discogs | no |
+   | **venduto** | un suo annuncio è in un ordine non annullato; resta venduto per sempre | **mai** |
+   | **forse venduto** | la release è in un ordine, ma questo annuncio non è mai stato visto online | no (controlla a mano) |
+   | **bloccata da Discogs** | la release è bloccata dal marketplace: Discogs l'ha scartata | no (non servirebbe) |
+   | non online | mai visto su Discogs: CSV mai caricato o riga scartata | sì |
+   | bozza cancellata | era una bozza e non c'è più (una bozza non si vende) | sì |
+   | rimosso a mano | era in vendita e non è in nessun ordine | sì |
+   | sparito | era in vendita e non c'è più, ma gli ordini non si sono potuti leggere | no |
+
+4. Corregge lo status delle righe caricate come DRAFT: su Discogs sono in
+   vendita.
+5. Stampa il riepilogo — **in vendita / in bozza / venduti / bloccati da
+   Discogs / non online per altri motivi** (rimossi a mano, CSV mai caricati…)
+   — con il dettaglio per file CSV. Lo stesso, riga per riga, è in
+   `risultati/verifica_inventario.csv` (colonne `gruppo`, `online`,
+   `liberabile`).
+
+Le righe liberabili si possono **liberare**: le loro foto tornano elaborabili
+al prossimo `vendi.py`, senza rifare il riconoscimento e senza pagare di nuovo
+l'AI.
 
 ```bash
-python3 verifica_inventario.py --libera
+python3 verifica_inventario.py --libera                  # tutte le liberabili
+python3 verifica_inventario.py --libera-solo IMG_2087    # solo questa (ripetibile)
 ```
 
-- Chiede conferma (`s`) prima di toccare qualcosa.
-- Non libera mai una riga che è stata **in vendita** e poi è sparita: potrebbe
-  essere stata venduta, e rimetterla in vendita creerebbe un doppione. Una
-  bozza cancellata invece si può liberare: una bozza non si vende.
+- Mostra le righe che sta per liberare e chiede conferma (`s`).
+- **Non libera mai un disco venduto** (né forse venduto, né sparito), né una
+  release bloccata da Discogs. Con `--libera-solo` ti dice perché una riga
+  indicata non si libera.
+- **Se gli ordini non si leggono** (rete, errore di Discogs, o articoli senza id
+  dell'annuncio) `--libera` e `--libera-solo` **non partono**: senza ordini non
+  si distingue un venduto. Lo stesso vale per `vendi.py --rielabora`, che in quel
+  caso non tocca nessuna riga CSV né annuncio.
 - **Non cancella mai un file CSV**: un file rimasto senza righe va in
   `risultati/archivio/inventario_NNN_ANNULLATO.csv` (non caricarlo), uno che
   perde solo alcune righe viene prima copiato in archivio
@@ -496,11 +516,12 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --limite 9 --bozza --rielabora
 - Funziona **solo insieme a `--bozza`**: senza, lo script si rifiuta di
   partire. Così gli annunci ricreati sono sempre bozze, mai doppioni in vendita.
 - Non si può usare con `--simula`, perché cambia lo stato vero.
-- **Prima di tutto legge il tuo inventario Discogs.** Una foto il cui
-  external_id è online (in vendita, in bozza, venduto…) o è stato in vendita
-  viene **saltata**: un CSV caricato è in vendita anche se diceva DRAFT. Se
-  l'inventario non si legge, nessuna riga CSV né annuncio viene toccato e lo
-  script lo dice: si rielaborano solo le foto mai messe in vendita.
+- **Prima di tutto legge il tuo inventario e i tuoi ordini Discogs.** Una foto
+  il cui external_id è online (in vendita, in bozza), venduto, o che era in
+  vendita e potrebbe essere stato venduto viene **saltata**: un CSV caricato è
+  in vendita anche se diceva DRAFT. Se inventario o ordini non si leggono,
+  nessuna riga CSV né annuncio viene toccato e lo script lo dice: si
+  rielaborano solo le foto mai messe in vendita.
 - Le righe CSV e gli annunci di quelle foto vengono tolti dallo stato (una
   copia resta nella tabella `rielaborati`) e ricreati come bozze. I file CSV
   non vengono mai cancellati: vanno in `risultati/archivio/` (vedi sotto) e i

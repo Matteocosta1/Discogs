@@ -140,7 +140,7 @@ class TestVerificaInventario(TempRun):
         self.assertEqual(rows["IMG_0003"]["online"], "assente")
         self.assertEqual(rows["IMG_0003"]["status"], "DRAFT")      # non online: resta com'era
         self.assertIn("in vendita: 1", out)
-        self.assertIn("NON online", out)
+        self.assertIn("non online per altri motivi: 1", out)
         self.assertIn("inventario_001.csv: 1", out)
         self.assertIn("IMG_0003", out)
         check = self.run.read_csv("verifica_inventario.csv")
@@ -165,14 +165,74 @@ class TestVerificaInventario(TempRun):
         self.assertEqual([r["external_id"] for r in new], ["IMG_0003"])
         self.assertEqual(tp.FakeAI.reads, [])
 
-    def test_mai_liberare_righe_gia_viste_online(self):
+    def test_sparito_senza_ordini_non_si_libera(self):
         run_script(self.run, verifica_inventario)
-        self.run.api.inventory = []                               # venduta o cancellata a mano
+        self.run.api.inventory = []                               # venduta o cancellata a mano?
+        self.run.api.orders_error = True                          # gli ordini non si leggono
+        out = run_script(self.run, verifica_inventario)
+        self.assertEqual(self.rows()["IMG_0006"]["online"], "sparito")
+        self.assertIn("impossibile leggere i tuoi ordini", out)
+        for options in (["--libera"], ["--libera-solo", "IMG_0006"]):
+            with self.assertRaises(SystemExit) as e:
+                run_script(self.run, verifica_inventario, *options, answer="s")
+            self.assertIn("non partono", str(e.exception))
+        self.assertEqual(set(self.rows()), {"IMG_0003", "IMG_0006"})   # niente liberato
+
+    def test_venduto_mai_liberato(self):
+        run_script(self.run, verifica_inventario)                 # IMG_0006 visto in vendita
+        sold = next(i for i in self.run.api.inventory if i["external_id"] == "IMG_0006")
+        self.run.api.sell(sold)                                   # venduto: sparisce dall'inventario
         out = run_script(self.run, verifica_inventario, "--libera", answer="s")
         rows = self.rows()
-        self.assertEqual(rows["IMG_0006"]["online"], "sparito")
+        self.assertEqual(rows["IMG_0006"]["online"], "venduto")
+        self.assertIn("venduti: 1", out)
+        self.assertNotIn("IMG_0006", [r for r in rows if rows[r]["online"] == "assente"])
         self.assertIn("IMG_0006", rows)                           # resta: non torna in vendita
-        self.assertIn("Erano online e ora non ci sono più", out)
+        out = run_script(self.run, verifica_inventario, "--libera-solo", "IMG_0006", answer="s")
+        self.assertIn("IMG_0006 NON si libera: venduto (mai liberare un disco venduto)", out)
+        self.assertIn("IMG_0006", self.rows())
+        # venduto resta venduto anche se poi gli ordini non si leggono
+        self.run.api.orders_error = True
+        run_script(self.run, verifica_inventario)
+        self.assertEqual(self.rows()["IMG_0006"]["online"], "venduto")
+
+    def test_ordine_annullato_non_conta(self):
+        run_script(self.run, verifica_inventario)
+        item = next(i for i in self.run.api.inventory if i["external_id"] == "IMG_0006")
+        self.run.api.sell(item, status="Cancelled (Non-Paying Buyer)")   # tolto a mano dopo l'annullamento
+        run_script(self.run, verifica_inventario)
+        self.assertEqual(self.rows()["IMG_0006"]["online"], "rimosso")
+
+    def test_rimosso_a_mano_libera_solo(self):
+        # Come IMG_2087: caricato, poi rimosso a mano su Discogs (non venduto). Le altre righe non si toccano.
+        run_script(self.run, verifica_inventario)
+        self.run.api.inventory = []
+        out = run_script(self.run, verifica_inventario, "--libera-solo", "IMG_0006", answer="s")
+        self.assertEqual(set(self.rows()), {"IMG_0003"})          # liberata solo IMG_0006
+        self.assertIn("Liberate 1 righe", out)
+        self.assertIn("rimosso a mano", out)
+        out = run_script(self.run, verifica_inventario, "--libera-solo", "NON_ESISTE", answer="s")
+        self.assertIn("NON_ESISTE non è nello stato", out)
+
+    def test_articolo_ordine_senza_id_annuncio(self):
+        run_script(self.run, verifica_inventario)
+        self.run.api.orders = [{"id": "1-1", "status": "Shipped", "items": [{"release": {"id": 4207270}}]}]
+        with self.assertRaises(SystemExit) as e:
+            run_script(self.run, verifica_inventario, "--libera", answer="s")
+        self.assertIn("non contiene l'id dell'annuncio", str(e.exception))
+
+    def test_release_bloccata_a_parte(self):
+        state = self.state()
+        state.execute("INSERT OR REPLACE INTO vendibilita VALUES (3993455, 1, '2026-10-13T10:00:00')")
+        state.commit()
+        out = run_script(self.run, verifica_inventario, "--libera", answer="s")
+        rows = self.rows()
+        self.assertEqual(rows["IMG_0003"]["online"], "bloccata")
+        self.assertIn("IMG_0003", rows)                           # non liberata: non servirebbe
+        self.assertIn("bloccati da Discogs: 1", out)
+        self.assertIn("Nessuna riga da liberare", out)
+        check = {r["external_id"]: r for r in self.run.read_csv("verifica_inventario.csv")}
+        self.assertEqual((check["IMG_0003"]["gruppo"], check["IMG_0003"]["liberabile"]), ("bloccati da Discogs", "no"))
 
     def test_inventario_non_leggibile(self):
         self.run.api.inventory_error = True
@@ -235,6 +295,22 @@ class TestRielaboraSicuro(TempRun):
         self.assertEqual(set(self.rows()), {"IMG_0003", "IMG_0006"})
         self.assertEqual(self.csv.read_text(), self.before)
         self.assertEqual(self.run.api.listings, [])
+
+    def test_ordini_non_leggibili_nessuna_riga_toccata(self):
+        self.run.api.orders_error = True
+        out = self.run.main("--bozza", "--rielabora")
+        self.assertIn("impossibile leggere l'inventario o gli ordini", out)
+        self.assertEqual(set(self.rows()), {"IMG_0003", "IMG_0006"})
+        self.assertEqual(self.run.api.listings, [])
+
+    def test_venduto_mai_rielaborato(self):
+        self.run.api.upload_csv(self.run.inventory())
+        run_script(self.run, verifica_inventario)                 # visti in vendita
+        sold = next(i for i in self.run.api.inventory if i["external_id"] == "IMG_0006")
+        self.run.api.sell(sold)
+        self.run.main("--bozza", "--rielabora")
+        self.assertEqual(self.rows()["IMG_0006"]["online"], "venduto")
+        self.assertEqual([l[4] for l in self.run.api.listings], [])  # nessun annuncio nuovo, nemmeno in bozza
 
     def test_riga_mai_caricata_archiviata_non_cancellata(self):
         self.run.api.add_listing("IMG_0006", 4207270, 25.0, "For Sale")  # solo IMG_0006 è online
@@ -663,6 +739,28 @@ class TestPubblicaBozze(TempRun):
             self.assertEqual(item["status"], "For Sale")
             self.assertEqual(item["comments"], "Copertina perfetta")
             self.assertIn(item["external_id"], ("IMG_0003", "IMG_0006"))
+
+
+class TestConnessioniChiuse(TempRun):
+    def test_stato_chiuso_anche_se_lo_script_si_ferma(self):
+        opened = []
+        real_open = vendi.open_state
+
+        def tracking_open(path):
+            con = real_open(path)
+            opened.append(con)
+            return con
+
+        def missing_key(*args, **kwargs):
+            raise SystemExit("Manca la chiave API di Anthropic")
+
+        with mock.patch("vendi.open_state", tracking_open), mock.patch.object(tp, "FakeAI", missing_key), \
+                mock.patch("vendi.AIVision", missing_key):
+            with self.assertRaises(SystemExit):
+                self.run.main()
+        self.assertEqual(len(opened), 1)
+        with self.assertRaises(sqlite3.ProgrammingError):    # connessione chiusa
+            opened[0].execute("SELECT 1")
 
 
 if __name__ == "__main__":

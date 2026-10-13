@@ -120,6 +120,8 @@ class FakeAPI:
         self.log = []                  # (richiesta, release_id) fatte a Discogs per le release
         self.inventory = []            # annunci del venditore su Discogs (come li restituisce l'inventario)
         self.inventory_error = False   # True: la lettura dell'inventario fallisce
+        self.orders = []               # i miei ordini (come li restituisce /marketplace/orders)
+        self.orders_error = False      # True: la lettura degli ordini fallisce
         self.page_size = 100
 
     def identity(self):
@@ -197,6 +199,23 @@ class FakeAPI:
         self.log.append(("edit", listing_id))
         self._apply(self._item(listing_id), body)
         return {}
+
+    def orders_page(self, page):
+        self.log.append(("orders", page))
+        if self.orders_error:
+            raise vendi.ApiError(0, "nessuna risposta da Discogs per gli ordini")
+        start = (page - 1) * self.page_size
+        pages = max(1, -(-len(self.orders) // self.page_size))
+        return {"orders": self.orders[start:start + self.page_size], "pagination": {"pages": pages}}
+
+    def sell(self, item, status="Shipped"):
+        """Simula una vendita: l'annuncio sparisce dall'inventario e compare in un ordine."""
+        self.inventory.remove(item)
+        order = {"id": f"1234567-{len(self.orders) + 1}", "status": status,
+                 "items": [{"id": item["id"], "release": {"id": item["release"]["id"]},
+                            "price": item["price"], "media_condition": item.get("condition")}]}
+        self.orders.append(order)
+        return order
 
     def upload_csv(self, rows):
         """Simula il caricamento di un CSV su Discogs: le righe vanno In vendita (Discogs ignora DRAFT)."""

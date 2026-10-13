@@ -763,6 +763,11 @@ class DiscogsAPI:
             body["sleeve_condition"] = sleeve_condition
         return self.request("POST", f"/marketplace/listings/{listing_id}", body=body)
 
+    def orders_page(self, page):
+        """Una pagina dei miei ordini (tutti gli stati, anche annullati)."""
+        return self.request("GET", "/marketplace/orders",
+                            {"page": page, "per_page": 100, "sort": "id", "sort_order": "desc"})
+
     def get_listing(self, listing_id):
         return self.request("GET", f"/marketplace/listings/{listing_id}")
 
@@ -1742,7 +1747,8 @@ CREATE TABLE IF NOT EXISTS righe_csv (   -- righe già assegnate a un file CSV
     online      TEXT,     -- da verifica_inventario.py: in_vendita / bozza / venduto / scaduto / assente / sparito
     online_verificato TEXT,  -- data dell'ultima verifica
     online_visto TEXT,    -- prima volta che è stata vista online su Discogs
-    online_ultimo TEXT    -- ultimo stato visto online (in_vendita / bozza / ...)
+    online_ultimo TEXT,   -- ultimo stato visto online (in_vendita / bozza / ...)
+    online_annunci TEXT   -- id degli annunci Discogs visti per questa riga (JSON), per collegarli agli ordini
 );
 CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     external_id TEXT PRIMARY KEY,   -- nome della foto
@@ -1759,7 +1765,8 @@ CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     online      TEXT,     -- come in righe_csv
     online_verificato TEXT,
     online_visto TEXT,
-    online_ultimo TEXT
+    online_ultimo TEXT,
+    online_annunci TEXT
 );
 CREATE TABLE IF NOT EXISTS rielaborati (  -- stato archiviato da --rielabora (per sicurezza, mai cancellato)
     tabella     TEXT,
@@ -1823,7 +1830,8 @@ def open_state(path):
                                 ("annunci_api", "online_verificato", "TEXT"), ("annunci_api", "online_visto", "TEXT"),
                                 ("righe_csv", "online_ultimo", "TEXT"), ("annunci_api", "online_ultimo", "TEXT"),
                                 ("foto", "hash", "TEXT"), ("foto", "ai2_dati", "TEXT"),
-                                ("foto", "ai2_scelta", "TEXT"), ("foto", "secondo", "TEXT")]:  # stato di una versione precedente
+                                ("foto", "ai2_scelta", "TEXT"), ("foto", "secondo", "TEXT"),
+                                ("righe_csv", "online_annunci", "TEXT"), ("annunci_api", "online_annunci", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
@@ -1849,7 +1857,51 @@ ONLINE_OF = {"For Sale": "in_vendita", "Draft": "bozza", "Sold": "venduto", "Exp
 ONLINE_ORDER = ["in_vendita", "bozza", "venduto", "scaduto"]
 ONLINE_IT = {"in_vendita": "in vendita", "bozza": "in bozza", "venduto": "venduto", "scaduto": "scaduto",
              "assente": "non online", "bozza_cancellata": "bozza cancellata",
-             "sparito": "sparito (era online: venduto o cancellato?)"}
+             "bloccata": "bloccata da Discogs",
+             "rimosso": "rimosso a mano (era in vendita, non è in nessun ordine)",
+             "forse_venduto": "forse venduto (la release è in un ordine)",
+             "sparito": "sparito (era online: venduto o cancellato? ordini non letti)"}
+FREEABLE = ("assente", "bozza_cancellata", "rimosso")   # mai il venduto, mai il bloccato
+
+
+class OrdersUnreadable(Exception):
+    """I miei ordini Discogs non si possono leggere, o non dicono quale annuncio è stato venduto."""
+
+
+@dataclass
+class Sales:
+    listing_ids: set    # annunci venduti (articoli di ordini non annullati)
+    external_ids: set   # external_id degli articoli, se Discogs li restituisce
+    release_ids: set    # release vendute
+
+
+def fetch_sales(api):
+    """Annunci venduti, dai miei ordini Discogs (tutte le pagine, tutti gli stati). Gli ordini annullati
+    non contano. Ogni articolo di un ordine deve avere l'id dell'annuncio ("id"): è l'unico collegamento
+    affidabile con i miei annunci; se manca, gli ordini non valgono come prova e si solleva
+    OrdersUnreadable."""
+    sales, page = Sales(set(), set(), set()), 1
+    while True:
+        try:
+            data = api.orders_page(page)
+        except (ApiError, ApiUncertain) as e:
+            raise OrdersUnreadable(str(e))
+        orders = data.get("orders", [])
+        for order in orders:
+            if "cancel" in str(order.get("status", "")).lower():
+                continue
+            for item in order.get("items", []):
+                if item.get("id") is None:
+                    raise OrdersUnreadable(f"l'articolo di un ordine ({order.get('id')}) non contiene l'id "
+                                           "dell'annuncio: impossibile collegare l'ordine ai miei annunci")
+                sales.listing_ids.add(item["id"])
+                if (item.get("release") or {}).get("id"):
+                    sales.release_ids.add(item["release"]["id"])
+                if item.get("external_id"):
+                    sales.external_ids.add(item["external_id"])
+        if not orders or page >= data.get("pagination", {}).get("pages", 1):
+            return sales
+        page += 1
 
 
 class InventoryUnreadable(Exception):
@@ -1898,15 +1950,23 @@ def online_of(items):
     return next((o for o in ONLINE_ORDER if o in found), "scaduto")
 
 
-def verify_listings(state, inventory):
-    """Confronta righe CSV e annunci API dello stato con l'inventario Discogs e salva per ognuno
-    online (in_vendita / bozza / venduto / scaduto / assente / bozza_cancellata / sparito), la data
-    della verifica, la prima volta che è stato visto online e l'ultimo stato visto online.
-    Non più online: "assente" se non lo è mai stato, "bozza_cancellata" se l'ultima volta era una
-    bozza (una bozza non si vende: è stata cancellata), "sparito" se era in vendita (venduto?). Corregge lo status (FOR_SALE / DRAFT) in base a
-    Discogs: le righe CSV caricate come DRAFT sono in vendita, perché Discogs ignora DRAFT nei CSV.
-    Restituisce [(tabella, riga aggiornata)]."""
+def verify_listings(state, inventory, sales=None):
+    """Confronta righe CSV e annunci API dello stato con l'inventario Discogs (e con i miei ordini, se
+    `sales` non è None) e salva per ognuno lo stato online, la data della verifica, la prima volta
+    che è stato visto online, l'ultimo stato visto e gli id degli annunci visti.
+
+    Online: in_vendita / bozza / venduto / scaduto. Non più online (l'inventario non mostra i venduti):
+    - "venduto": un suo annuncio (o external_id) è in un ordine non annullato; resta per sempre;
+    - "forse_venduto": nessun annuncio mai visto, ma la release è in un ordine;
+    - "bloccata": la release è bloccata dal marketplace (tabella vendibilita);
+    - "assente": mai visto online (CSV mai caricato o riga scartata);
+    - "bozza_cancellata": l'ultima volta era una bozza (una bozza non si vende);
+    - "rimosso": era in vendita e non è in nessun ordine (tolto a mano);
+    - "sparito": era in vendita, ordini non letti: venduto o tolto a mano, non si sa.
+    Corregge lo status (FOR_SALE / DRAFT) in base a Discogs: le righe CSV caricate come DRAFT sono
+    in vendita, perché Discogs ignora DRAFT nei CSV. Restituisce [(tabella, riga aggiornata)]."""
     when = now()
+    blocked = {r[0] for r in state.execute("SELECT release_id FROM vendibilita WHERE bloccata = 1")}
     for table in ("righe_csv", "annunci_api"):
         for row in state.execute(f"SELECT * FROM {table}").fetchall():
             items = list(inventory.by_eid.get(row["external_id"], []))
@@ -1914,29 +1974,46 @@ def verify_listings(state, inventory):
                 item = inventory.by_listing[row["listing_id"]]
                 if item not in items:
                     items.append(item)
+            seen_ids = set(json.loads(row["online_annunci"] or "[]"))
+            if table == "annunci_api" and row["listing_id"]:
+                seen_ids.add(row["listing_id"])
             if items:
                 online = online_of(items)
+                seen_ids |= {i["id"] for i in items}
                 status = {"in_vendita": "FOR_SALE", "bozza": "DRAFT"}.get(online, row["status"])
                 state.execute(f"UPDATE {table} SET online = ?, online_ultimo = ?, online_verificato = ?,"
-                              " online_visto = COALESCE(online_visto, ?), status = ? WHERE external_id = ?",
-                              (online, online, when, when, status, row["external_id"]))
+                              " online_visto = COALESCE(online_visto, ?), status = ?, online_annunci = ?"
+                              " WHERE external_id = ?",
+                              (online, online, when, when, status, json.dumps(sorted(seen_ids)), row["external_id"]))
+                continue
+            if row["online"] == "venduto":
+                online = "venduto"  # venduto una volta, venduto per sempre
+            elif sales is not None and (seen_ids & sales.listing_ids or row["external_id"] in sales.external_ids):
+                online = "venduto"
+            elif sales is not None and not seen_ids and row["release_id"] in sales.release_ids:
+                online = "forse_venduto"
+            elif sales is None and row["online"] == "forse_venduto":
+                online = "forse_venduto"
+            elif row["release_id"] in blocked:
+                online = "bloccata"
+            elif not row["online_visto"]:
+                online = "assente"
+            elif row["online_ultimo"] == "bozza":
+                online = "bozza_cancellata"
             else:
-                if not row["online_visto"]:
-                    online = "assente"
-                else:
-                    online = "bozza_cancellata" if row["online_ultimo"] == "bozza" else "sparito"
-                state.execute(f"UPDATE {table} SET online = ?, online_verificato = ? WHERE external_id = ?",
-                              (online, when, row["external_id"]))
+                online = "rimosso" if sales is not None else "sparito"
+            state.execute(f"UPDATE {table} SET online = ?, online_verificato = ? WHERE external_id = ?",
+                          (online, when, row["external_id"]))
     state.commit()
     return [(t, r) for t in ("righe_csv", "annunci_api")
             for r in state.execute(f"SELECT * FROM {t}").fetchall()]
 
 
 def can_free(table, row):
-    """True se la riga non è online e non è mai stata in vendita: mai online, o bozza poi cancellata.
-    Si può togliere dallo stato senza rischiare doppioni. Mai una riga vista in vendita e poi
-    sparita, che potrebbe essere stata venduta."""
-    if row["online"] not in ("assente", "bozza_cancellata"):
+    """True se la riga si può togliere dallo stato senza rischiare di vendere un disco che non c'è più:
+    mai online, bozza cancellata, o rimossa a mano (era in vendita e non è in nessun ordine). Mai
+    una riga venduta, forse venduta, sparita (ordini non letti) o bloccata da Discogs."""
+    if row["online"] not in FREEABLE:
         return False
     return table == "righe_csv" or row["stato"] != "in_corso"
 
@@ -1990,7 +2067,7 @@ def free_rows(state, out_dir, rows):
     return freed
 
 
-def prepare_rework(state, photos, out_dir, inventory):
+def prepare_rework(state, photos, out_dir, inventory, sales=None):
     """--rielabora: le foto indicate tornano da elaborare da capo (riconoscimento, AI compresa,
     prezzo e annuncio). inventory: l'inventario Discogs letto all'inizio (None se non leggibile).
 
@@ -2001,8 +2078,10 @@ def prepare_rework(state, photos, out_dir, inventory):
     cancellati ma archiviati in risultati/archivio/. La spesa AI già fatta resta contata nel tetto.
     Restituisce (rielaborate, saltate)."""
     ids = {p.external_id for p in photos}
+    if sales is None:
+        inventory = None  # senza ordini non si distingue un venduto: nessuna riga si tocca
     if inventory is not None:
-        verify_listings(state, inventory)
+        verify_listings(state, inventory, sales)
     skipped, to_free = set(), []
     for row in state.execute("SELECT * FROM righe_csv").fetchall():
         members = csv_members(state, row["external_id"])
@@ -2360,6 +2439,17 @@ def my_listed_prices(state, release_id):
 
 
 def main():
+    """Esegue vendi.py e chiude sempre database e stato, anche se lo script si ferma a metà
+    (chiave mancante, errore di rete, Ctrl+C...)."""
+    opened = []
+    try:
+        run(opened)
+    finally:
+        for resource in opened:
+            resource.close()
+
+
+def run(opened):
     parser = argparse.ArgumentParser(description="Metti in vendita su Discogs i dischi fotografati")
     parser.add_argument("cartella", help="cartella che contiene le sottocartelle dei gradi (M, NM, VG+, VG, G+, G)")
     add_price_args(parser)
@@ -2426,6 +2516,7 @@ def main():
           + (" - annunci come BOZZA (Draft)" if args.bozza else ""))
 
     con = dd.open_db(args.db)
+    opened.append(con)
     use_ocr = ocr_available()
     if not use_ocr:
         print("Attenzione: OCR non disponibile (serve macOS con 'pip install ocrmac'): uso solo il barcode.")
@@ -2439,6 +2530,7 @@ def main():
         if saved:
             print(f"Backup dello stato: {saved}")
     state = open_state(STATE_DB)
+    opened.append(state)
     ai = ai2 = None
     ai_spent_before = state.execute("SELECT COALESCE(SUM(ai_costo), 0) FROM foto").fetchone()[0]
     if not args.senza_ai:
@@ -2460,14 +2552,15 @@ def main():
     recheck = set()   # foto rielaborate: la vendibilità della loro release va ricontrollata
     if args.rielabora:
         # Prima di tutto: cosa è davvero online. Nessuna riga online (o che lo è stata) si rielabora.
+        inventory = sales = None
         try:
             inventory = fetch_inventory(api, identity["username"])
-        except InventoryUnreadable as e:
-            inventory = None
-            print(f"--rielabora: impossibile leggere l'inventario Discogs ({e}).\n"
+            sales = fetch_sales(api)
+        except (InventoryUnreadable, OrdersUnreadable) as e:
+            print(f"--rielabora: impossibile leggere l'inventario o gli ordini Discogs ({e}).\n"
                   "  Per sicurezza nessuna riga CSV né annuncio API viene rielaborato: solo le foto mai messe in "
                   "vendita.")
-        redo, skipped = prepare_rework(state, photos, Path(args.uscita).expanduser(), inventory)
+        redo, skipped = prepare_rework(state, photos, Path(args.uscita).expanduser(), inventory, sales)
         recheck = set(redo)
         print(f"--rielabora: {len(redo)} foto verranno rielaborate da capo"
               + (f"; {len(skipped)} saltate perché online su Discogs (o lo sono state, o l'inventario non si legge):"
