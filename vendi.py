@@ -127,6 +127,7 @@ class Photo:
     folder: str
     media: str                # grado del disco (chiave di GRADES)
     sleeve: str               # grado della copertina (chiave di GRADES)
+    sha256: str = None        # impronta del contenuto (riempita da check_photo_identity)
 
     @property
     def external_id(self):
@@ -139,6 +140,86 @@ class Photo:
     def fingerprint(self):
         st = self.path.stat()
         return f"{self.folder}|{self.path.name}|{st.st_size}|{st.st_mtime_ns}"
+
+    def content_hash(self):
+        return file_sha256(self.path)
+
+
+def file_sha256(path):
+    """Impronta SHA-256 dei byte del file: non cambia spostando o rinominando la foto."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def photo_taken_at(path):
+    """Data e ora di scatto dall'EXIF (DateTimeOriginal, altrimenti DateTime), o None se manca.
+    Funziona anche con le HEIC dell'iPhone tramite pillow-heif. Mai la data del file."""
+    try:
+        from PIL import Image
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+        except ImportError:
+            pass
+        with Image.open(path) as img:
+            exif = img.getexif()
+            value = exif.get_ifd(0x8769).get(36867) or exif.get(306)
+        return dt.datetime.strptime(str(value).strip()[:19], "%Y:%m:%d %H:%M:%S") if value else None
+    except Exception:  # foto senza EXIF, formato non leggibile, Pillow non installato
+        return None
+
+
+def check_photo_identity(state, photos):
+    """Prima di elaborare: calcola l'impronta del contenuto di ogni foto e la confronta con lo stato.
+
+    - stesso nome, stesso contenuto (anche spostata di cartella) -> è la stessa foto: niente da rifare;
+    - stesso nome, contenuto diverso -> conflitto: due foto diverse avrebbero lo stesso external_id;
+    - stesso contenuto, nomi diversi -> conflitto: la stessa foto verrebbe messa in vendita due volte.
+    Stato di una versione precedente senza impronta: la si calcola ora; se la dimensione del file
+    coincide con quella salvata è la stessa foto (niente riconoscimento né AI da rifare).
+    Restituisce l'elenco dei conflitti (vuoto se va tutto bene) e aggiorna lo stato."""
+    rows = {r["external_id"]: r for r in state.execute("SELECT external_id, foto, impronta, hash FROM foto")}
+    by_hash = {r["hash"]: eid for eid, r in rows.items() if r["hash"]}
+    conflicts, seen = [], {}
+    for p in photos:
+        row = rows.get(p.external_id)
+        fp = p.fingerprint()
+        if row is not None and row["hash"] and row["impronta"] == fp:
+            p.sha256 = row["hash"]  # file non toccato: inutile rileggerlo
+        else:
+            p.sha256 = p.content_hash()
+        if p.sha256 in seen:
+            conflicts.append(f"{p.name} e {seen[p.sha256].name} sono la stessa foto con due nomi diversi "
+                             "(verrebbe messa in vendita due volte): tienine una sola")
+            continue
+        seen[p.sha256] = p
+        other = by_hash.get(p.sha256)
+        if other and other != p.external_id:
+            conflicts.append(f"{p.name} è la stessa foto già elaborata come {other} "
+                             f"({photo_name(rows[other]['foto'])}): tienine una sola")
+            continue
+        if row is None:
+            continue
+        if row["hash"]:
+            same = row["hash"] == p.sha256
+        else:  # versione precedente: impronta = cartella|nome|dimensione|data
+            parts = (row["impronta"] or "").split("|")
+            same = len(parts) == 4 and parts[2] == str(p.path.stat().st_size)
+        if not same:
+            conflicts.append(f"{p.name}: nello stato c'è già una foto DIVERSA con lo stesso nome {p.external_id} "
+                             f"({photo_name(row['foto'])}): rinomina la nuova (es. con rinomina_foto.py)")
+            continue
+        if row["hash"] != p.sha256 or row["impronta"] != fp:
+            # stessa foto (forse spostata): aggiorna impronta e cartella, il riconoscimento resta valido
+            state.execute("UPDATE foto SET hash = ?, impronta = ?, cartella = ?, foto = ?, media = ?, sleeve = ?"
+                          " WHERE external_id = ?", (p.sha256, fp, p.folder, str(p.path), p.media, p.sleeve,
+                                                     p.external_id))
+    state.commit()
+    return conflicts
 
 
 def scan_photos(root):
@@ -1432,6 +1513,7 @@ CREATE TABLE IF NOT EXISTS foto (
     ai_dati     TEXT,     -- cosa ha letto l'AI nella foto (mai richiesto due volte)
     ai_costo    REAL DEFAULT 0,  -- spesa AI per questa foto (euro, 1 $ = 1 €)
     ai_scelta   TEXT,     -- scelta dell'AI tra i candidati, con sicurezza e motivo
+    hash        TEXT,     -- SHA-256 del contenuto della foto (riconosce la stessa foto anche spostata)
     disco       TEXT,     -- artista - titolo (etichetta, paese, anno) della release trovata
     metodo      TEXT,     -- barcode / catno / locale-testo / ai
     motivo      TEXT,     -- perché è da verificare a mano (esito da_verificare)
@@ -1561,7 +1643,8 @@ def open_state(path):
                                 ("righe_csv", "online", "TEXT"), ("righe_csv", "online_verificato", "TEXT"),
                                 ("righe_csv", "online_visto", "TEXT"), ("annunci_api", "online", "TEXT"),
                                 ("annunci_api", "online_verificato", "TEXT"), ("annunci_api", "online_visto", "TEXT"),
-                                ("righe_csv", "online_ultimo", "TEXT"), ("annunci_api", "online_ultimo", "TEXT")]:  # stato di una versione precedente
+                                ("righe_csv", "online_ultimo", "TEXT"), ("annunci_api", "online_ultimo", "TEXT"),
+                                ("foto", "hash", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     old = con.execute("SELECT name FROM sqlite_master WHERE name IN ('annunci', 'csv_righe')").fetchall()
@@ -2096,6 +2179,14 @@ def main():
               f"spesa finora {money(ai_spent_before)}, tetto {money(args.ai_tetto)}")
     if not args.simula:
         recover_pending_listings(state, api, identity["username"])
+    # Nomi ripetuti: prima di elaborare qualsiasi foto, ognuna deve essere riconoscibile senza equivoci.
+    conflicts = check_photo_identity(state, photos)
+    if conflicts:
+        state.close()
+        con.close()
+        raise SystemExit("Mi fermo prima di elaborare: ci sono foto con lo stesso nome ma contenuto diverso, o la "
+                         "stessa foto con due nomi.\n  " + "\n  ".join(conflicts)
+                         + "\nRinomina le foto nuove (python3 rinomina_foto.py <cartella>) e rilancia.")
     recheck = set()   # foto rielaborate: la vendibilità della loro release va ricontrollata
     if args.rielabora:
         # Prima di tutto: cosa è davvero online. Nessuna riga online (o che lo è stata) si rielabora.
@@ -2132,7 +2223,7 @@ def main():
                 continue
             row = state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
             fingerprint = photo.fingerprint()
-            same_photo = row is not None and row["impronta"] == fingerprint
+            same_photo = row is not None and row["hash"] == photo.sha256  # stesso contenuto, anche se spostata
             cache = {"read": json.loads(row["ai_dati"]) if same_photo and row["ai_dati"] else None,
                      "choice": json.loads(row["ai_scelta"]) if same_photo and row["ai_scelta"] else None}
             if (not same_photo or row["esito"] in ("errore", "sospeso", "rielabora")
@@ -2152,13 +2243,13 @@ def main():
                 old_cost = row["ai_costo"] if same_photo and row["ai_costo"] else 0.0
                 state.execute(
                     "INSERT OR REPLACE INTO foto (external_id, cartella, foto, impronta, media, sleeve, esito, fonte,"
-                    " release_id, candidati, dettagli, aggiornato, ai_dati, ai_costo, ai_scelta, disco, metodo, motivo)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " release_id, candidati, dettagli, aggiornato, ai_dati, ai_costo, ai_scelta, disco, metodo, motivo,"
+                    " hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (eid, photo.folder, str(photo.path), fingerprint, photo.media, photo.sleeve, rec.esito, rec.fonte,
                      rec.release_id, format_candidates(rec.candidates), rec.details, now(),
                      json.dumps(rec.ai_read) if rec.ai_read is not None else None, old_cost + rec.ai_cost,
                      json.dumps(rec.ai_choice) if rec.ai_choice is not None else None, describe_release(rec.release),
-                     rec.metodo, rec.motivo),
+                     rec.metodo, rec.motivo, photo.sha256),
                 )
                 state.commit()
                 row = state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()

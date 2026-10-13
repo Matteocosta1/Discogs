@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_protezioni as tp  # noqa: E402
 from test_protezioni import Run  # noqa: E402
 
+import rinomina_foto  # noqa: E402
 import verifica_inventario  # noqa: E402
 
 vendi = tp.vendi
@@ -290,6 +291,114 @@ class TestBozza(TempRun):
         self.run.api.create_listing = create
         self.run.main("--bozza")
         self.assertEqual(seen, ["in_corso"] * 3)
+
+
+# --------------------------------------------------------------------------
+# Punto 4: nomi delle foto ripetuti tra lotti diversi
+# --------------------------------------------------------------------------
+
+class TestNomiRipetuti(TempRun):
+    photos = {"VG+": ["IMG_0001", "IMG_0003", "IMG_0006"]}
+
+    def foto(self, eid):
+        return self.state().execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
+
+    def test_stesso_nome_contenuto_diverso_si_ferma(self):
+        self.run.main("--bozza")
+        listings = len(self.run.api.listings)
+        # Nuovo lotto: un'altra foto (da un altro telefono) con lo stesso nome di una già in vendita
+        (self.run.photos / "VG+" / "IMG_0006.JPG").unlink()
+        (self.run.photos / "NM").mkdir()
+        (self.run.photos / "NM" / "IMG_0006.JPG").write_bytes(b"un altro disco")
+        tp.FakeAI.reads = []
+        with self.assertRaises(SystemExit) as e:
+            self.run.main("--bozza")
+        self.assertIn("NM/IMG_0006.JPG", str(e.exception))
+        self.assertIn("DIVERSA con lo stesso nome", str(e.exception))
+        self.assertIn("rinomina_foto.py", str(e.exception))
+        self.assertEqual(len(self.run.api.listings), listings)   # niente elaborato
+        self.assertEqual(tp.FakeAI.reads, [])
+
+    def test_stessa_foto_con_due_nomi_si_ferma(self):
+        (self.run.photos / "VG+" / "IMG_0099.JPG").write_bytes((self.run.photos / "VG+" / "IMG_0003.JPG").read_bytes())
+        with self.assertRaises(SystemExit) as e:
+            self.run.main()
+        self.assertIn("stessa foto con due nomi", str(e.exception))
+        self.assertEqual(self.run.inventory(), [])
+
+    def test_foto_spostata_di_cartella_e_la_stessa(self):
+        self.run.main()
+        cost = self.foto("IMG_0001")["ai_costo"]
+        (self.run.photos / "NM").mkdir()
+        (self.run.photos / "VG+" / "IMG_0001.JPG").rename(self.run.photos / "NM" / "IMG_0001.JPG")
+        tp.FakeAI.reads = []
+        self.run.main()
+        self.assertEqual(tp.FakeAI.reads, [])                     # nessun costo AI
+        row = self.foto("IMG_0001")
+        self.assertEqual(row["ai_costo"], cost)
+        self.assertEqual((row["cartella"], row["media"]), ("NM", "NM"))
+        self.assertEqual(row["esito"], "da_verificare")           # il riconoscimento resta
+
+    def test_migrazione_stato_senza_impronta(self):
+        self.run.main()
+        state = self.state()
+        state.execute("UPDATE foto SET hash = NULL")              # stato di una versione precedente
+        state.commit()
+        cost = self.foto("IMG_0001")["ai_costo"]
+        tp.FakeAI.reads = []
+        self.run.main()
+        self.assertEqual(tp.FakeAI.reads, [])                     # la stessa foto: niente AI
+        self.assertEqual(self.foto("IMG_0001")["ai_costo"], cost)
+        self.assertEqual(self.foto("IMG_0001")["hash"],
+                         vendi.file_sha256(self.run.photos / "VG+" / "IMG_0001.JPG"))
+
+    def test_migrazione_dimensione_diversa_e_un_conflitto(self):
+        self.run.main()
+        state = self.state()
+        state.execute("UPDATE foto SET hash = NULL")
+        state.commit()
+        (self.run.photos / "VG+" / "IMG_0003.JPG").write_bytes(b"altra foto, altra dimensione")
+        with self.assertRaises(SystemExit) as e:
+            self.run.main()
+        self.assertIn("IMG_0003", str(e.exception))
+
+
+class TestRinominaFoto(TempRun):
+    photos = {"VG+": ["IMG_0003", "IMG_0006"]}
+    TAKEN = {"IMG_2087": vendi.dt.datetime(2026, 10, 13, 15, 42, 33), "IMG_0006": None}
+
+    def rename(self, answer):
+        output = io.StringIO()
+        with mock.patch("sys.argv", ["rinomina_foto.py", str(self.run.photos)]), \
+                mock.patch("vendi.STATE_DB", self.run.tmp / "vendita_stato.sqlite"), \
+                mock.patch("vendi.photo_taken_at", lambda path: self.TAKEN.get(Path(path).stem)), \
+                mock.patch("builtins.input", lambda prompt="": answer), contextlib.redirect_stdout(output):
+            rinomina_foto.main()
+        return output.getvalue()
+
+    def names(self):
+        return sorted(p.name for p in self.run.photos.rglob("*.JPG"))
+
+    def test_rinomina_solo_le_foto_nuove(self):
+        self.run.main()                                           # IMG_0003 e IMG_0006 nello stato
+        (self.run.photos / "NM").mkdir()
+        (self.run.photos / "NM" / "IMG_2087.JPG").write_bytes(b"foto nuova")
+        out = self.rename("n")
+        self.assertIn("NM/IMG_2087.JPG -> 20261013_154233_IMG_2087.JPG", out)
+        self.assertIn("già nello stato", out)
+        self.assertEqual(self.names(), ["IMG_0003.JPG", "IMG_0006.JPG", "IMG_2087.JPG"])  # N: niente cambia
+
+        self.rename("s")
+        self.assertEqual(self.names(), ["20261013_154233_IMG_2087.JPG", "IMG_0003.JPG", "IMG_0006.JPG"])
+        self.assertIn("Nessuna foto da rinominare", self.rename("s"))  # già rinominata
+
+    def test_senza_exif_usa_la_data_del_file_e_lo_segnala(self):
+        out = self.rename("s")                                    # stato vuoto: tutte nuove
+        self.assertIn("senza data di scatto", out)
+        renamed = [n for n in self.names() if n.endswith("_IMG_0006.JPG")]
+        self.assertEqual(len(renamed), 1)
+        mtime = vendi.dt.datetime.fromtimestamp((self.run.photos / "VG+" / renamed[0]).stat().st_mtime)
+        self.assertTrue(renamed[0].startswith(f"{mtime:%Y%m%d_%H%M%S}_"))
 
 
 if __name__ == "__main__":

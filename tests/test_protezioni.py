@@ -205,7 +205,7 @@ class Run:
         for grade, names in photos.items():
             (self.photos / grade).mkdir(parents=True)
             for name in names:
-                (self.photos / grade / f"{name}.JPG").write_bytes(b"foto finta")
+                (self.photos / grade / f"{name}.JPG").write_bytes(f"foto finta {name}".encode())
         self.db = self.tmp / "discogs.sqlite"
         build_db(self.db)
         self.out = self.tmp / "risultati"
