@@ -33,33 +33,57 @@ ONLINE_IT = {
 THUMB_SIZE = 700
 
 
+THUMB_ERRORS = []   # (foto, errore) delle miniature non riuscite: le prime vengono mostrate da pannello.py
+
+
+def _thumb_pillow(photo, tmp):
+    from PIL import Image, ImageOps
+    try:
+        import pillow_heif  # foto HEIC dell'iPhone
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
+    with Image.open(photo) as img:
+        img.draft("RGB", (THUMB_SIZE, THUMB_SIZE))
+        small = ImageOps.exif_transpose(img).convert("RGB")
+        small.thumbnail((THUMB_SIZE, THUMB_SIZE))
+        small.save(tmp, "JPEG", quality=82)
+
+
+def _thumb_sips(photo, tmp):
+    """Su macOS: sips (incluso nel sistema) converte anche le HEIC, se Pillow non ci riesce."""
+    import subprocess
+    subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "82", "-Z", str(THUMB_SIZE),
+                    str(photo), "--out", str(tmp)], check=True, capture_output=True, timeout=60)
+
+
 def thumbnail(photo, thumbs_dir):
     """Miniatura JPEG della foto in risultati/miniature/ (fatta una volta sola, poi riusata): Safari non
     mostra le foto prese da altre cartelle del Mac, e le HEIC non si vedono in tutti i browser.
-    Restituisce il percorso relativo al pannello, o None se la foto non si apre."""
+    Prima con Pillow, poi (macOS) con sips. Restituisce il percorso relativo al pannello, o None."""
     import hashlib
     try:
         st = photo.stat()
-        key = hashlib.sha1(f"{photo}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:20]
-        target = Path(thumbs_dir) / f"{key}.jpg"
-        if not target.exists():
-            from PIL import Image, ImageOps
-            try:
-                import pillow_heif  # foto HEIC dell'iPhone
-                pillow_heif.register_heif_opener()
-            except ImportError:
-                pass
-            with Image.open(photo) as img:
-                img.draft("RGB", (THUMB_SIZE, THUMB_SIZE))
-                img = ImageOps.exif_transpose(img).convert("RGB")
-                img.thumbnail((THUMB_SIZE, THUMB_SIZE))
-                target.parent.mkdir(parents=True, exist_ok=True)
-                tmp = target.with_suffix(".tmp")
-                img.save(tmp, "JPEG", quality=82)
-                tmp.replace(target)
-        return f"{Path(thumbs_dir).name}/{target.name}"
-    except Exception:
+    except OSError as e:
+        THUMB_ERRORS.append((str(photo), str(e)))
         return None
+    key = hashlib.sha1(f"{photo}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:20]
+    target = Path(thumbs_dir) / f"{key}.jpg"
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.stem + ".tmp.jpg")
+        errors = []
+        for make in (_thumb_pillow, _thumb_sips) if sys.platform == "darwin" else (_thumb_pillow,):
+            try:
+                make(photo, tmp)
+                tmp.replace(target)
+                break
+            except Exception as e:
+                errors.append(f"{make.__name__[7:]}: {type(e).__name__}: {e}")
+        else:
+            THUMB_ERRORS.append((str(photo), "; ".join(errors)))
+            return None
+    return f"{Path(thumbs_dir).name}/{target.name}"
 
 
 def images_of(path_text, thumbs_dir=None):
@@ -654,6 +678,9 @@ def main():
     finally:
         state.close()
     print(f"Pannello aggiornato: {path}  ({dt.datetime.now():%H:%M})")
+    if THUMB_ERRORS:
+        print(f"Attenzione: {len(THUMB_ERRORS)} foto senza miniatura (nel pannello compare il punto di domanda). "
+              "Prima:\n  " + "\n  ".join(f"{f}: {e}" for f, e in THUMB_ERRORS[:3]))
     if not args.solo_file:
         serve(args.porta, not args.senza_browser)
 
