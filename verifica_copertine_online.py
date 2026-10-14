@@ -16,10 +16,17 @@ Esiti:
   SENZA_IMMAGINI la release su Discogs non ha immagini: controllo impossibile
   FOTO_MANCANTI le foto del disco non sono più nella cartella
 
+Con --ai, per ogni disco confrontato l'AI con la vista guarda le foto accanto alle immagini Discogs
+e dice se la grafica è la stessa (colonna ai_verdetto: UGUALE / PROBABILE / DIVERSA). Serve a sapere
+quali dischi sono DAVVERO sbagliati e a tarare la soglia di Vision sulle vostre foto (riepilogo
+finale "Taratura"). Costo: pochi centesimi a disco (default Opus, il più accurato), con un tetto.
+
 Uso (dalla cartella del progetto):
     python3 verifica_copertine_online.py
+    python3 verifica_copertine_online.py --ai
 """
 
+import argparse
 import csv
 import sqlite3
 from pathlib import Path
@@ -54,7 +61,32 @@ def online_rows(state):
     return out
 
 
+def ai_check(ai, photos, rid, disco, images):
+    """(verdetto, motivo, costo): l'AI dice se le foto hanno la stessa grafica della release."""
+    try:
+        shots = [ai.prepare_small(vendi.load_image(p)) for p in photos[:vendi.AI_MAX_PHOTOS]]
+        covers = [ai.prepare_small(vendi.load_image(f)) for f in images[:vendi.AI_COVER_IMAGES]]
+        choice, cost = ai.match_covers(shots, [({"id": rid, "artists": disco, "title": ""}, covers)])
+    except vendi.BudgetReached:
+        return "TETTO", "tetto di spesa raggiunto", 0.0
+    except Exception as e:
+        return "ERRORE", f"{type(e).__name__}: {e}", 0.0
+    if choice.get("release_id") == rid:
+        verdict = "UGUALE" if choice.get("confidence") == "high" else "PROBABILE"
+    else:
+        verdict = "DIVERSA"
+    return verdict, choice.get("reason", ""), cost
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Controllo visivo dei dischi online e pronti")
+    parser.add_argument("--ai", action="store_true", help="l'AI guarda ogni disco confrontato (taratura)")
+    parser.add_argument("--ai-modello", default="claude-opus-5-5", choices=sorted(vendi.AI_MODELS))
+    parser.add_argument("--ai-tetto", type=float, default=6.0, help="spesa massima in euro (default 6)")
+    args = parser.parse_args()
+    ai = vendi.AIVision(args.ai_modello, args.ai_tetto, 0.0) if args.ai else None
+    if ai:
+        print(f"AI ({args.ai_modello}) su ogni disco confrontato, tetto {args.ai_tetto:.2f} €")
     cm.MAX_IMAGES = ALL_IMAGES
     state = sqlite3.connect(f"file:{vendi.STATE_DB}?mode=ro", uri=True)
     state.row_factory = sqlite3.Row
@@ -95,11 +127,16 @@ def main():
                     verdict = "DUBBIO"
                 else:
                     verdict = "DIVERSA"
-        mark = "" if verdict == "OK" else "  <--"
+        ai_verdict = ai_reason = ""
+        if ai and distance is not None:
+            ai_verdict, ai_reason, _c = ai_check(ai, photos, rid, f["disco"] or str(rid), images)
+        mark = "" if (ai_verdict or verdict) in ("OK", "UGUALE") else "  <--"
         print(f"[{n}/{len(rows)}] {verdict:<14} {f['disco'] or rid}"
-              + (f" (distanza {distance:.2f})" if distance is not None else "") + mark)
+              + (f" (distanza {distance:.2f})" if distance is not None else "")
+              + (f"  AI: {ai_verdict}" if ai_verdict else "") + mark)
         results.append({
             "esito": verdict,
+            "ai_verdetto": ai_verdict,
             "distanza": f"{distance:.2f}" if distance is not None else "",
             "disco_online": f["disco"] or "",
             "release": RELEASE.format(rid),
@@ -111,10 +148,13 @@ def main():
             "foto": f["external_id"],
             "cartella": f["cartella"],
             "percorso_foto": f["foto"],
+            "ai_motivo": ai_reason,
         })
 
     order = {"DIVERSA": 0, "DUBBIO": 1, "SENZA_IMMAGINI": 2, "FOTO_MANCANTI": 3, "OK": 4}
-    results.sort(key=lambda r: (order[r["esito"]], -(float(r["distanza"]) if r["distanza"] else 0)))
+    ai_order = {"DIVERSA": 0, "PROBABILE": 1, "ERRORE": 2, "TETTO": 2, "": 3, "UGUALE": 4}
+    results.sort(key=lambda r: (ai_order[r["ai_verdetto"]], order[r["esito"]],
+                                -(float(r["distanza"]) if r["distanza"] else 0)))
     out = Path(vendi.OUT_DIR) / "verifica_copertine_online.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", newline="", encoding="utf-8") as fh:
@@ -126,6 +166,22 @@ def main():
     for k in ("OK", "DUBBIO", "DIVERSA", "SENZA_IMMAGINI", "FOTO_MANCANTI"):
         print(f"  {k:<15} {sum(1 for r in results if r['esito'] == k)}")
     print(f"Richieste a Discogs per le immagini: {store.calls}")
+    if ai:
+        print("\nSecondo l'AI (guardando le copertine):")
+        for k in ("UGUALE", "PROBABILE", "DIVERSA", "ERRORE", "TETTO"):
+            n_k = sum(1 for r in results if r["ai_verdetto"] == k)
+            if n_k:
+                print(f"  {k:<15} {n_k}")
+        print(f"Spesa AI: {ai.spent:.2f} €")
+        same = sorted(float(r["distanza"]) for r in results if r["ai_verdetto"] == "UGUALE")
+        diff = sorted(float(r["distanza"]) for r in results if r["ai_verdetto"] == "DIVERSA")
+        if same or diff:
+            print("\nTaratura di Vision sulle vostre foto (distanze):")
+            if same:
+                print(f"  copertine UGUALI:  da {same[0]:.2f} a {same[-1]:.2f} (mediana {same[len(same) // 2]:.2f})")
+            if diff:
+                print(f"  copertine DIVERSE: da {diff[0]:.2f} a {diff[-1]:.2f} (mediana {diff[len(diff) // 2]:.2f})")
+            print("  (mi incolli queste righe: servono a fissare la soglia giusta)")
     print(f"Dettaglio (dal più sospetto): {out.resolve()}")
 
 
