@@ -3620,6 +3620,11 @@ def run(opened):
     parser.add_argument("--google-vision", action="store_true",
                         help="terzo servizio sui dischi non trovati: ricerca web dell'immagine con Google Cloud "
                              "Vision (chiave GOOGLE_VISION_KEY in .env; circa 0,35 cent a foto, conta nel tetto AI)")
+    parser.add_argument("--veloce", action="store_true",
+                        help="modalità veloce: barcode, catalogo e copertine prima di tutto; 1 immagine per release "
+                             "(invece di 4), al massimo 3 candidati, niente Gemini, niente secondo tentativo, niente "
+                             "Google. La porta d'uscita resta: senza copertina che combacia il disco va a mano. "
+                             "Alla fine stampa i tempi, per confrontarli con la modalità completa")
     parser.add_argument("--senza-copertine", action="store_true",
                         help="non confrontare le foto con le copertine di Discogs (copertine.py)")
     parser.add_argument("--senza-ai", action="store_true",
@@ -3762,6 +3767,14 @@ def run(opened):
     state = open_state(STATE_DB)
     opened.append(state)
     ai = ai2 = None
+    if args.veloce:
+        args.senza_gemini = args.senza_google = args.senza_secondo_tentativo = True
+        cmv = copertine_module()
+        cmv.MAX_IMAGES, cmv.MAX_CANDIDATES = 1, 3
+        global AI_COVER_IMAGES
+        AI_COVER_IMAGES = 1
+        print("MODALITÀ VELOCE: barcode, catalogo e copertine (1 immagine, 3 candidati); niente Gemini, "
+              "niente secondo tentativo. Porta d'uscita attiva.")
     ai_spent_before = state.execute("SELECT COALESCE(SUM(ai_costo), 0) FROM foto").fetchone()[0]
     if not args.senza_ai:
         ai = AIVision(args.ai_modello, args.ai_tetto, ai_spent_before)
@@ -3790,6 +3803,8 @@ def run(opened):
         trusted = [r[0] for r in state.execute("SELECT release_id FROM conferme")]
         covers = CoverCheck(cm.CoverStore(api, COVER_DIR), cm.Matcher(), trusted)
         covers.ai = ai2 or ai   # chi guarda le copertine nei casi dubbi: il secondo modello (Opus) se attivo
+        if args.veloce and ai is not None:   # anche in veloce le copertine dubbie le guarda Opus (precisione)
+            covers.ai = AIVision(args.ai_modello_secondo, args.ai_tetto, ai_spent_before, wallet=ai.wallet)
         print(f"Confronto delle copertine: {covers.matcher.backend}"
               + (f", {len(trusted)} release già confermate a mano" if trusted else ""))
     # Nomi ripetuti: prima di elaborare qualsiasi foto, ognuna deve essere riconoscibile senza equivoci.
@@ -3817,6 +3832,7 @@ def run(opened):
               + (f"; {len(skipped)} saltate perché online su Discogs (o lo sono state, o l'inventario non si legge):"
                  f" {', '.join(skipped)}" if skipped else ""))
 
+    run_started = time.monotonic()
     parts = PartAllocator(last_part(state) + 1)   # le righe nuove vanno sempre in file nuovi
     simulated_csv, simulated_listings, simulated_collectors, simulated_rows_info = [], [], [], []
     stats = {"collezionistici": 0, "righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0,
@@ -4188,7 +4204,11 @@ def run(opened):
         to_check = write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_collectors,
                                  simulated_rows_info)
         print()
-        print("Riepilogo di questa esecuzione")
+        elapsed = time.monotonic() - run_started
+        done_n = max(1, total - stats["gia_fatte"])
+        print("Riepilogo di questa esecuzione" + (" (MODALITÀ VELOCE)" if args.veloce else ""))
+        print(f"  tempo: {elapsed / 60:.1f} min, in media {elapsed / done_n:.0f} secondi a disco "
+              f"({done_n} dischi elaborati davvero)")
         print(f"  dischi elaborati:            {total} (foto totali: {sum(len(p.images) for p in photos)})")
         print(f"  riconosciuti in questa esecuzione: {stats['ric_locale']} al primo colpo (senza AI), "
               f"{stats['ric_ai']} con l'AI, {stats['ric_secondo']} con il secondo tentativo"
