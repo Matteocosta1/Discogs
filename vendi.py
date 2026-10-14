@@ -1991,6 +1991,14 @@ CREATE TABLE IF NOT EXISTS annunci_api ( -- annunci creati via API, uno per foto
     online_ultimo TEXT,
     online_annunci TEXT
 );
+CREATE TABLE IF NOT EXISTS conferme (     -- release scelte a mano (--abbina, pannello): memoria delle conferme
+    external_id TEXT PRIMARY KEY,
+    release_id  INTEGER,
+    artista     TEXT,
+    titolo      TEXT,
+    etichette   TEXT,
+    quando      TEXT
+);
 CREATE TABLE IF NOT EXISTS rielaborati (  -- stato archiviato da --rielabora (per sicurezza, mai cancellato)
     tabella     TEXT,
     external_id TEXT,
@@ -2068,7 +2076,7 @@ def open_state(path):
 
 def is_local_source(fonte):
     """True se la release è stata trovata nel database locale (anche dopo la lettura dell'AI)."""
-    return (fonte or "").split("+")[-1].startswith("locale")
+    return (fonte or "").split("+")[-1].startswith("locale") or fonte == "manuale"
 
 
 # --------------------------------------------------------------------------
@@ -2194,6 +2202,8 @@ def verify_listings(state, inventory, sales=None):
     blocked = {r[0] for r in state.execute("SELECT release_id FROM vendibilita WHERE bloccata = 1")}
     for table in ("righe_csv", "annunci_api"):
         for row in state.execute(f"SELECT * FROM {table}").fetchall():
+            if table == "annunci_api" and row["stato"] == "pronto":
+                continue  # non ancora inviato a Discogs: niente da verificare
             items = list(inventory.by_eid.get(row["external_id"], []))
             if table == "annunci_api" and row["listing_id"] in inventory.by_listing:
                 item = inventory.by_listing[row["listing_id"]]
@@ -2238,6 +2248,8 @@ def can_free(table, row):
     """True se la riga si può togliere dallo stato senza rischiare di vendere un disco che non c'è più:
     mai online, bozza cancellata, o rimossa a mano (era in vendita e non è in nessun ordine). Mai
     una riga venduta, forse venduta, sparita (ordini non letti) o bloccata da Discogs."""
+    if table == "annunci_api" and row["stato"] in ("pronto", "rifiutato"):
+        return True   # mai andato online
     if row["online"] not in FREEABLE:
         return False
     return table == "righe_csv" or row["stato"] != "in_corso"
@@ -2292,6 +2304,59 @@ def free_rows(state, out_dir, rows):
     return freed
 
 
+def assign_releases(state, con, api, text):
+    """--abbina disco-001=24344624,...: la release scelta a mano per un disco fermo. La foto passa a
+    esito trovato (fonte/metodo 'manuale', niente controlli automatici: ha deciso una persona) e la
+    conferma resta nella tabella conferme. Restituisce [(external_id, release)]."""
+    done = []
+    for item in [t.strip() for t in text.split(",") if t.strip()]:
+        name, _, rid = item.partition("=")
+        if not rid.strip().isdigit():
+            raise SystemExit(f"--abbina: scrivi disco=numero della release Discogs, es. disco-001=24344624 (non '{item}')")
+        rid = int(rid)
+        eid = find_disc(state, name.strip())
+        foto = state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
+        if foto["riga_csv"] or state.execute("SELECT 1 FROM annunci_api WHERE external_id = ? AND stato <> 'pronto'",
+                                             (eid,)).fetchone():
+            raise SystemExit(f"--abbina: {eid} è già in vendita (o in un CSV): prima --togli, poi --abbina.")
+        releases = dd.get_releases(con, [rid])
+        if releases:
+            release = releases[0]
+        else:
+            data = api.release(rid)
+            release = api_release_as_release(data)
+        if not format_allowed(release):
+            raise SystemExit(f"--abbina: la release {rid} ({describe_release(release)}) non è nei formati ammessi "
+                             f"({', '.join(ALLOWED_FORMATS)}).")
+        state.execute("DELETE FROM annunci_api WHERE external_id = ? AND stato = 'pronto'", (eid,))
+        state.execute("UPDATE foto SET esito = 'trovato', fonte = 'manuale', metodo = 'manuale', release_id = ?,"
+                      " disco = ?, motivo = NULL, prezzo = NULL, dettagli = COALESCE(dettagli, '') || ?,"
+                      " aggiornato = ? WHERE external_id = ?",
+                      (rid, describe_release(release), f"; abbinato a mano alla release {rid}", now(), eid))
+        state.execute("INSERT OR REPLACE INTO conferme VALUES (?,?,?,?,?,?)",
+                      (eid, rid, release.get("artists") or "", release.get("title") or "",
+                       release.get("labels") or "", now()))
+        done.append((eid, release))
+    state.commit()
+    return done
+
+
+def api_release_as_release(data):
+    """GET /releases/{id} nello stesso formato delle release del database locale."""
+    labels = data.get("labels") or []
+    return {
+        "id": data["id"], "artists": ", ".join(a.get("name", "") for a in data.get("artists", [])),
+        "title": data.get("title", ""),
+        "labels": "; ".join(f"{l.get('name', '')} ({l.get('catno', '')})" for l in labels),
+        "label_names": [l.get("name", "") for l in labels],
+        "catno_norms": [dd.normalize_catno(l.get("catno", "")) for l in labels if l.get("catno")],
+        "country": data.get("country", ""), "year": data.get("year") or None,
+        "formats": ", ".join(", ".join([f.get("name", "")] + f.get("descriptions", [])) for f in data.get("formats", [])),
+        "barcodes": [i.get("value", "") for i in data.get("identifiers", []) if i.get("type") == "Barcode"][:3],
+        "_fonte": "api",
+    }
+
+
 def disc_matches(photo, names):
     """True se il disco è tra quelli indicati: per external_id, per nome (M/disco-013) o per sottocartella."""
     return bool({photo.external_id, photo.path.name, f"{photo.folder}/{photo.path.name}"} & names)
@@ -2320,11 +2385,14 @@ def remove_discs(state, out_dir, names):
     Mai su righe o annunci che sono stati online: lì si corregge su Discogs.
     Restituisce (dischi tolti, righe tolte, copie che tornano da elaborare)."""
     targets = [find_disc(state, n) for n in names]
-    rows = {}
+    rows, listings = {}, []
     for eid in targets:
-        if state.execute("SELECT 1 FROM annunci_api WHERE external_id = ? OR external_id LIKE ?",
-                         (eid, eid + "-copia%")).fetchone():
-            raise SystemExit(f"--togli: {eid} è già stato messo in vendita via API: toglilo da Discogs.")
+        for a in state.execute("SELECT * FROM annunci_api WHERE external_id = ? OR external_id LIKE ?",
+                               (eid, eid + "-copia%")).fetchall():
+            if a["stato"] not in ("pronto", "rifiutato"):
+                raise SystemExit(f"--togli: {eid} è già stato messo in vendita via API (annuncio {a['external_id']}"
+                                 f", {a['stato']}): toglilo da Discogs.")
+            listings.append(("annunci_api", a))
         foto = state.execute("SELECT riga_csv FROM foto WHERE external_id = ?", (eid,)).fetchone()
         row = foto["riga_csv"] and state.execute("SELECT * FROM righe_csv WHERE external_id = ?",
                                                  (foto["riga_csv"],)).fetchone()
@@ -2333,7 +2401,7 @@ def remove_discs(state, out_dir, names):
                 raise SystemExit(f"--togli: la riga {row['external_id']} di inventario_{row['parte']:03d}.csv "
                                  "risulta già online su Discogs: correggila su Discogs, non qui.")
             rows[row["external_id"]] = row
-    freed = free_rows(state, out_dir, [("righe_csv", r) for r in rows.values()])
+    freed = free_rows(state, out_dir, [("righe_csv", r) for r in rows.values()] + listings)
     state.executemany("UPDATE foto SET esito = 'tolto', motivo = 'tolto a mano con --togli', riga_csv = NULL"
                       " WHERE external_id = ?", [(e,) for e in targets])
     state.commit()
@@ -2539,6 +2607,52 @@ def listing_owner(external_id):
     return m.group(1) if m else external_id
 
 
+def send_listing(state, api, row, stats, info=""):
+    """Invia a Discogs l'annuncio della riga di annunci_api (stato pronto o in_corso): prima lo segna
+    in_corso (niente doppioni se si interrompe), poi POST. Restituisce pubblicato / rifiutato / incerto."""
+    eid = row["external_id"]
+    state.execute("UPDATE annunci_api SET stato = 'in_corso', inviato = ? WHERE external_id = ?", (now(), eid))
+    state.commit()
+    status = API_STATUS[row["status"] or "FOR_SALE"]
+    try:
+        resp = api.create_listing(row["release_id"], GRADES[row["media"]], GRADES[row["sleeve"]], row["price"],
+                                  eid, status)
+    except ApiUncertain as e:
+        print(f"{info}: esito della pubblicazione di {eid} incerto ({e}), verrà controllato al prossimo avvio")
+        return "incerto"
+    except ApiError as e:
+        state.execute("UPDATE annunci_api SET stato = 'rifiutato', messaggio = ? WHERE external_id = ?",
+                      (str(e), eid))
+        state.commit()
+        stats["problemi"] += 1
+        print(f"{info}: annuncio {eid} rifiutato da Discogs ({e})")
+        return "rifiutato"
+    state.execute("UPDATE annunci_api SET stato = 'pubblicato', listing_id = ?, messaggio = NULL"
+                  " WHERE external_id = ?", (resp.get("listing_id"), eid))
+    state.commit()
+    stats["api"] += 1
+    print(f"{info} -> annuncio {eid} " + ("creato in bozza" if status == "Draft" else "pubblicato")
+          + f" via API (listing {resp.get('listing_id')})")
+    return "pubblicato"
+
+
+def publish_pending(state, api, stats):
+    """--pubblica: invia a Discogs tutti gli annunci in stato pronto (ordine naturale)."""
+    rows = sorted(state.execute("SELECT * FROM annunci_api WHERE stato = 'pronto'").fetchall(),
+                  key=lambda r: natural_key(r["external_id"]))
+    if not rows:
+        print("Niente da pubblicare: nessun annuncio in attesa.")
+        return 0
+    print(f"Pubblico su Discogs {len(rows)} annunci in attesa...")
+    done = 0
+    for r in rows:
+        foto = state.execute("SELECT disco FROM foto WHERE external_id = ?", (listing_owner(r["external_id"]),)).fetchone()
+        info = f"{(foto['disco'] if foto else '') or 'release ' + str(r['release_id'])}: {r['price']:.2f}"
+        if send_listing(state, api, r, stats, info) == "pubblicato":
+            done += 1
+    return done
+
+
 def copy_ids(external_id, copies):
     """external_id degli annunci API di un disco con `copies` copie (l'API non ha un campo quantità)."""
     return [external_id] + [f"{external_id}-copia{k}" for k in range(2, copies + 1)]
@@ -2620,9 +2734,12 @@ def write_registry(state, out_dir, csv_rows, api_rows):
                      r["online"] or "", f"https://www.discogs.com/release/{r['release_id']}"])
     for r in api_rows:
         lot, photos, path, disco = info(listing_owner(r["external_id"]))
-        rows.append([lot, "API", disco, r["release_id"], r["media"], r["sleeve"] or r["media"], 1,
-                     f"{r['price']:.2f}", photos, path, r["external_id"], r["online"] or "",
-                     f"https://www.discogs.com/sell/item/{r['listing_id']}"])
+        ready = r["stato"] == "pronto"
+        rows.append([lot, "API (da pubblicare)" if ready else "API", disco, r["release_id"], r["media"],
+                     r["sleeve"] or r["media"], 1, f"{r['price']:.2f}", photos, path, r["external_id"],
+                     "da_pubblicare" if ready else (r["online"] or ""),
+                     f"https://www.discogs.com/release/{r['release_id']}" if ready
+                     else f"https://www.discogs.com/sell/item/{r['listing_id']}"])
     write_csv(out_dir / "registro.csv", REGISTRY_HEADER, rows)
 
 
@@ -2656,7 +2773,9 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
 
     published = sorted(state.execute("SELECT * FROM annunci_api WHERE stato = 'pubblicato'").fetchall(),
                        key=lambda r: natural_key(r["external_id"]))
-    write_registry(state, out_dir, all_rows, published)
+    pending = sorted(state.execute("SELECT * FROM annunci_api WHERE stato = 'pronto'").fetchall(),
+                     key=lambda r: natural_key(r["external_id"]))
+    write_registry(state, out_dir, all_rows, published + pending)
     write_panel_from_state(state, out_dir)
     write_csv(out_dir / "annunci_pubblicati_api.csv", LISTING_HEADER + ["listing_id", "link"],
               [[r["external_id"], r["release_id"], f"{r['price']:.2f}", GRADES[r["media"]], GRADES[r["sleeve"]],
@@ -2806,8 +2925,21 @@ def main():
 
 def run(opened):
     parser = argparse.ArgumentParser(description="Metti in vendita su Discogs i dischi fotografati")
-    parser.add_argument("cartella", help="cartella che contiene le sottocartelle dei gradi: M, NM, VG+, VG, G+, G "
-                                         "(stesso grado per disco e copertina) oppure DISCO_COPERTINA, es. M_NM, VG+_VG")
+    parser.add_argument("cartella", nargs="?",
+                        help="cartella che contiene le sottocartelle dei gradi: M, NM, VG+, VG, G+, G "
+                             "(stesso grado per disco e copertina) oppure DISCO_COPERTINA, es. M_NM, VG+_VG. "
+                             "Si può omettere con --pubblica, --togli o --abbina")
+    parser.add_argument("--pubblica", action="store_true",
+                        help="pubblica su Discogs (via API, in vendita) tutti gli annunci pronti: quelli di questa "
+                             "esecuzione e quelli rimasti in attesa dalle precedenti. Senza, i dischi riconosciuti "
+                             "restano 'pronti' da guardare nel pannello")
+    parser.add_argument("--csv", action="store_true",
+                        help="come prima: i dischi trovati nel database locale finiscono nei file inventario_NNN.csv "
+                             "da caricare a mano, quelli trovati solo via API vanno online subito")
+    parser.add_argument("--abbina", metavar="DISCO=RELEASE",
+                        help="riconoscimento a mano: assegna a un disco fermo la release Discogs giusta, es. "
+                             "disco-001=24344624 (più dischi separati da virgola); al prossimo lancio viene prezzato "
+                             "e messo tra i pronti. Resta in memoria tra le conferme")
     add_price_args(parser)
     parser.add_argument("--soglia-prezzo", type=float, default=50.0,
                         help="per collezionistici.csv: prezzo (valuta del tuo account) oltre il quale un disco "
@@ -2879,9 +3011,11 @@ def run(opened):
         raise SystemExit("--rielabora cambia lo stato vero (data/vendita_stato.sqlite) e non si può usare con --simula:\n"
                          "per ripetere un test usa --rielabora --bozza, gli annunci restano bozze.")
 
+    if not (args.cartella or args.togli or args.abbina or args.pubblica):
+        parser.error("indica la cartella delle foto (oppure --pubblica, --togli, --abbina)")
+    if (args.togli or args.abbina or args.pubblica) and args.simula:
+        parser.error("--togli, --abbina e --pubblica cambiano lo stato vero: non si usano con --simula")
     if args.togli:
-        if args.simula:
-            raise SystemExit("--togli cambia lo stato vero e non si può usare con --simula.")
         saved = backup_state(STATE_DB, args.backup_da_tenere)
         if saved:
             print(f"Backup dello stato: {saved}")
@@ -2899,6 +3033,38 @@ def run(opened):
             print(f"  tornano da elaborare: {', '.join(rest)}: rilancia vendi.py su questa cartella, finiranno "
                   "in un file CSV nuovo")
         print("Se avevi già caricato su Discogs il file di prima, NON ricaricarlo: dimmelo e si corregge su Discogs.")
+        return
+
+    if args.abbina:
+        saved = backup_state(STATE_DB, args.backup_da_tenere)
+        if saved:
+            print(f"Backup dello stato: {saved}")
+        state = open_state(STATE_DB)
+        opened.append(state)
+        con = dd.open_db(args.db)
+        opened.append(con)
+        api = DiscogsAPI(load_token())
+        for eid, release in assign_releases(state, con, api, args.abbina):
+            print(f"Abbinato: {eid} -> {describe_release(release)} [release {release['id']}]")
+        write_outputs(state, Path(args.uscita).expanduser(), [], [])
+        if not args.cartella:
+            print("Al prossimo lancio di vendi.py sulla cartella del lotto il disco viene prezzato e messo tra i pronti.")
+            return
+
+    if not args.cartella:   # solo --pubblica
+        api = DiscogsAPI(load_token())
+        identity = api.identity()
+        print(f"Collegato a Discogs come {identity.get('username')}")
+        saved = backup_state(STATE_DB, args.backup_da_tenere)
+        if saved:
+            print(f"Backup dello stato: {saved}")
+        state = open_state(STATE_DB)
+        opened.append(state)
+        recover_pending_listings(state, api, identity["username"])
+        stats = {"api": 0, "problemi": 0}
+        done = publish_pending(state, api, stats)
+        write_outputs(state, Path(args.uscita).expanduser(), [], [])
+        print(f"Pubblicati: {done}; rifiutati: {stats['problemi']}; richieste API: {api.calls}")
         return
 
     photos, warnings = scan_photos(args.cartella)
@@ -2967,7 +3133,8 @@ def run(opened):
     simulated_csv, simulated_listings, simulated_collectors, simulated_rows_info = [], [], [], []
     stats = {"collezionistici": 0, "righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0,
              "non_vendibili": 0, "non_verificati": 0, "secondo_tentati": 0, "secondo_recuperate": 0,
-             "secondo_costo": 0.0, "ric_locale": 0, "ric_ai": 0, "ric_secondo": 0, "tolti": 0}
+             "secondo_costo": 0.0, "ric_locale": 0, "ric_ai": 0, "ric_secondo": 0, "tolti": 0, "pronti": 0,
+             "pubblicati": 0}
     sale_errors = []
     price_calls = 0
     total = len(photos)
@@ -3255,7 +3422,8 @@ def run(opened):
             # Un disco con alcune copie già pubblicate via API (esecuzione interrotta) resta via API.
             started_api = any(state.execute("SELECT 1 FROM annunci_api WHERE external_id = ?",
                                             (p.external_id,)).fetchone() for p, _ in members)
-            is_csv = not args.bozza and not started_api and any(is_local_source(r["fonte"]) for _, r in members)
+            is_csv = (args.csv and not args.bozza and not started_api
+                      and any(is_local_source(r["fonte"]) for _, r in members))
             if collector:
                 stats["collezionistici"] += 1
                 c_row = [members[0][0].external_id, release_id, media, sum(p.copies for p, _ in members),
@@ -3290,10 +3458,11 @@ def run(opened):
                 print(f"{info} -> CSV")
                 continue
 
-            # Trovato solo via API: un annuncio per copia (l'API non ha un campo quantità).
+            # Un annuncio per copia (l'API non ha un campo quantità). Senza --bozza e senza --csv resta
+            # "pronto": lo si guarda nel pannello e lo si pubblica con --pubblica.
             for p, eid in [(p, eid) for p, _ in members for eid in copy_ids(p.external_id, p.copies)]:
                 if state.execute("SELECT 1 FROM annunci_api WHERE external_id = ?", (eid,)).fetchone():
-                    continue  # copia già pubblicata in un'esecuzione interrotta
+                    continue  # copia già registrata (pronta, o pubblicata in un'esecuzione interrotta)
                 if args.simula:
                     simulated_listings.append([eid, release_id, f"{price:.2f}", GRADES[media], GRADES[sleeve],
                                                API_STATUS[status], calc])
@@ -3302,31 +3471,23 @@ def run(opened):
                     continue
                 state.execute(
                     "INSERT INTO annunci_api (external_id, release_id, price, media, sleeve, stato, inviato, calcolo,"
-                    " status) VALUES (?,?,?,?,?,'in_corso',?,?,?)",
+                    " status) VALUES (?,?,?,?,?,'pronto',?,?,?)",
                     (eid, release_id, price, media, sleeve, now(), calc, status))
-                state.commit()  # segnato PRIMA di inviare: niente doppioni se si interrompe
-                try:
-                    resp = api.create_listing(release_id, GRADES[media], GRADES[sleeve], price, eid,
-                                              API_STATUS[status])
-                except ApiUncertain as e:
-                    print(f"{info}: esito della pubblicazione di {eid} incerto ({e}), verrà controllato al prossimo avvio")
-                    continue
-                except ApiError as e:
-                    state.execute("UPDATE annunci_api SET stato = 'rifiutato', messaggio = ? WHERE external_id = ?",
-                                  (str(e), eid))
-                    state.commit()
-                    stats["problemi"] += 1
-                    print(f"{info}: annuncio {eid} rifiutato da Discogs ({e})")
-                    continue
-                state.execute("UPDATE annunci_api SET stato = 'pubblicato', listing_id = ? WHERE external_id = ?",
-                              (resp.get("listing_id"), eid))
                 state.commit()
-                stats["api"] += 1
-                print(f"{info} -> annuncio {eid} " + ("creato in bozza" if args.bozza else "pubblicato")
-                      + f" via API (listing {resp.get('listing_id')})")
+                if not (args.bozza or args.csv):
+                    stats["pronti"] += 1
+                    print(f"{info} -> pronto da pubblicare ({eid})")
+                    continue
+                send_listing(state, api, state.execute("SELECT * FROM annunci_api WHERE external_id = ?",
+                                                       (eid,)).fetchone(), stats, info)
     except KeyboardInterrupt:
         print("\nInterrotto. Rilancia lo stesso comando per riprendere da qui.")
     finally:
+        if args.pubblica and not budget_stop:
+            try:
+                stats["pubblicati"] = publish_pending(state, api, stats)
+            except KeyboardInterrupt:
+                print("\nInterrotto durante la pubblicazione: rilancia con --pubblica per finire.")
         out_dir = Path(args.uscita).expanduser()
         to_check = write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_collectors,
                                  simulated_rows_info)
@@ -3336,7 +3497,12 @@ def run(opened):
         print(f"  riconosciuti in questa esecuzione: {stats['ric_locale']} al primo colpo (senza AI), "
               f"{stats['ric_ai']} con l'AI, {stats['ric_secondo']} con il secondo tentativo")
         print(f"  righe nel CSV di inventario: {stats['righe_csv']} ({stats['copie_csv']} copie)")
-        print(f"  annunci via API{' (simulati)' if args.simula else ''}: {stats['api']}")
+        waiting = state.execute("SELECT COUNT(*) FROM annunci_api WHERE stato = 'pronto'").fetchone()[0]
+        if stats["pronti"] or waiting:
+            print(f"  pronti da pubblicare:        {stats['pronti']} nuovi, {waiting} in attesa in tutto"
+                  + ("" if args.pubblica else " (guardali nel pannello, poi: python vendi.py --pubblica)"))
+        print(f"  annunci via API{' (simulati)' if args.simula else ''}: {stats['api']}"
+              + (f" (di cui {stats['pubblicati']} con --pubblica)" if args.pubblica else ""))
         print(f"  foto da controllare:         {stats['problemi']}")
         print(f"  foto già in vendita:         {stats['gia_fatte']}")
         if stats["tolti"]:

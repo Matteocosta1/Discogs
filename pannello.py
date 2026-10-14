@@ -115,18 +115,20 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "link": f"https://www.discogs.com/release/{r['release_id']}", "annuncio": "",
             "nascosto": hidden,
         })
-    for r in state.execute("SELECT * FROM annunci_api WHERE stato = 'pubblicato'"):
+    for r in state.execute("SELECT * FROM annunci_api WHERE stato IN ('pubblicato', 'pronto')"):
         f = foto(listing_owner(r["external_id"]))
         path = f["foto"] if f else ""
+        ready = r["stato"] == "pronto"
         selling.append({
             "id": r["external_id"], "disco": (f["disco"] if f else "") or "", "release": r["release_id"],
             "grado": r["media"], "copertina": r["sleeve"] or r["media"], "copie": 1, "prezzo": r["price"],
             "file": "API" + (" (bozza)" if (r["status"] or "") == "DRAFT" else ""), "lotto": lot_of(path),
             "foto_nome": display_name(f) if f else "", "foto": images_of(path, thumbs),
-            "online": ONLINE_IT.get(r["online"] or "", r["online"] or ""), "calcolo": r["calcolo"] or "",
+            "online": "Da pubblicare" if ready else ONLINE_IT.get(r["online"] or "", r["online"] or ""),
+            "pronto": ready, "calcolo": r["calcolo"] or "",
             "link": f"https://www.discogs.com/release/{r['release_id']}",
             "annuncio": f"https://www.discogs.com/sell/item/{r['listing_id']}" if r["listing_id"] else "",
-            "nascosto": (r["online"] or "") in NOT_CURRENT,
+            "nascosto": (not ready) and (r["online"] or "") in NOT_CURRENT,
         })
 
     checking = []
@@ -226,6 +228,7 @@ main{padding:20px 24px 60px}
 .chip{background:var(--chip);padding:2px 7px;font-family:var(--mono);font-size:11px}
 .chip.g{background:var(--green);color:var(--green-ink)}
 .chip.on{color:var(--ok);font-weight:700}
+.chip.ready{background:var(--warn);color:#fff;font-weight:700}
 .reason{background:var(--warn-bg);color:var(--warn);font-weight:800;padding:6px 8px;font-size:13px}
 .detail{font-size:12.5px;color:var(--muted)}
 details summary{cursor:pointer;font-family:var(--mono);font-size:11px;color:var(--muted)}
@@ -272,9 +275,10 @@ function stats() {
   const copies = sale.reduce((s, d) => s + (d.copie || 1), 0);
   const value = sale.reduce((s, d) => s + (d.prezzo || 0) * (d.copie || 1), 0);
   const hidden = DATA.vendita.length + DATA.controllo.length - sale.length - check.length;
+  const ready = sale.filter(d => d.pronto).length;
   document.getElementById("stats").innerHTML = [
     [sale.length, "righe in vendita"], [copies, "copie"], [euro(value), "valore di listino"],
-    [check.length, "da controllare"]].map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
+    [ready, "da pubblicare"], [check.length, "da controllare"]].map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
   document.getElementById("n-vendita").textContent = sale.length;
   document.getElementById("n-controllo").textContent = check.length;
   document.getElementById("hidden").textContent = hidden && document.getElementById("view").value !== "tutti"
@@ -295,7 +299,7 @@ function cardSale(d) {
     <div class="row"><span class="price">${euro(d.prezzo)}</span>${d.copie > 1 ? `<span class="chip g">${d.copie} copie</span>` : ""}</div>
     <div class="chips"><span class="chip g">${grade(d)}</span><span class="chip">${esc(d.file)}</span>
       ${d.lotto ? `<span class="chip">${esc(d.lotto)}</span>` : ""}
-      <span class="chip ${d.online === "Online" ? "on" : ""}">${esc(d.online || "online non verificato")}</span></div>
+      <span class="chip ${d.online === "Online" ? "on" : d.pronto ? "ready" : ""}">${esc(d.online || "online non verificato")}</span></div>
     <div class="meta">${esc(d.foto_nome)} · ${esc(d.id)}</div>
     ${d.calcolo ? `<details><summary>come è stato calcolato il prezzo</summary><p>${esc(d.calcolo)}</p></details>` : ""}
     <div class="links"><a href="${esc(d.link)}" target="_blank" rel="noopener">Release su Discogs</a>

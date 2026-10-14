@@ -106,6 +106,10 @@ def main():
                   "si possono distinguere tra venduti e rimossi a mano.")
 
         rows = verify_listings(state, inventory, sales)
+        ready = sum(1 for t, r in rows if t == "annunci_api" and r["stato"] == "pronto")
+        rows = [(t, r) for t, r in rows if not (t == "annunci_api" and r["stato"] == "pronto")]
+        if ready:
+            print(f"Annunci pronti, non ancora pubblicati (python vendi.py --pubblica): {ready}")
         counts, details = {}, {}
         for table, row in rows:
             copies = row["quantita"] if table == "righe_csv" else 1

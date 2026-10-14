@@ -304,12 +304,17 @@ class Run:
         self.out = self.tmp / "risultati"
         self.api = FakeAPI()
 
-    def main(self, *options, corsie=False):
+    def main(self, *options, corsie=False, csv=True, folder=True):
         """Lancia vendi.py. I test scritti per la regola unica la usano con --corsie-off; corsie=True per
-        provare le tre corsie di prezzo (il default di vendi.py)."""
+        provare le tre corsie di prezzo (il default di vendi.py). csv=True: i test storici lavorano con i
+        file inventario_NNN.csv (--csv); csv=False prova il flusso nuovo (pronti, --pubblica).
+        folder=False: senza la cartella delle foto (solo --pubblica / --togli / --abbina)."""
         if not corsie:
             options = (*options, "--corsie-off")
-        argv = ["vendi.py", str(self.photos), "--db", str(self.db), "--uscita", str(self.out), *options]
+        if csv:
+            options = (*options, "--csv")
+        argv = ["vendi.py", *([str(self.photos)] if folder else []), "--db", str(self.db), "--uscita", str(self.out),
+                *options]
         output = io.StringIO()
         with contextlib.ExitStack() as stack:
             for target, value in [
