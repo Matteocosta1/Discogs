@@ -2629,7 +2629,8 @@ def write_registry(state, out_dir, csv_rows, api_rows):
 def write_panel_from_state(state, out_dir):
     """risultati/pannello.html: inventario visivo (in vendita e da controllare) con le foto."""
     import pannello
-    data = pannello.collect(state, REASONS, PROBLEMS, display_name, listing_owner, NOT_SELLABLE_REASON)
+    data = pannello.collect(state, REASONS, PROBLEMS, display_name, listing_owner, NOT_SELLABLE_REASON,
+                            out_dir)
     return pannello.write_panel(out_dir, data, dt.datetime.now().strftime("%d/%m/%Y %H:%M"))
 
 

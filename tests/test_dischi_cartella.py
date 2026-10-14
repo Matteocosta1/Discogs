@@ -418,3 +418,26 @@ class TestPannelloStati(unittest.TestCase):
         self.assertEqual(got["c"], ("Da caricare su Discogs", False))   # file 2 mai caricato
         self.assertEqual(got["d"], ("Online", False))
         self.assertFalse(got["a"][1])
+
+
+class TestMiniature(unittest.TestCase):
+    def test_miniatura_jpeg_riusata(self):
+        import tempfile
+        import pannello
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            disc = Path(tmp) / "lotto-09" / "M" / "disco-001"
+            disc.mkdir(parents=True)
+            Image.new("RGB", (2000, 1500), (75, 83, 32)).save(disc / "a_fronte.jpg")
+            Image.new("RGB", (1500, 2000), (10, 10, 10)).save(disc / "b_retro.jpg")
+            (disc / "c_rotta.jpg").write_bytes(b"non sono una foto")
+            thumbs = Path(tmp) / "risultati" / "miniature"
+            pics = pannello.images_of(str(disc), thumbs)
+            self.assertEqual(len(pics), 3)
+            self.assertTrue(pics[0].startswith("miniature/") and pics[1].startswith("miniature/"))
+            self.assertTrue(pics[2].startswith("file://"))                # non si apre: resta il file
+            with Image.open(thumbs.parent / pics[0]) as im:
+                self.assertLessEqual(max(im.size), pannello.THUMB_SIZE)
+            made = (thumbs.parent / pics[0]).stat().st_mtime_ns
+            self.assertEqual(pannello.images_of(str(disc), thumbs)[0], pics[0])   # riusata, non rifatta
+            self.assertEqual((thumbs.parent / pics[0]).stat().st_mtime_ns, made)

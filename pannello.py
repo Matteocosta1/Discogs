@@ -5,8 +5,8 @@ Lo genera vendi.py a ogni lancio (insieme agli altri file dei risultati), dallo 
 - IN VENDITA: ogni disco con foto, nome, grado, prezzo, copie, file CSV di provenienza, stato online;
 - DA CONTROLLARE: ogni disco fermo con foto, motivo in chiaro e disco proposto da confrontare.
 
-È una pagina sola, tutta sul Mac: le foto sono lette dalle cartelle dei lotti (file://), niente
-va online. Si apre con un doppio clic; le foto HEIC dell'iPhone si vedono in Safari.
+È una pagina sola, tutta sul Mac: le foto sono miniature JPEG in risultati/miniature/, fatte una volta
+sola dalle foto dei lotti; niente va online. Si apre con un doppio clic, in Safari o Chrome.
 
 Si può anche rigenerare da solo, senza elaborare niente:  python pannello.py
 """
@@ -27,8 +27,41 @@ ONLINE_IT = {
 }
 
 
-def images_of(path_text):
-    """Foto di un disco: la foto stessa, o le foto della sua sottocartella (fronte prima, per nome)."""
+THUMB_SIZE = 700
+
+
+def thumbnail(photo, thumbs_dir):
+    """Miniatura JPEG della foto in risultati/miniature/ (fatta una volta sola, poi riusata): Safari non
+    mostra le foto prese da altre cartelle del Mac, e le HEIC non si vedono in tutti i browser.
+    Restituisce il percorso relativo al pannello, o None se la foto non si apre."""
+    import hashlib
+    try:
+        st = photo.stat()
+        key = hashlib.sha1(f"{photo}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:20]
+        target = Path(thumbs_dir) / f"{key}.jpg"
+        if not target.exists():
+            from PIL import Image, ImageOps
+            try:
+                import pillow_heif  # foto HEIC dell'iPhone
+                pillow_heif.register_heif_opener()
+            except ImportError:
+                pass
+            with Image.open(photo) as img:
+                img.draft("RGB", (THUMB_SIZE, THUMB_SIZE))
+                img = ImageOps.exif_transpose(img).convert("RGB")
+                img.thumbnail((THUMB_SIZE, THUMB_SIZE))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_suffix(".tmp")
+                img.save(tmp, "JPEG", quality=82)
+                tmp.replace(target)
+        return f"{Path(thumbs_dir).name}/{target.name}"
+    except Exception:
+        return None
+
+
+def images_of(path_text, thumbs_dir=None):
+    """Foto di un disco: la foto stessa, o le foto della sua sottocartella (fronte prima, per nome).
+    Con thumbs_dir: miniature in risultati/miniature/ (se una foto non si apre, il suo file://)."""
     if not path_text:
         return []
     path = Path(path_text)
@@ -41,15 +74,20 @@ def images_of(path_text):
             return []
     except OSError:
         return []
-    return [f.as_uri() for f in files[:4]]
+    out = []
+    for f in files[:4]:
+        thumb = thumbnail(f, thumbs_dir) if thumbs_dir else None
+        out.append(thumb or f.as_uri())
+    return out
 
 
 def lot_of(path_text):
     return Path(path_text).parent.parent.name if path_text else ""
 
 
-def collect(state, reasons, problems, display_name, listing_owner, not_sellable_reason):
-    """Dati del pannello dallo stato di vendi.py."""
+def collect(state, reasons, problems, display_name, listing_owner, not_sellable_reason, out_dir=None):
+    """Dati del pannello dallo stato di vendi.py (con out_dir: miniature delle foto in out_dir/miniature)."""
+    thumbs = Path(out_dir) / "miniature" if out_dir else None
     def foto(eid):
         return state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
 
@@ -72,7 +110,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "id": r["external_id"], "disco": (f["disco"] if f else "") or "", "release": r["release_id"],
             "grado": r["media"], "copertina": r["sleeve"] or r["media"], "copie": r["quantita"] or 1,
             "prezzo": r["price"], "file": f"inventario_{r['parte']:03d}.csv", "lotto": lot_of(path),
-            "foto_nome": display_name(f) if f else "", "foto": images_of(path),
+            "foto_nome": display_name(f) if f else "", "foto": images_of(path, thumbs),
             "online": status, "calcolo": r["calcolo"] or "",
             "link": f"https://www.discogs.com/release/{r['release_id']}", "annuncio": "",
             "nascosto": hidden,
@@ -84,7 +122,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "id": r["external_id"], "disco": (f["disco"] if f else "") or "", "release": r["release_id"],
             "grado": r["media"], "copertina": r["sleeve"] or r["media"], "copie": 1, "prezzo": r["price"],
             "file": "API" + (" (bozza)" if (r["status"] or "") == "DRAFT" else ""), "lotto": lot_of(path),
-            "foto_nome": display_name(f) if f else "", "foto": images_of(path),
+            "foto_nome": display_name(f) if f else "", "foto": images_of(path, thumbs),
             "online": ONLINE_IT.get(r["online"] or "", r["online"] or ""), "calcolo": r["calcolo"] or "",
             "link": f"https://www.discogs.com/release/{r['release_id']}",
             "annuncio": f"https://www.discogs.com/sell/item/{r['listing_id']}" if r["listing_id"] else "",
@@ -101,7 +139,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
         checking.append({
             "id": r["external_id"], "motivo": title[:1].upper() + title[1:], "dettaglio": detail,
             "esito": r["esito"], "grado": r["media"] or "", "copertina": r["sleeve"] or r["media"] or "",
-            "lotto": lot_of(r["foto"]), "foto_nome": display_name(r), "foto": images_of(r["foto"]),
+            "lotto": lot_of(r["foto"]), "foto_nome": display_name(r), "foto": images_of(r["foto"], thumbs),
             "proposto": r["disco"] or "", "release": r["release_id"] or "",
             "link": f"https://www.discogs.com/release/{r['release_id']}" if r["release_id"] else "",
             "prezzo": r["prezzo"], "candidati": r["candidati"] or "",
@@ -114,7 +152,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
         checking.append({
             "id": r["external_id"], "motivo": title, "dettaglio": r["messaggio"] or "", "esito": r["stato"],
             "grado": r["media"] or "", "copertina": r["sleeve"] or "", "lotto": lot_of(r["foto"]),
-            "foto_nome": display_name(r) if r["foto"] else "", "foto": images_of(r["foto"]),
+            "foto_nome": display_name(r) if r["foto"] else "", "foto": images_of(r["foto"], thumbs),
             "proposto": r["disco"] or "", "release": r["release_id"],
             "link": f"https://www.discogs.com/release/{r['release_id']}", "prezzo": r["price"], "candidati": "",
         })
@@ -203,7 +241,7 @@ a{color:var(--green);font-weight:700}
 <body>
 <header>
   <h1>Inventario dischi</h1>
-  <div class="sub">Aggiornato al __WHEN__ · generato da vendi.py · le foto si vedono in Safari</div>
+  <div class="sub">Aggiornato al __WHEN__ · generato da vendi.py · clic su una foto per ingrandirla</div>
   <div class="stats" id="stats"></div>
   <div class="sub" id="hidden"></div>
 </header>

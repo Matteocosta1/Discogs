@@ -237,7 +237,8 @@ lotto-02/
   rilancia; se sono copie diverse rilancia con
   `--copie-diverse disco-013,disco-019`.
 - **`risultati/pannello.html`**: l'inventario da guardare, con le foto. Doppio
-  clic e si apre in Safari (le HEIC si vedono solo lì). Due schede: IN VENDITA
+  clic e si apre (Safari o Chrome): le foto sono miniature JPEG in
+  `risultati/miniature/`, fatte una volta sola. Due schede: IN VENDITA
   (foto, disco, grado, prezzo, copie, file CSV, lotto, stato online, come è
   stato calcolato il prezzo) e DA CONTROLLARE (foto, motivo in chiaro, disco
   proposto con link per confrontarlo). Ricerca per titolo/lotto/cartella e
