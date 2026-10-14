@@ -1165,6 +1165,143 @@ def google_candidates(api, google, image_b64, ev):
     return list(found.values()), "ipotesi di Google: " + "; ".join(guesses[:4])
 
 
+# --------------------------------------------------------------------------
+# Seconda opinione indipendente: Google Gemini (facoltativa, con GEMINI_API_KEY in .env)
+# --------------------------------------------------------------------------
+
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+# Prezzi in dollari per milione di token (input, output), verificati a ottobre 2026; il tetto conta 1 $ = 1 €
+GEMINI_MODELS = {
+    "gemini-3-flash": (0.50, 3.00),
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-3.1-pro": (2.00, 12.00),
+}
+GEMINI_DEFAULT = "gemini-3-flash"
+
+
+def gemini_schema(schema):
+    """Lo schema JSON di Claude nel formato di Gemini (tipi in maiuscolo, niente additionalProperties)."""
+    out = {"type": schema["type"].upper()}
+    if "properties" in schema:
+        out["properties"] = {k: gemini_schema(v) for k, v in schema["properties"].items()}
+        out["required"] = list(schema.get("required", []))
+    if "enum" in schema:
+        out["enum"] = list(schema["enum"])
+    return out
+
+
+class GeminiVision:
+    """Gemini sceglie, da solo e senza sapere cosa ha scelto Claude, tra gli stessi candidati reali.
+    Stessa foto, stesso elenco: se i due concordano il riconoscimento è più affidabile, se discordano
+    il disco va controllato a mano. Spesa nello stesso tetto dell'AI."""
+
+    def __init__(self, key, model=GEMINI_DEFAULT, wallet=None):
+        self.key, self.model, self.wallet = key, model, wallet
+        self.price_in, self.price_out = GEMINI_MODELS[model]
+        self.calls = 0
+        self.cost = 0.0
+
+    def choose(self, image, candidates):
+        images = image if isinstance(image, list) else [image]
+        text = "\n".join(" | ".join(str(x) for x in (
+            r["id"], clean_artist(r.get("artists")), r.get("title"),
+            r.get("labels") or ", ".join(r.get("label_names", [])), r.get("country") or "", r.get("year") or "",
+            r.get("formats") or "", ", ".join(r.get("barcodes", [])[:3]))) for r in candidates)
+        prompt = AI_CHOOSE_PROMPT.format(candidates=text)
+        if len(images) > 1:
+            prompt = multi_photo_prompt(prompt, len(images))
+        tokens = sum(t for _d, t in images) + len(text) // 3 + 600
+        max_cost = (tokens * self.price_in + 1500 * self.price_out) / 1e6
+        if self.wallet is not None and self.wallet.spent + max_cost > self.wallet.budget:
+            raise BudgetReached()
+        body = {
+            "contents": [{"role": "user", "parts": [
+                *({"inline_data": {"mime_type": "image/jpeg", "data": data}} for data, _t in images),
+                {"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json",
+                                 "responseSchema": gemini_schema(AI_CHOOSE_SCHEMA), "temperature": 0},
+        }
+        req = urllib.request.Request(GEMINI_URL.format(model=self.model), data=json.dumps(body).encode(),
+                                     method="POST", headers={"Content-Type": "application/json",
+                                                             "x-goog-api-key": self.key, "User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = json.loads(resp.read() or b"{}")
+        usage = data.get("usageMetadata") or {}
+        cost = ((usage.get("promptTokenCount") or tokens) * self.price_in
+                + ((usage.get("candidatesTokenCount") or 0) + (usage.get("thoughtsTokenCount") or 0)) * self.price_out) / 1e6
+        self.calls += 1
+        self.cost += cost
+        if self.wallet is not None:
+            self.wallet.spent += cost
+        try:
+            parts = data["candidates"][0]["content"]["parts"]
+            return json.loads("".join(p.get("text", "") for p in parts)), cost
+        except (KeyError, IndexError, ValueError):
+            return {}, cost
+
+
+def env_value_or_none(key):
+    try:
+        return load_env_value(key, key, "")
+    except SystemExit:
+        return None
+
+
+def gemini_agrees(row):
+    """True se la seconda opinione salvata di Gemini è la stessa release della foto."""
+    try:
+        g = json.loads(row["gemini_scelta"]) if row["gemini_scelta"] else None
+    except (IndexError, KeyError, ValueError):
+        return False
+    return bool(g) and g.get("release_id") == row["release_id"]
+
+
+def second_opinion(rec, path, gemini, cache):
+    """Gemini sceglie tra i candidati dello stesso riconoscimento (solo se senza codice). Concorda: il
+    dubbio sul testo cade. Discorda: il disco va controllato a mano, con le due proposte."""
+    if gemini is None or rec.release is None or rec.metodo not in UNVERIFIED_METHODS:
+        return
+    if rec.esito not in ("trovato", "da_verificare") or (rec.motivo or "").startswith(CONTRAST_REASON):
+        return
+    shortlist = [r for _s, r, _w in rec.candidates[:AI_MAX_CANDIDATES]]
+    if rec.release["id"] not in [r["id"] for r in shortlist]:
+        shortlist = [rec.release] + shortlist[:AI_MAX_CANDIDATES - 1]
+    ids = sorted(r["id"] for r in shortlist)
+    choice = (cache or {}).get("gemini")
+    if not choice or choice.get("_ids") != ids:
+        paths = list(path) if isinstance(path, (list, tuple)) else [path]
+        images = [AIVision.prepare(load_image(p)) for p in paths[:AI_MAX_PHOTOS]]
+        try:
+            choice, cost = gemini.choose(images if len(images) > 1 else images[0], shortlist)
+        except (urllib.error.URLError, OSError, ValueError) as e:   # Gemini giù: resta il riconoscimento di Claude
+            rec.details += f"; Gemini non ha risposto ({e})"
+            return
+        rec.ai_cost += cost
+        choice = {**choice, "_ids": ids, "_modello": gemini.model}
+    rec.gemini = choice
+    gid = choice.get("release_id")
+    conf = CONFIDENCE_IT.get(choice.get("confidence"), "?")
+    if gid == rec.release["id"]:
+        rec.details += f"; Gemini concorda (sicurezza {conf})"
+        # Due modelli d'accordo con sicurezza alta superano solo i dubbi "di lettura" (artista non tra le
+        # scritte principali, una sola parola). Mai le trappole note: scaletta, "From the album",
+        # compilation, alfabeti diversi (white label): lì due modelli possono sbagliare allo stesso modo.
+        traps = ("scaletta", "From the album", "compilation", "non si può confrontare")
+        if (rec.esito == "da_verificare" and choice.get("confidence") == "high"
+                and not any(t in (rec.motivo or "") for t in traps)):
+            rec.details += f" (supera il dubbio: {rec.motivo})"
+            rec.esito, rec.motivo = "trovato", ""
+    elif gid:
+        other = next((r for r in shortlist if r["id"] == gid), None)
+        rec.motivo = (f"Claude e Gemini scelgono release diverse: {rec.release['id']} "
+                      f"({describe_release(rec.release)}) e {gid} ({describe_release(other) if other else '?'})")
+        rec.esito = "da_verificare"
+        rec.details += f"; DA VERIFICARE: {rec.motivo}"
+    else:
+        rec.details += "; Gemini: nessuno dei candidati gli sembra il disco"
+
+
 class BudgetReached(Exception):
     """Il tetto di spesa AI non permette un'altra chiamata."""
 
@@ -1438,6 +1575,7 @@ class Recognition:
     ai_choice: dict = None
     metodo: str = ""           # barcode / catno / locale-testo / ai
     motivo: str = ""           # perché va controllato a mano (esito da_verificare)
+    gemini: dict = None        # seconda opinione di Gemini (scelta tra gli stessi candidati)
 
     @property
     def release_id(self):
@@ -1540,7 +1678,8 @@ def copertine_module():
     return copertine
 
 
-def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PHOTOS, covers=None, google=None):
+def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PHOTOS, covers=None, google=None,
+              gemini=None):
     """Riconosce il disco di una foto, o di più foto dello stesso disco (path = lista: sottocartella).
     cache: dati AI già pagati per questo disco ({"read": ..., "choice": ...}), che non vengono mai
     richiesti di nuovo. Un riconoscimento senza codice (AI o artista e titolo) che non supera
@@ -1571,6 +1710,7 @@ def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PH
             if rec.motivo:
                 rec.esito = "da_verificare"
                 rec.details += f"; DA VERIFICARE: {rec.motivo}"
+    second_opinion(rec, path, gemini, cache)
     if is_unofficial(rec.release):
         rec.details += "; formato 'Unofficial Release': probabilmente bloccata dal marketplace (decide l'API)"
     return rec
@@ -1809,12 +1949,15 @@ def expand_by_master(con, ranked, ev, read, ocr_text):
     return merged
 
 
-def recognize_safely(path, con, api, use_ocr, ai, cache, max_photos=AI_MAX_PHOTOS, covers=None, google=None):
+def recognize_safely(path, con, api, use_ocr, ai, cache, max_photos=AI_MAX_PHOTOS, covers=None, google=None,
+                     gemini=None):
     """recognize() con gli errori trasformati in esito "errore"; None se il tetto di spesa AI è raggiunto."""
     try:
-        return recognize(path, con, api, use_ocr, ai, cache, max_photos, covers, google)
+        return recognize(path, con, api, use_ocr, ai, cache, max_photos, covers, google, gemini)
     except BudgetReached:
         return None
+    except urllib.error.HTTPError as e:   # Gemini (o un altro servizio web) ha risposto con un errore
+        return Recognition("errore", details=f"servizio esterno: {e}", ai_read=cache["read"], ai_choice=cache["choice"])
     except (ApiError, OSError, ValueError) as e:
         return Recognition("errore", details=str(e), ai_read=cache["read"], ai_choice=cache["choice"])
     except Exception as e:  # errori dell'API di Anthropic
@@ -2186,6 +2329,7 @@ CREATE TABLE IF NOT EXISTS foto (
     ai2_dati    TEXT,     -- secondo tentativo con un modello più forte: cosa ha letto
     ai2_scelta  TEXT,     -- secondo tentativo: scelta tra i candidati
     ai2_modello TEXT,     -- secondo tentativo: modello che ha letto e scelto (vuoto = claude-sonnet-5-5)
+    gemini_scelta TEXT,   -- seconda opinione di Gemini tra gli stessi candidati (mai richiesta due volte)
     secondo     TEXT,     -- modello del secondo tentativo, se è lui ad aver riconosciuto il disco
     disco       TEXT,     -- artista - titolo (etichetta, paese, anno) della release trovata
     metodo      TEXT,     -- barcode / catno / locale-testo / ai
@@ -2333,7 +2477,7 @@ def open_state(path):
                                 ("foto", "hash", "TEXT"), ("foto", "ai2_dati", "TEXT"),
                                 ("foto", "ai2_scelta", "TEXT"), ("foto", "secondo", "TEXT"),
                                 ("righe_csv", "online_annunci", "TEXT"), ("annunci_api", "online_annunci", "TEXT"),
-                                ("foto", "n_foto", "INTEGER"), ("foto", "hash_foto", "TEXT"), ("foto", "ai2_modello", "TEXT"),
+                                ("foto", "n_foto", "INTEGER"), ("foto", "hash_foto", "TEXT"), ("foto", "ai2_modello", "TEXT"), ("foto", "gemini_scelta", "TEXT"),
                                 ("collezionistici", "sleeve", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
@@ -3287,6 +3431,10 @@ def run(opened):
                         help="ignora lo stato salvato per le foto di questa cartella e le rielabora da capo (anche l'AI, "
                              "che viene pagata di nuovo); solo insieme a --bozza; prima legge l'inventario Discogs e "
                              "salta tutte le foto online (o state online)")
+    parser.add_argument("--senza-gemini", action="store_true",
+                        help="non chiedere la seconda opinione a Gemini (attiva da sola se in .env c'è GEMINI_API_KEY)")
+    parser.add_argument("--gemini-modello", default=GEMINI_DEFAULT, choices=sorted(GEMINI_MODELS),
+                        help=f"modello Gemini per la seconda opinione (default {GEMINI_DEFAULT})")
     parser.add_argument("--google-vision", action="store_true",
                         help="terzo servizio sui dischi non trovati: ricerca web dell'immagine con Google Cloud "
                              "Vision (chiave GOOGLE_VISION_KEY in .env; circa 0,35 cent a foto, conta nel tetto AI)")
@@ -3441,6 +3589,11 @@ def run(opened):
               f"spesa finora {money(ai_spent_before)}, tetto {money(args.ai_tetto)}")
     if not args.simula:
         recover_pending_listings(state, api, identity["username"])
+    gemini = None
+    gemini_key = None if (args.senza_gemini or ai is None) else env_value_or_none("GEMINI_API_KEY")
+    if gemini_key:
+        gemini = GeminiVision(gemini_key, args.gemini_modello, wallet=ai.wallet)
+        print(f"Gemini ({args.gemini_modello}) come seconda opinione sui dischi riconosciuti senza codice")
     google = None
     if args.google_vision and ai is not None:
         google = GoogleVision(load_env_value("GOOGLE_VISION_KEY", "la chiave API di Google Cloud Vision",
@@ -3502,7 +3655,8 @@ def run(opened):
             fingerprint = photo.fingerprint()
             same_photo = row is not None and row["hash"] == photo.sha256  # stesso contenuto, anche se spostata
             cache = {"read": json.loads(row["ai_dati"]) if same_photo and row["ai_dati"] else None,
-                     "choice": json.loads(row["ai_scelta"]) if same_photo and row["ai_scelta"] else None}
+                     "choice": json.loads(row["ai_scelta"]) if same_photo and row["ai_scelta"] else None,
+                     "gemini": json.loads(row["gemini_scelta"]) if same_photo and row["gemini_scelta"] else None}
             # La lettura del secondo tentativo vale solo per lo stesso modello: cambiando modello si rifà
             same2 = same_photo and ai2 is not None and (row["ai2_modello"] or "claude-sonnet-5-5") == ai2.model
             cache2 = {"read": json.loads(row["ai2_dati"]) if same2 and row["ai2_dati"] else None,
@@ -3512,15 +3666,16 @@ def run(opened):
                     or (args.riprova and row["esito"] in PROBLEMS)
                     or (ai and unsure and cache["read"] is None)
                     or (ai2 and unsure and cache2["read"] is None)):
-                rec = recognize_safely(photo.images, con, api, use_ocr, ai, cache, args.ai_max_foto, covers, google)
+                rec = recognize_safely(photo.images, con, api, use_ocr, ai, cache, args.ai_max_foto, covers, google,
+                                       gemini)
                 if rec is None:
                     budget_stop = True
                     break
                 # Secondo tentativo con un modello più forte, solo se il primo non ha trovato il disco
                 rec2, second = None, False
                 if ai2 and rec.esito in ("non_trovato", "multiplo"):
-                    rec2 = recognize_safely(photo.images, con, api, use_ocr, ai2, cache2, args.ai_max_foto, covers,
-                                            google)
+                    rec2 = recognize_safely(photo.images, con, api, use_ocr, ai2, {**cache2, "gemini": cache["gemini"]},
+                                            args.ai_max_foto, covers, google, gemini)
                     if rec2 is None:  # tetto di spesa: salvo il primo tentativo e mi fermo
                         budget_stop = True
                     else:
@@ -3538,8 +3693,8 @@ def run(opened):
                 state.execute(
                     "INSERT OR REPLACE INTO foto (external_id, cartella, foto, impronta, media, sleeve, esito, fonte,"
                     " release_id, candidati, dettagli, aggiornato, ai_dati, ai_costo, ai_scelta, disco, metodo, motivo,"
-                    " hash, ai2_dati, ai2_scelta, secondo, n_foto, hash_foto, ai2_modello)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " hash, ai2_dati, ai2_scelta, secondo, n_foto, hash_foto, ai2_modello, gemini_scelta)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (eid, photo.folder, str(photo.path), fingerprint, photo.media, photo.sleeve, final.esito,
                      final.fonte, final.release_id, format_candidates(final.candidates), final.details, now(),
                      json.dumps(rec.ai_read) if rec.ai_read is not None else None,
@@ -3551,7 +3706,8 @@ def run(opened):
                      json.dumps(rec2.ai_choice) if rec2 and rec2.ai_choice is not None else
                      (row["ai2_scelta"] if same_photo and row else None),
                      ai2.model if second else None, *disc_columns(photo),
-                     ai2.model if rec2 is not None else (row["ai2_modello"] if same_photo and row else None)),
+                     ai2.model if rec2 is not None else (row["ai2_modello"] if same_photo and row else None),
+                     json.dumps(final.gemini) if final.gemini else (row["gemini_scelta"] if same_photo and row else None)),
                 )
                 rec = final
                 state.commit()
@@ -3756,8 +3912,8 @@ def run(opened):
                     blocked.append(p)
                     state.execute("UPDATE foto SET esito = 'da_verificare', metodo = ?, motivo = ?, prezzo = ?"
                                   " WHERE external_id = ?",
-                                  (metodo, f"riconosciuto con {metodo} (non con barcode o catalogo esatto) e {risk}",
-                                   price, p.external_id))
+                                  (metodo, f"riconosciuto con {metodo} (non con barcode o catalogo esatto) e {risk}"
+                                   + ("; Gemini concorda" if gemini_agrees(r) else ""), price, p.external_id))
             for p, _ in to_check:
                 state.execute("UPDATE foto SET prezzo = ? WHERE external_id = ?", (price, p.external_id))
             state.commit()
@@ -3851,6 +4007,8 @@ def run(opened):
         print(f"  riconosciuti in questa esecuzione: {stats['ric_locale']} al primo colpo (senza AI), "
               f"{stats['ric_ai']} con l'AI, {stats['ric_secondo']} con il secondo tentativo"
               + (f", {stats['ric_copertina']} con la copertina" if stats["ric_copertina"] else ""))
+        if gemini is not None and gemini.calls:
+            print(f"  Gemini (seconda opinione): {gemini.calls} dischi controllati ({money(gemini.cost)})")
         if google is not None and google.calls:
             print(f"  Google Vision: {google.calls} foto inviate ({money(google.calls * GOOGLE_VISION_COST)})")
         if covers is not None and covers.compared:

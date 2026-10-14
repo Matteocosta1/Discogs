@@ -348,6 +348,18 @@ stampa, è quella a vincere (o a essere proposta all'AI e alle copertine).
 "È questo" nel pannello) finisce nella tabella `conferme`: la volta dopo che
 l'AI la propone non serve più la verifica finale.
 
+**Seconda opinione indipendente: Google Gemini (facoltativa).** Se in `.env` c'è
+`GEMINI_API_KEY=...` (chiave gratuita da https://aistudio.google.com/apikey), su ogni
+disco riconosciuto **senza codice** Gemini sceglie da solo, senza sapere cosa ha scelto
+Claude, tra gli stessi candidati reali:
+- **concorda:** nei dettagli compare "Gemini concorda"; con sicurezza alta supera i dubbi
+  "di lettura" (artista non tra le scritte principali, una sola parola), mai le trappole note
+  (scaletta, "From the album", compilation, alfabeti diversi);
+- **discorda:** il disco va in "da controllare" con le due proposte.
+Modello `gemini-3-flash` (0,50 / 3,00 $ per milione di token, ottobre 2026): pochi decimi di
+centesimo a disco, nello stesso tetto di spesa dell'AI. `--gemini-modello` per cambiarlo,
+`--senza-gemini` per spegnerlo. Non viene mai richiesta due volte per la stessa foto.
+
 **Terzo servizio (facoltativo): Google Cloud Vision.** Con `--google-vision`
 (chiave `GOOGLE_VISION_KEY` in `.env`, circa 0,35 cent a foto, 1000 gratis al
 mese), sui dischi che né la parte locale né l'AI hanno trovato lo script
