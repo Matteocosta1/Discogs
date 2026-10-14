@@ -455,3 +455,38 @@ class TestPortaDUscita(CoverRun):
         self.assertEqual(rec.esito, "da_verificare")
         self.assertIn("Gemini concorda", rec.details)
         self.assertTrue(vendi.is_trap("riga della scaletta"))
+
+
+class TestPrimaLeCopertine(CoverRun):
+    """Regola principale: candidati locali -> confronto copertine -> AI solo se nessuna combacia."""
+    photos = {"VG+": ["IMG_0021"]}
+
+    def setUp(self):
+        super().setUp()
+        # Testo letto in locale: titolo e artista, nessun codice. Il dump ha due stampe (US 2012, UK 2015).
+        ocr = [("THEO PARRISH", 0.06), ("DANCE OF THE MEDUSA", 0.05), ("SOUND SIGNATURE", 0.02)]
+        read = {"photo_type": "front", "compilation": False, "artist": "Theo Parrish", "title": "Dance Of The Medusa",
+                "label": "Sound Signature", "catno": "", "year": "2015", "country": "UK", "barcode": "",
+                "readable_text": "THEO PARRISH\nDANCE OF THE MEDUSA", "recognized_artist": "",
+                "recognized_title": ""}
+        for target, values in ((tp.OCR, {"IMG_0021": ocr}), (tp.AI_READ, {"IMG_0021": read}),
+                               (tp.AI_CHOICE, {"IMG_0021": {"release_id": 4207271, "confidence": "medium",
+                                                            "reason": "UK 2015"}})):
+            p = mock.patch.dict(target, values)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_copertina_decide_senza_nessuna_chiamata_ai(self):
+        FakeMatcher.distances = {("IMG_0021", 4207271): 0.10}
+        self.run.main(csv=False)
+        row = self.state().execute("SELECT * FROM foto WHERE external_id = 'IMG_0021'").fetchone()
+        self.assertEqual((row["esito"], row["release_id"]), ("trovato", 4207271))
+        self.assertTrue(row["fonte"].startswith("copertina"))
+        self.assertIn("prima delle AI", row["dettagli"])
+        self.assertEqual([c for c in tp.FakeAI.calls if c[1] == "IMG_0021"], [])    # AI mai chiamata
+        self.assertEqual(row["ai_costo"], 0)
+
+    def test_nessuna_copertina_combacia_allora_ai(self):
+        FakeMatcher.distances = {}
+        self.run.main(csv=False)
+        self.assertNotEqual([c for c in tp.FakeAI.calls if c[1] == "IMG_0021"], [])  # tocca all'AI

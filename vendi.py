@@ -1431,7 +1431,8 @@ def ai_evidence(ev, data):
     ev.add_lines(lines, main=[data[k] for k in ("artist", "title", "recognized_artist", "recognized_title")
                               if data.get(k) and not is_track_line(data[k])])
     shown = {k: v for k, v in data.items() if v and k != "readable_text"}
-    ev.ai_note = "letto dall'AI: " + ", ".join(f"{k}={v}" for k, v in shown.items())
+    note = "letto dall'AI: " + ", ".join(f"{k}={v}" for k, v in shown.items())
+    ev.ai_note = f"{note}{ev.ai_note}" if (ev.ai_note or "").startswith("; prima delle AI") else note
 
 
 def ai_artist_titles(data):
@@ -1852,6 +1853,22 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, c
             return Recognition("trovato", api_fonte, found[0], [], ev.describe())
         if found:
             fonte, ranked = api_fonte, score_candidates(found, ev)
+
+    # 1b. REGOLA PRINCIPALE: prima le copertine, poi l'AI. La parte locale ha trovato più candidati
+    # ma nessuno sicuro: si confrontano le foto con le copertine Discogs dei candidati (e delle altre
+    # stampe dello stesso disco). Se UNA combacia nettamente è quella: niente AI, costo zero.
+    # Solo se nessuna copertina combacia si passa all'AI (e la scelta dell'AI resta in cache).
+    if ranked and covers is not None and not cache.get("choice"):
+        local_ranked = expand_by_master(con, ranked, ev, None, ocr_text)
+        local_ranked = [x for x in local_ranked if coherent(x[1], None, ocr_text) or x[1].get("_code")]
+        shortlist = [r for _s, r, _w in local_ranked[:AI_MAX_CANDIDATES]]
+        if shortlist:
+            by_cover, text = covers.pick(paths, shortlist)
+            if by_cover is not None:
+                where = "api" if by_cover.get("_fonte") == "api" else "locale"
+                return Recognition("trovato", f"copertina+{where}", by_cover, local_ranked,
+                                   ev.describe() + "; prima delle AI: " + text)
+            ev.ai_note = (ev.ai_note or "") + f"; prima delle AI: {text}"
 
     if ai is None and not cache.get("read"):  # --senza-ai: solo metodi gratuiti
         if ranked:
