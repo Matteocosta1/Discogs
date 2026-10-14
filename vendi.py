@@ -3311,6 +3311,13 @@ def run(opened):
 
     if not (args.cartella or args.togli or args.abbina or args.pubblica):
         parser.error("indica la cartella delle foto (oppure --pubblica, --togli, --abbina)")
+    if args.cartella and not Path(args.cartella).expanduser().is_dir():
+        folder = Path(args.cartella).expanduser()
+        similar = sorted(p.name for p in folder.parent.glob("*") if p.is_dir()
+                         and p.name.replace(" ", "-").lower() == folder.name.replace(" ", "-").lower())
+        raise SystemExit(f"Cartella non trovata: {folder}"
+                         + (f"\nForse intendevi: {folder.parent / similar[0]} (nel Terminale va tra virgolette se ha "
+                            "uno spazio, oppure rinominala con il trattino)" if similar else ""))
     if (args.togli or args.abbina or args.pubblica) and args.simula:
         parser.error("--togli, --abbina e --pubblica cambiano lo stato vero: non si usano con --simula")
     if args.togli:
