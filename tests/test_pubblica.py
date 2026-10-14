@@ -141,15 +141,16 @@ class TestSecondoModello(TempRun):
     photos = {"VG+": ["IMG_0007"]}   # nessuno lo trova
 
     def test_opus_rilegge(self):
-        self.run.main(csv=False)
+        self.run.main("--ai-modello-secondo", "claude-sonnet-5-5", csv=False)   # come prima di Opus di serie
         self.assertIn(("claude-sonnet-5-5", "IMG_0007"), tp.FakeAI.calls)
         tp.FakeAI.calls = []
-        self.run.main("--riprova", csv=False)                            # stesso modello: niente di nuovo
+        self.run.main("--riprova", "--ai-modello-secondo", "claude-sonnet-5-5", csv=False)  # stesso: niente
         self.assertNotIn(("claude-sonnet-5-5", "IMG_0007"), tp.FakeAI.calls)
-        self.run.main("--riprova", "--ai-modello-secondo", "claude-opus-5-5", csv=False)
+        self.run.main("--riprova", csv=False)                            # di serie: Opus, rilegge
         self.assertIn(("claude-opus-5-5", "IMG_0007"), tp.FakeAI.calls)
         row = self.state().execute("SELECT ai2_modello FROM foto WHERE external_id = 'IMG_0007'").fetchone()
         self.assertEqual(row[0], "claude-opus-5-5")
+        self.assertEqual(vendi.AI_SECOND_MODEL, "claude-opus-5-5")
         self.assertEqual(vendi.AI_MODELS["claude-opus-5-5"], (4.00, 20.00))
 
 

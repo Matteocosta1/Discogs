@@ -1023,7 +1023,7 @@ AI_MODELS = {
     "claude-opus-5": (5.00, 25.00),
     "claude-opus-5-5": (4.00, 20.00),
 }
-AI_SECOND_MODEL = "claude-sonnet-5-5"   # secondo tentativo sulle foto non riconosciute dal primo modello
+AI_SECOND_MODEL = "claude-opus-5-5"   # secondo tentativo sulle foto non riconosciute dal primo modello (lotto-07: recupera dove Sonnet si arrende)
 # Questi modelli ragionano prima di rispondere (non si può spegnere su tutti): il ragionamento usa
 # token di risposta, quindi servono più token e uno sforzo dichiarato. Haiku 4.5 non ragiona.
 AI_NO_THINKING = {"claude-haiku-4-5"}

@@ -358,7 +358,8 @@ Google propone, non decide.
 
 **Secondo tentativo con un modello più forte.** Se dopo il modello principale
 (`claude-haiku-4-5`) una foto resta non trovata o con più release possibili,
-lo script riprova una volta con `claude-sonnet-5-5` (`--ai-modello-secondo`),
+lo script riprova una volta con `claude-opus-5-5` (`--ai-modello-secondo`; prima era Sonnet 5.5: sul
+lotto-07 Opus ha recuperato dischi dove Sonnet si arrendeva),
 con lo stesso tetto di spesa e le stesse protezioni. Il risultato resta in
 cache come il primo: non si paga mai due volte. `--senza-secondo-tentativo`
 lo disattiva.
@@ -1202,8 +1203,8 @@ caffeinate -i python3 vendi.py ~/Pictures/Dischi --riprova
 | `--riprova` | Rianalizza le foto finite da controllare |
 | `--rielabora` | Ignora lo stato salvato per le foto della cartella e le rielabora da capo, AI compresa. Solo con `--bozza`, non con `--simula`; prima legge l'inventario Discogs e salta le foto online o state in vendita |
 | `--ai-tetto 80` | Spesa AI massima in euro, sommando tutte le esecuzioni (default 50); raggiunta, lo script si ferma |
-| `--ai-modello NOME` | `claude-haiku-4-5` (default), `claude-sonnet-5`, `claude-sonnet-5-5` o `claude-opus-5` |
-| `--ai-modello-secondo NOME` | Modello del secondo tentativo sulle foto non riconosciute (default `claude-sonnet-5-5`) |
+| `--ai-modello NOME` | `claude-haiku-4-5` (default), `claude-sonnet-5`, `claude-sonnet-5-5`, `claude-opus-5` o `claude-opus-5-5` |
+| `--ai-modello-secondo NOME` | Modello del secondo tentativo sulle foto non riconosciute (default `claude-opus-5-5`) |
 | `--senza-secondo-tentativo` | Niente secondo tentativo |
 | `--ai-max-foto 4` | Disco in sottocartella: foto inviate al massimo all'AI nella stessa chiamata (default 4) |
 | `--formati-ammessi Vinyl` | Formati Discogs ammessi tra i candidati, separati da virgole (default `Vinyl`: le release solo CD, Cassette, File… vengono scartate) |
