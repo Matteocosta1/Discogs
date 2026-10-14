@@ -32,7 +32,6 @@ Esempi:
 """
 
 import argparse
-import json
 from pathlib import Path
 
 import vendi
@@ -90,10 +89,6 @@ def main():
             inventory = fetch_inventory(api, username)
         except InventoryUnreadable as e:
             raise SystemExit(f"Impossibile leggere l'inventario Discogs: {e}\nNiente è stato modificato.")
-        # Ordine della pagina Discogs (annunci In vendita, dal più recente): il pannello lo riprende uguale
-        order = [lid for lid, item in inventory.by_listing.items() if item.get("status") == "For Sale"]
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "ordine_discogs.json").write_text(json.dumps(order))
         print(f"Annunci nel tuo inventario: {len(inventory.by_listing)}"
               + (f" (Discogs non ha restituito: {', '.join(inventory.unavailable)})" if inventory.unavailable else ""))
         # L'inventario non mostra i dischi venduti: li riconosco dai miei ordini.
