@@ -144,6 +144,14 @@ def lot_of(path_text):
     return Path(path_text).parent.parent.name if path_text else ""
 
 
+WAITING_SQL = """
+    SELECT * FROM foto f
+    WHERE f.esito = 'trovato' AND f.fonte = 'manuale' AND COALESCE(f.riga_csv, '') = ''
+      AND NOT EXISTS (SELECT 1 FROM annunci_api a
+                      WHERE a.external_id = f.external_id OR a.external_id LIKE f.external_id || '-copia%')
+"""
+
+
 def collect(state, reasons, problems, display_name, listing_owner, not_sellable_reason, out_dir=None):
     """Dati del pannello dallo stato di vendi.py (con out_dir: miniature delle foto in out_dir/miniature)."""
     thumbs = Path(out_dir) / "miniature" if out_dir else None
@@ -194,16 +202,14 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "nascosto": (not ready) and (r["online"] or "") in NOT_CURRENT,
         })
 
-    # Confermati a mano nel pannello (Conferma / È questo): aspettano prezzo e annuncio, li fa il pulsante
-    # Pubblica su Discogs (metti_in_vendita.py).
-    import metti_in_vendita
-    for f in state.execute(metti_in_vendita.WAITING_SQL):
+    # Confermati a mano ma senza annuncio (il prezzo non è riuscito): restano visibili.
+    for f in state.execute(WAITING_SQL):
         pics = images_of(f["foto"], thumbs)
         selling.append({
             "id": f["external_id"], "disco": f["disco"] or "", "release": f["release_id"], "grado": f["media"],
             "copertina": f["sleeve"] or f["media"], "copie": 1, "prezzo": None, "file": "API",
             "lotto": lot_of(f["foto"]), "foto_nome": display_name(f), "foto": pics,
-            "online": "Confermato: da pubblicare", "pronto": True, "calcolo": "",
+            "online": "Confermato, senza prezzo", "pronto": False, "calcolo": "",
             "link": f"https://www.discogs.com/release/{f['release_id']}", "annuncio": "", "nascosto": not pics,
         })
 
@@ -439,7 +445,7 @@ function cardCheck(d) {
         <button class="act small" data-act="abbina" data-id="${esc(d.id)}" data-release="${c.id}">È questo</button></div>`).join("")}</div>`
       : d.candidati ? `<details><summary>altre release possibili</summary><p>${esc(d.candidati)}</p></details>` : ""}
     ${d.bozza ? `<div class="links">${d.annuncio ? `<a href="${esc(d.annuncio)}" target="_blank" rel="noopener">Apri l'annuncio</a>` : `<a href="https://www.discogs.com/sell/manage" target="_blank" rel="noopener">Apri l'inventario</a>`}</div>` : ""}
-    ${LIVE && d.bozza ? `<div class="cardbtns"><button class="act small ok" data-act="bozza-vendita" data-id="${esc(d.id)}">Conferma: metti in vendita</button></div>` : ""}
+    ${LIVE && d.bozza ? `<div class="cardbtns"><button class="act small ok" data-act="bozza-vendita" data-id="${esc(d.id)}">Conferma</button></div>` : ""}
     ${LIVE && !d.bozza ? `<div class="cardbtns">
       ${d.release && !NO_CONFIRM.includes(d.esito) ? `<button class="act small ok" data-act="conferma" data-id="${esc(d.id)}" data-release="${esc(d.release)}">Conferma</button>` : ""}
       <button class="act small ghost" data-act="abbina-id" data-id="${esc(d.id)}">Altra release…</button>
@@ -494,7 +500,7 @@ async function runJob(body) {
   setTimeout(() => location.reload(), 1200);
 }
 document.querySelectorAll("[data-job]").forEach(b => b.onclick = () => {
-  if (b.dataset.job === "pubblica" && !confirm("Mettere in vendita ORA su Discogs tutti i dischi da pubblicare (anche i confermati)?")) return;
+  if (b.dataset.job === "pubblica" && !confirm("Pubblicare ORA su Discogs tutti gli annunci pronti?")) return;
   runJob({azione: b.dataset.job});
 });
 document.getElementById("btn-elabora").onclick = () => {
@@ -512,10 +518,8 @@ document.getElementById("grid").addEventListener("click", async e => {
     const v = prompt("Numero della release Discogs giusta (dall'indirizzo discogs.com/release/NUMERO):");
     if (!v || !/^\d+$/.test(v.trim())) return; body = {azione: "abbina", disco: id, release: Number(v.trim())};
   }
-  if (b.dataset.act === "conferma") body = {azione: "abbina", disco: id, release: Number(b.dataset.release)};
-  if (b.dataset.act === "bozza-vendita") {
-    if (!confirm(`Rimettere in vendita su Discogs ${id}?`)) return; body = {azione: "bozza_vendita", disco: id};
-  }
+  if (b.dataset.act === "conferma") { runJob({azione: "conferma", disco: id, release: Number(b.dataset.release)}); return; }
+  if (b.dataset.act === "bozza-vendita") body = {azione: "bozza_vendita", disco: id};
   if (b.dataset.act === "togli") { if (!confirm(`Togliere ${id} dall'inventario?`)) return; body = {azione: "togli", disco: id}; }
   if (b.dataset.act === "copie") { runJob({azione: "elabora", cartella: b.dataset.cartella, grado: "", copie: b.dataset.copie}); return; }
   if (!body) return;
@@ -627,9 +631,11 @@ def make_handler(vendi, out_dir, job):
     def action(body):
         """Azioni immediate (nello stato) o comandi dello script (job in sottoprocesso)."""
         what = body.get("azione")
-        if what in ("pubblica", "verifica", "elabora"):
-            if what == "pubblica":
-                argv = script("metti_in_vendita.py")
+        if what in ("pubblica", "verifica", "elabora", "conferma"):
+            if what == "conferma":
+                argv = script("conferma_disco.py", str(body.get("disco", "")), str(int(body.get("release") or 0)))
+            elif what == "pubblica":
+                argv = script("vendi.py", "--pubblica", "--senza-pannello")
             elif what == "verifica":
                 argv = script("verifica_inventario.py")
             else:

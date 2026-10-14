@@ -89,21 +89,25 @@ class TestPannelloVivo(TempRun):
         row = self.state().execute("SELECT esito, release_id FROM foto WHERE external_id = 'IMG_0001'").fetchone()
         self.assertEqual(tuple(row), ("trovato", 5206239))
 
-    def test_conferma_poi_prezzo_e_pronto(self):
-        import metti_in_vendita
+    def test_conferma_un_disco_va_in_vendita(self):
+        import conferma_disco
         page = self.get("/")
-        self.assertIn('data-act="conferma"', page)                         # il pulsante c'è
-        r = self.post({"azione": "abbina", "disco": "IMG_0001", "release": 1901512})   # Conferma = la proposta
-        self.assertTrue(r["ok"], r)
-        data = self.page_data()
-        waiting = [d for d in data["vendita"] if d["id"] == "IMG_0001"]
-        self.assertEqual(waiting[0]["online"], "Confermato: da pubblicare")
-        self.assertEqual([w["external_id"] for w in metti_in_vendita.waiting(self.state())], ["IMG_0001"])
-        # il lancio sul lotto senza AI lo prezza: diventa un annuncio pronto
-        self.run.main("--senza-ai", csv=False)
-        self.assertEqual(metti_in_vendita.waiting(self.state()), [])
+        self.assertIn('data-act="conferma"', page)                         # il pulsante accanto al disco
+        # quello che fa conferma_disco.py: abbina + prezza il lotto senza AI, poi pubblica SOLO quel disco
+        self.run.main("--abbina", "IMG_0001=1901512", "--senza-ai", csv=False)
+        published = conferma_disco.publish_one(self.state(), self.run.api, "IMG_0001")
+        self.assertEqual(published, 1)
+        self.assertEqual([l[4] for l in self.run.api.listings], ["IMG_0001"])   # IMG_0003 (pronto) non toccato
         row = self.state().execute("SELECT stato, release_id FROM annunci_api WHERE external_id = 'IMG_0001'").fetchone()
-        self.assertEqual(tuple(row), ("pronto", 1901512))
+        self.assertEqual(tuple(row), ("pubblicato", 1901512))
+
+    def test_conferma_lancia_il_comando_giusto(self):
+        with mock.patch.object(self.job, "start", return_value=True) as start:
+            r = self.post({"azione": "conferma", "disco": "IMG_0001", "release": 1901512})
+        self.assertTrue(r["ok"], r)
+        argv = start.call_args[0][0]
+        self.assertTrue(argv[-3].endswith("conferma_disco.py"))
+        self.assertEqual(argv[-2:], ["IMG_0001", "1901512"])
 
     def test_bozza_rimessa_in_vendita(self):
         con = self.state()
