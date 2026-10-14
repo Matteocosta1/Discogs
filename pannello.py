@@ -15,6 +15,7 @@ import html
 import json
 import os
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -283,9 +284,18 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
         })
     # Immagine principale della scheda: la copertina ufficiale Discogs (più ordinata delle foto fatte a
     # mano), se è già in cache; le foto del disco restano nelle miniature accanto.
+    # Dischi per cui il venditore preferisce la sua foto (copertina Discogs brutta): tasto "La mia foto".
+    try:
+        own = {r[0] for r in state.execute("SELECT external_id FROM foto_mia")}
+    except sqlite3.OperationalError:
+        own = set()
     for d in selling + checking:
         cover = Path(cover_dir) / f"{d['release']}-0.jpg" if cover_dir and thumbs and d.get("release") else None
         d["discogs"] = (thumbnail(cover, thumbs) or "") if cover and cover.exists() else ""
+        d["foto_mia"] = d["id"] in own and bool(d["foto"])
+        d["scelta_foto"] = bool(d["discogs"] and d["foto"])   # c'è da scegliere: Discogs o la mia
+        if d["foto_mia"]:
+            d["discogs"] = ""
     for d in checking:   # foto non più nella loro cartella (prove vecchie, foto spostate): nascosti
         d["nascosto"] = not d["foto"] and not d.get("bozza")
     natural = lambda d: (d["lotto"], d["foto_nome"] or d["id"])  # noqa: E731
@@ -353,6 +363,7 @@ main{padding:20px 24px 60px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
 .card{background:var(--panel);border:1px solid var(--line);display:flex;flex-direction:column}
 .pics{display:grid;grid-template-columns:1fr;aspect-ratio:1;background:var(--chip);position:relative;overflow:hidden}
+.pics .swap{position:absolute;top:8px;right:8px;opacity:.85}
 .pics img{width:100%;height:100%;object-fit:cover;display:block;cursor:zoom-in}
 .pics .thumbs{position:absolute;right:6px;bottom:6px;display:flex;gap:4px}
 .pics .thumbs img{width:44px;height:44px;border:2px solid var(--panel)}
@@ -451,8 +462,10 @@ function pics(d) {
   // La copertina Discogs davanti (se c'è), le foto del disco nelle miniature
   // Con la copertina Discogs si vede solo quella, pulita (niente miniature delle foto fatte a mano)
   const [first, ...rest] = d.discogs ? [d.discogs] : d.foto;
-  return `<div class="pics"><img src="${esc(first)}" alt="" loading="lazy">
-    <div class="thumbs">${rest.map(u => `<img src="${esc(u)}" alt="" loading="lazy">`).join("")}</div></div>`;
+  const swap = LIVE && (d.scelta_foto || d.foto_mia)
+    ? `<button class="act small swap" data-act="foto-mia" data-id="${esc(d.id)}">${d.foto_mia ? "Foto Discogs" : "La mia foto"}</button>` : "";
+  return `<div class="pics"><img src="${esc(first)}" alt="" loading="lazy">${swap}
+    <div class="thumbs">${d.discogs ? "" : rest.map(u => `<img src="${esc(u)}" alt="" loading="lazy">`).join("")}</div></div>`;
 }
 function grade(d) {
   return d.copertina && d.copertina !== d.grado ? `Disco ${esc(d.grado)} · Copertina ${esc(d.copertina)}` : `Grado ${esc(d.grado)}`;
@@ -561,6 +574,7 @@ document.getElementById("grid").addEventListener("click", async e => {
   }
   if (b.dataset.act === "conferma") { runJob({azione: "conferma", disco: id, release: Number(b.dataset.release)}); return; }
   if (b.dataset.act === "bozza-vendita") body = {azione: "bozza_vendita", disco: id};
+  if (b.dataset.act === "foto-mia") body = {azione: "foto_mia", disco: id};
   if (b.dataset.act === "togli") { if (!confirm(`Togliere ${id} dall'inventario?`)) return; body = {azione: "togli", disco: id}; }
   if (b.dataset.act === "copie") { runJob({azione: "elabora", cartella: b.dataset.cartella, grado: "", copie: b.dataset.copie}); return; }
   if (!body) return;
@@ -707,6 +721,16 @@ def make_handler(vendi, out_dir, job):
                 finally:
                     db.close()
                 msg = "; ".join(f"{eid} -> {vendi.describe_release(r)}" for eid, r in done)
+            elif what == "foto_mia":
+                eid = body.get("disco", "")
+                con.execute("CREATE TABLE IF NOT EXISTS foto_mia (external_id TEXT PRIMARY KEY)")
+                if con.execute("SELECT 1 FROM foto_mia WHERE external_id = ?", (eid,)).fetchone():
+                    con.execute("DELETE FROM foto_mia WHERE external_id = ?", (eid,))
+                    msg = f"{eid}: torna la copertina Discogs"
+                else:
+                    con.execute("INSERT INTO foto_mia VALUES (?)", (eid,))
+                    msg = f"{eid}: si vede la sua foto"
+                con.commit()
             elif what == "bozza_vendita":
                 msg = draft_to_sale(vendi, con, body.get("disco", ""))
             else:
