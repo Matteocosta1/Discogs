@@ -326,6 +326,36 @@ quando la parte locale non basta.
    - Se dopo il passo 3 c'è un solo candidato, o uno è chiaramente il migliore,
      lo script salta questa seconda chiamata e risparmia.
 
+**Le copertine di Discogs (`copertine.py`).** Quando dopo il passo 3 restano
+più candidati, lo script scarica le immagini di quelle release (una volta
+sola, in `data/copertine/`) e le confronta con le foto del disco: su macOS con
+Vision (lo stesso motore delle "foto simili" di Foto), gratis e in locale.
+- Se **una sola** copertina combacia e stacca le altre, è quella: niente
+  seconda chiamata all'AI (metodo `copertina`).
+- Altrimenti le distanze vengono passate all'AI come indizio in più.
+- Un riconoscimento senza codice che **non supera la verifica finale** (vedi
+  sotto) passa lo stesso se la copertina della release proposta è la stessa
+  della foto.
+La copertina dice il titolo, non la stampa: tra stampe con la stessa
+copertina decidono catalogo, paese e anno. `--senza-copertine` lo disattiva.
+
+**Altre stampe dello stesso master.** Ai candidati trovati con il testo si
+aggiungono le altre versioni dello stesso album (stesso `master_id` nel dump):
+se catalogo, anno o paese letti in foto combaciano meglio con un'altra
+stampa, è quella a vincere (o a essere proposta all'AI e alle copertine).
+
+**Le conferme restano in memoria.** Una release scelta a mano (`--abbina`, o
+"È questo" nel pannello) finisce nella tabella `conferme`: la volta dopo che
+l'AI la propone non serve più la verifica finale.
+
+**Terzo servizio (facoltativo): Google Cloud Vision.** Con `--google-vision`
+(chiave `GOOGLE_VISION_KEY` in `.env`, circa 0,35 cent a foto, 1000 gratis al
+mese), sui dischi che né la parte locale né l'AI hanno trovato lo script
+chiede a Google "cosa mostra questa immagine" (ricerca web) e cerca su Discogs
+le ipotesi ricevute. Quello che Google propone deve poi superare gli stessi
+controlli di tutto il resto (coerenza con la foto, copertina, scelta dell'AI):
+Google propone, non decide.
+
 **Secondo tentativo con un modello più forte.** Se dopo il modello principale
 (`claude-haiku-4-5`) una foto resta non trovata o con più release possibili,
 lo script riprova una volta con `claude-sonnet-5-5` (`--ai-modello-secondo`),
