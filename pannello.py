@@ -17,6 +17,9 @@ from pathlib import Path
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".heic", ".heif", ".png"}
 
+# Righe che su Discogs non sono (più) in vendita: nascoste nella vista "Attuali" (restano in "Tutti").
+NOT_CURRENT = {"assente", "rimosso", "bozza_cancellata", "scaduto", "sparito", "venduto", "forse_venduto"}
+
 ONLINE_IT = {
     "in_vendita": "Online", "bozza": "Bozza su Discogs", "venduto": "Venduto", "forse_venduto": "Forse venduto",
     "scaduto": "Scaduto", "assente": "Non trovato online", "sparito": "Sparito", "rimosso": "Rimosso",
@@ -61,6 +64,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "foto_nome": display_name(f) if f else "", "foto": images_of(path),
             "online": ONLINE_IT.get(r["online"] or "", r["online"] or ""), "calcolo": r["calcolo"] or "",
             "link": f"https://www.discogs.com/release/{r['release_id']}", "annuncio": "",
+            "nascosto": (r["online"] or "") in NOT_CURRENT,
         })
     for r in state.execute("SELECT * FROM annunci_api WHERE stato = 'pubblicato'"):
         f = foto(listing_owner(r["external_id"]))
@@ -73,6 +77,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "online": ONLINE_IT.get(r["online"] or "", r["online"] or ""), "calcolo": r["calcolo"] or "",
             "link": f"https://www.discogs.com/release/{r['release_id']}",
             "annuncio": f"https://www.discogs.com/sell/item/{r['listing_id']}" if r["listing_id"] else "",
+            "nascosto": (r["online"] or "") in NOT_CURRENT,
         })
 
     checking = []
@@ -102,6 +107,8 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "proposto": r["disco"] or "", "release": r["release_id"],
             "link": f"https://www.discogs.com/release/{r['release_id']}", "prezzo": r["price"], "candidati": "",
         })
+    for d in checking:   # foto non più nella loro cartella (prove vecchie, foto spostate): nascosti
+        d["nascosto"] = not d["foto"]
     natural = lambda d: (d["lotto"], d["foto_nome"] or d["id"])  # noqa: E731
     selling.sort(key=natural)
     checking.sort(key=natural)
@@ -187,12 +194,14 @@ a{color:var(--green);font-weight:700}
   <h1>Inventario dischi</h1>
   <div class="sub">Aggiornato al __WHEN__ · generato da vendi.py · le foto si vedono in Safari</div>
   <div class="stats" id="stats"></div>
+  <div class="sub" id="hidden"></div>
 </header>
 <nav>
   <button class="tab" data-tab="vendita" aria-selected="true">In vendita<span class="n" id="n-vendita"></span></button>
   <button class="tab" data-tab="controllo" aria-selected="false">Da controllare<span class="n" id="n-controllo"></span></button>
   <input id="q" type="search" placeholder="Cerca: titolo, artista, lotto, cartella, file…" autocomplete="off">
   <select id="lot"><option value="">Tutti i lotti</option></select>
+  <select id="view"><option value="attuali">Solo attuali</option><option value="tutti">Mostra anche i nascosti</option></select>
 </nav>
 <main><div class="grid" id="grid"></div></main>
 <div id="zoom"><img alt=""></div>
@@ -203,16 +212,25 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 let tab = "vendita";
 try { tab = localStorage.getItem("tab") || "vendita"; } catch (e) {}
 
-const copies = DATA.vendita.reduce((s, d) => s + (d.copie || 1), 0);
-const value = DATA.vendita.reduce((s, d) => s + (d.prezzo || 0) * (d.copie || 1), 0);
-document.getElementById("stats").innerHTML = [
-  [DATA.vendita.length, "righe in vendita"], [copies, "copie"], [euro(value), "valore di listino"],
-  [DATA.controllo.length, "da controllare"]].map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
-document.getElementById("n-vendita").textContent = DATA.vendita.length;
-document.getElementById("n-controllo").textContent = DATA.controllo.length;
 const lots = [...new Set([...DATA.vendita, ...DATA.controllo].map(d => d.lotto).filter(Boolean))].sort();
 document.getElementById("lot").innerHTML += lots.map(l => `<option>${esc(l)}</option>`).join("");
-
+function visible(list) {
+  const all = document.getElementById("view").value === "tutti";
+  return list.filter(d => all || !d.nascosto);
+}
+function stats() {
+  const sale = visible(DATA.vendita), check = visible(DATA.controllo);
+  const copies = sale.reduce((s, d) => s + (d.copie || 1), 0);
+  const value = sale.reduce((s, d) => s + (d.prezzo || 0) * (d.copie || 1), 0);
+  const hidden = DATA.vendita.length + DATA.controllo.length - sale.length - check.length;
+  document.getElementById("stats").innerHTML = [
+    [sale.length, "righe in vendita"], [copies, "copie"], [euro(value), "valore di listino"],
+    [check.length, "da controllare"]].map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
+  document.getElementById("n-vendita").textContent = sale.length;
+  document.getElementById("n-controllo").textContent = check.length;
+  document.getElementById("hidden").textContent = hidden && document.getElementById("view").value !== "tutti"
+    ? `${hidden} nascosti: righe non più online su Discogs e dischi da controllare con le foto non più nella loro cartella` : "";
+}
 function pics(d) {
   if (!d.foto.length) return `<div class="pics nopic">foto non trovata<br>${esc(d.foto_nome)}</div>`;
   const [first, ...rest] = d.foto;
@@ -252,7 +270,8 @@ function draw() {
   document.querySelectorAll(".tab").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
   const q = document.getElementById("q").value.trim().toLowerCase();
   const lot = document.getElementById("lot").value;
-  const list = DATA[tab].filter(d => (!lot || d.lotto === lot) &&
+  stats();
+  const list = visible(DATA[tab]).filter(d => (!lot || d.lotto === lot) &&
     (!q || JSON.stringify([d.disco, d.proposto, d.lotto, d.foto_nome, d.file, d.id, d.release, d.motivo]).toLowerCase().includes(q)));
   document.getElementById("grid").innerHTML = list.length ? list.map(tab === "vendita" ? cardSale : cardCheck).join("")
     : `<div class="empty">${tab === "vendita" ? "Nessun disco in vendita" : "Niente da controllare"}${q || lot ? " con questo filtro" : ""}</div>`;
@@ -261,6 +280,7 @@ document.querySelectorAll(".tab").forEach(b => b.onclick = () => {
   tab = b.dataset.tab; try { localStorage.setItem("tab", tab); } catch (e) {} draw(); });
 document.getElementById("q").oninput = draw;
 document.getElementById("lot").onchange = draw;
+document.getElementById("view").onchange = draw;
 const zoom = document.getElementById("zoom");
 document.getElementById("grid").addEventListener("click", e => {
   if (e.target.tagName === "IMG") { zoom.querySelector("img").src = e.target.src; zoom.style.display = "flex"; } });
