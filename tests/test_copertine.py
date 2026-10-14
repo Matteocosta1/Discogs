@@ -346,3 +346,52 @@ class TestGoogleVision(CoverRun):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRetroConDiscografia(unittest.TestCase):
+    """Lotto-05 disco-018, lotto-07 disco-004: sul retro sono stampati i cataloghi di altri dischi
+    dell'etichetta (o un "Fusion 3" che non è un catalogo): non è un contrasto tra le foto."""
+
+    def setUp(self):
+        import sqlite3
+        self._tmp = tempfile.TemporaryDirectory()
+        db = Path(self._tmp.name) / "db.sqlite"
+        tp.build_db(db)
+        con = sqlite3.connect(db)
+        for rid, title, catno in [(9050, "Altro Titolo", "SS050"), (9051, "Terzo Titolo", "SS051"),
+                                  (9099, "Fusion Session", "FUSION3")]:
+            label = "Sound Signature" if catno.startswith("SS") else "Fusion"
+            con.execute("INSERT INTO releases VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (rid, title, "Theo Parrish" if label == "Sound Signature" else "Xavier", f"{label} ({catno})",
+                         catno, "Vinyl, 12\"", "US", "2013", 2013, "", "", None, "Accepted", ""))
+            con.execute("INSERT INTO catnos VALUES (?,?,?,?)", (rid, label, catno, vendi.dd.normalize_catno(catno)))
+        con.commit()
+        con.close()
+        self.con = vendi.dd.open_db(db)
+        self.addCleanup(self.con.close)
+        self.addCleanup(self._tmp.cleanup)
+
+    def ev(self, lines):
+        e = vendi.Evidence()
+        e.add_lines([(t, 0.05) for t in lines])
+        return e
+
+    def test_elenco_dell_etichetta_non_e_un_contrasto(self):
+        label = self.ev(["Sound Signature", "SS049", "DANCE OF THE MEDUSA", "THEO PARRISH"])
+        back = self.ev(["Sound Signature", "Also available: SS050", "SS051"])
+        self.assertEqual(vendi.photos_in_contrast(self.con, [("etichetta", label), ("retro", back)], 4207270), "")
+
+    def test_catalogo_debole_non_e_un_contrasto(self):
+        label = self.ev(["Sound Signature", "SS049", "DANCE OF THE MEDUSA", "THEO PARRISH"])
+        back = self.ev(["Recorded at Fusion 3", "Fusion"])
+        self.assertEqual(vendi.photos_in_contrast(self.con, [("etichetta", label), ("retro", back)], 4207270), "")
+
+    def test_contrasto_vero_resta(self):
+        label = self.ev(["Sound Signature", "SS049"])
+        other = self.ev(["Nature Records", "NAT2130", "FRANCISCO", "MUSIC BUSINESS"])
+        self.assertIn("in contrasto", vendi.photos_in_contrast(self.con, [("a", label), ("b", other)]))
+
+    def test_elenco_con_titolo_presente_conta(self):
+        label = self.ev(["Sound Signature", "SS049", "DANCE OF THE MEDUSA"])
+        back = self.ev(["Sound Signature", "SS050", "SS051", "ALTRO TITOLO"])   # il disco è proprio SS050?
+        self.assertIn("in contrasto", vendi.photos_in_contrast(self.con, [("a", label), ("b", back)]))

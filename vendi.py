@@ -1550,7 +1550,7 @@ def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PH
     rec = identify(path, con, api, use_ocr, ai, cache, ev, max_photos, covers, google)
     rec.metodo = method_of(rec.fonte, rec.release)
     if rec.esito == "trovato" and ev.per_photo:
-        rec.motivo = photos_in_contrast(con, ev.per_photo, rec.release_id)
+        rec.motivo = photos_in_contrast(con, ev.per_photo, rec.release_id, ev.text)
         if rec.motivo:
             rec.esito = "da_verificare"
             rec.details += f"; DA VERIFICARE: {rec.motivo}"
@@ -1588,24 +1588,51 @@ def read_all_photos(ev, paths, imgs, use_ocr):
         ev.per_photo.append((Path(path).name, one))
 
 
-def photo_code_hits(con, one):
-    """Release a cui portano i codici letti in una sola foto: (id, descrizione) o (set(), "")."""
+WEAK_CATNO_RE = re.compile(r"^[A-Z]{3,}\d$")   # parola + una cifra (es. "Fusion 3", "Chapter 2"): spesso non è un catalogo
+
+
+def text_supports(release, text):
+    """True se il TITOLO della release compare nel testo letto (tollerante agli errori). Solo il titolo:
+    in un elenco dell'etichetta l'artista è spesso lo stesso per tutti i dischi."""
+    if not text.strip() or not (release.get("title") or "").strip():
+        return False
+    return TextMatcher(text).coverage(release["title"]) >= TEXT_MIN_COVERAGE
+
+
+def photo_code_hits(con, one, support_text=""):
+    """Release a cui portano i codici letti in una sola foto: (id, descrizione) o (set(), "").
+    Un retro che elenca la discografia dell'etichetta (più cataloghi diversi, es. SS26, SS27, SS28) o un
+    "catalogo" debole (parola + una cifra, es. "at Fusion 3") vale solo per le release il cui artista o
+    titolo compare davvero nelle scritte del disco (support_text): gli altri non sono questo disco."""
     found = search_barcode_local(con, one)
     if found:
         return {r["id"] for r in found}, "barcode " + ", ".join(one.barcodes)
     found = search_catno_local(con, one)
     if found:
+        matched = [n for n in one.catnos if any(n in r.get("catno_norms", []) for r in found)]
+        listing = len(set(matched)) >= 2 and len({r["id"] for r in found}) >= 2
+
+        def needs_support(r):
+            norms = [n for n in r.get("catno_norms", []) if n in one.catnos]
+            return listing or (norms and all(WEAK_CATNO_RE.match(n) for n in norms))
+
+        kept = [r for r in found if not needs_support(r) or text_supports(r, support_text)]
         strong = [raw for norm, raw in one.catnos.items() if is_strong_catno(norm)] or list(one.catnos.values())
-        return {r["id"] for r in found}, "catalogo " + ", ".join(strong[:3])
+        if not kept:
+            return set(), ""
+        note = " (elenco dell'etichetta: solo le release che compaiono nelle scritte)" if len(kept) < len(found) else ""
+        return {r["id"] for r in kept}, "catalogo " + ", ".join(strong[:3]) + note
     return set(), ""
 
 
-def photos_in_contrast(con, per_photo, release_id=None):
+def photos_in_contrast(con, per_photo, release_id=None, extra_text=""):
     """Foto dello stesso disco con codici (barcode, catalogo + etichetta) che portano a release
-    diverse e incompatibili, o a una release diversa da quella scelta: motivo, o "" se tutto torna."""
+    diverse e incompatibili, o a una release diversa da quella scelta: motivo, o "" se tutto torna.
+    extra_text: altro testo letto del disco (es. dall'AI), che può confermare un catalogo debole."""
+    support = "\n".join(one.text for _n, one in per_photo) + "\n" + (extra_text or "")
     hits = []
     for name, one in per_photo:
-        ids, what = photo_code_hits(con, one)
+        ids, what = photo_code_hits(con, one, support)
         if ids:
             hits.append((name, ids, what))
     clash = any(not (a[1] & b[1]) for i, a in enumerate(hits) for b in hits[i + 1:])
