@@ -353,7 +353,6 @@ main{padding:20px 24px 60px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
 .card{background:var(--panel);border:1px solid var(--line);display:flex;flex-direction:column}
 .pics{display:grid;grid-template-columns:1fr;aspect-ratio:1;background:var(--chip);position:relative;overflow:hidden}
-.pics .tag{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.65);color:#fff;font-size:11px;padding:2px 6px;letter-spacing:.04em}
 .pics img{width:100%;height:100%;object-fit:cover;display:block;cursor:zoom-in}
 .pics .thumbs{position:absolute;right:6px;bottom:6px;display:flex;gap:4px}
 .pics .thumbs img{width:44px;height:44px;border:2px solid var(--panel)}
@@ -451,7 +450,7 @@ function pics(d) {
   if (!d.foto.length && !d.discogs) return `<div class="pics nopic">foto non trovata<br>${esc(d.foto_nome)}</div>`;
   // La copertina Discogs davanti (se c'è), le foto del disco nelle miniature
   const [first, ...rest] = d.discogs ? [d.discogs, ...d.foto] : d.foto;
-  return `<div class="pics"><img src="${esc(first)}" alt="" loading="lazy">${d.discogs ? `<span class="tag">Discogs</span>` : ""}
+  return `<div class="pics"><img src="${esc(first)}" alt="" loading="lazy">
     <div class="thumbs">${rest.map(u => `<img src="${esc(u)}" alt="" loading="lazy">`).join("")}</div></div>`;
 }
 function grade(d) {
@@ -756,6 +755,38 @@ def make_handler(vendi, out_dir, job):
     return Handler
 
 
+def download_missing_covers(vendi, state, out_dir):
+    """Scarica da Discogs la copertina principale dei dischi del pannello che non ce l'hanno ancora
+    (una volta sola: poi resta in data/copertine). Restituisce quante ne ha scaricate."""
+    data = collect(state, vendi.REASONS, vendi.PROBLEMS, vendi.display_name, vendi.listing_owner,
+                   vendi.NOT_SELLABLE_REASON, out_dir)
+    cover_dir = Path(vendi.COVER_DIR)
+    missing = sorted({int(d["release"]) for d in data["vendita"] + data["controllo"]
+                      if d.get("release") and not d.get("discogs") and not d.get("nascosto")
+                      and not (cover_dir / f"{d['release']}-0.jpg").exists()})
+    if not missing:
+        return 0
+    print(f"Scarico le copertine Discogs mancanti: {len(missing)} (circa {2 * len(missing)} secondi, una volta sola)")
+    api = vendi.DiscogsAPI(vendi.load_token())
+    cover_dir.mkdir(parents=True, exist_ok=True)
+    done = 0
+    for n, rid in enumerate(missing, 1):
+        try:
+            images = api.release(rid).get("images") or []
+            images.sort(key=lambda i: 0 if i.get("type") == "primary" else 1)
+            url = images and (images[0].get("uri") or images[0].get("uri150"))
+            if url:
+                blob = api.download(url)
+                if blob:
+                    (cover_dir / f"{rid}-0.jpg").write_bytes(blob)
+                    done += 1
+        except Exception as e:  # una copertina che manca non deve fermare il pannello
+            print(f"  release {rid}: copertina non scaricata ({e})")
+        if n % 10 == 0:
+            print(f"  {n}/{len(missing)}")
+    return done
+
+
 def serve(port=PORT, open_browser=True):
     import http.server
     import vendi
@@ -791,6 +822,10 @@ def main():
     state = sqlite3.connect(vendi.STATE_DB)
     state.row_factory = sqlite3.Row
     try:
+        try:
+            download_missing_covers(vendi, state, out_dir)
+        except Exception as e:  # senza rete o senza token il pannello si apre lo stesso
+            print(f"Copertine Discogs non scaricate ({e}): restano le sue foto")
         path = vendi.write_panel_from_state(state, out_dir)
     finally:
         state.close()
