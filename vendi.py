@@ -1287,9 +1287,8 @@ def second_opinion(rec, path, gemini, cache):
         # Due modelli d'accordo con sicurezza alta superano solo i dubbi "di lettura" (artista non tra le
         # scritte principali, una sola parola). Mai le trappole note: scaletta, "From the album",
         # compilation, alfabeti diversi (white label): lì due modelli possono sbagliare allo stesso modo.
-        traps = ("scaletta", "From the album", "compilation", "non si può confrontare")
         if (rec.esito == "da_verificare" and choice.get("confidence") == "high"
-                and not any(t in (rec.motivo or "") for t in traps)):
+                and not is_trap(rec.motivo) and COVER_REASON not in (rec.motivo or "")):
             rec.details += f" (supera il dubbio: {rec.motivo})"
             rec.esito, rec.motivo = "trovato", ""
     elif gid:
@@ -1657,6 +1656,21 @@ class CoverCheck:
         chosen = next((r for r in candidates if r["id"] == chosen_id), None)
         return chosen, text
 
+    def distance(self, photos, release):
+        """(distanza tra le foto e le immagini della release, o None; testo). Mai un errore."""
+        try:
+            d = self.distances(photos, [release]).get(release["id"])
+        except Exception as e:
+            return None, f"copertina: confronto non riuscito ({type(e).__name__}: {e})"
+        if d is None:
+            return None, "copertina: nessun confronto possibile"
+        return d, f"copertina ({self.matcher.backend}): distanza {d:.2f}"
+
+    def clearly_different(self, d):
+        """Distanza oltre la zona di dubbio: copertina sicuramente diversa."""
+        cm = copertine_module()
+        return d is not None and d > cm.STRONG[self.matcher.backend] + cm.DOUBT[self.matcher.backend]
+
     def confirms(self, photos, release):
         """(True se la copertina della release è quella delle foto, testo). Mai un errore."""
         try:
@@ -1693,6 +1707,7 @@ def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PH
         if rec.motivo:
             rec.esito = "da_verificare"
             rec.details += f"; DA VERIFICARE: {rec.motivo}"
+    paths = list(path) if isinstance(path, (list, tuple)) else [path]
     if rec.esito == "trovato" and rec.metodo in UNVERIFIED_METHODS:
         if covers and rec.release_id in covers.trusted:
             rec.details += "; release già confermata a mano in passato: nessuna verifica"
@@ -1700,16 +1715,29 @@ def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PH
             pass  # scelta sulla copertina: il testo non può smentirla
         else:
             rec.motivo = check_match(rec.release, ev, rec.ai_read)
-            if rec.motivo and covers:
-                paths = list(path) if isinstance(path, (list, tuple)) else [path]
+            if covers:
+                # PORTA D'USCITA: un disco riconosciuto senza codice va in vendita SOLO se le sue foto
+                # combaciano con un'immagine della release su Discogs. Nessuna eccezione (nemmeno se il
+                # testo torna o se Gemini concorda): copertina diversa o non confrontabile = a mano.
                 ok, text = covers.confirms(paths, rec.release)
                 rec.details += f"; {text}"
-                if ok:
+                if ok and rec.motivo and not is_trap(rec.motivo):
                     rec.details += f" (supera il dubbio: {rec.motivo})"
                     rec.motivo = ""
+                elif not ok:
+                    rec.motivo = f"{COVER_REASON} ({text})" + (f"; {rec.motivo}" if rec.motivo else "")
             if rec.motivo:
                 rec.esito = "da_verificare"
                 rec.details += f"; DA VERIFICARE: {rec.motivo}"
+    elif rec.esito == "trovato" and covers and rec.release_id not in covers.trusted:
+        # Riconosciuto da barcode o catalogo: il codice è affidabile, ma se la copertina è CHIARAMENTE
+        # un'altra (non solo poco simile: riflessi e foto storte capitano) il disco si ferma lo stesso.
+        d, text = covers.distance(paths, rec.release)
+        rec.details += f"; {text}"
+        if d is not None and covers.clearly_different(d):
+            rec.motivo = f"{COVER_REASON}, anche se trovato con il {rec.metodo or 'codice'} ({text})"
+            rec.esito = "da_verificare"
+            rec.details += f"; DA VERIFICARE: {rec.motivo}"
     second_opinion(rec, path, gemini, cache)
     if is_unofficial(rec.release):
         rec.details += "; formato 'Unofficial Release': probabilmente bloccata dal marketplace (decide l'API)"
@@ -1786,6 +1814,14 @@ def photos_in_contrast(con, per_photo, release_id=None, extra_text=""):
 
 
 CONTRAST_REASON = "foto della cartella in contrasto"
+COVER_REASON = "copertina diversa da quella su Discogs"
+# Trappole note: dubbi che né la copertina (una busta bianca somiglia a tutte le buste bianche) né un
+# secondo modello possono sciogliere, perché lì si sbaglia allo stesso modo. Restano sempre a mano.
+TRAPS = ("scaletta", "From the album", "compilation", "non si può confrontare")
+
+
+def is_trap(motivo):
+    return any(t in (motivo or "") for t in TRAPS)
 
 
 def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, covers=None, google=None):

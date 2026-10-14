@@ -128,6 +128,23 @@ def build_db(path):
     con.close()
 
 
+# Confronto con le copertine Discogs nei test: distanza per release (default 0.10 = stessa copertina).
+# La porta d'uscita di vendi.py ferma i dischi senza codice la cui copertina non combacia: i test che la
+# provano mettono qui una distanza alta (copertina diversa) o None (nessuna immagine su Discogs).
+COVER_DIST = {}
+COVER_DEFAULT = 0.10
+
+
+def fake_cover_distances(self, photos, candidates, release_data=None):
+    self.compared += 1
+    out = {}
+    for r in candidates[:6]:
+        d = COVER_DIST.get(r["id"], COVER_DEFAULT)
+        if d is not None:
+            out[r["id"]] = d
+    return out
+
+
 class FakeAPI:
     MIN_INTERVAL = 0
 
@@ -308,6 +325,8 @@ class Run:
         self.out = self.tmp / "risultati"
         self.api = FakeAPI()
 
+    fake_covers = True   # False nei test che simulano il confronto con le copertine a modo loro
+
     def main(self, *options, corsie=False, csv=True, folder=True):
         """Lancia vendi.py. I test scritti per la regola unica la usano con --corsie-off; corsie=True per
         provare le tre corsie di prezzo (il default di vendi.py). csv=True: i test storici lavorano con i
@@ -326,6 +345,7 @@ class Run:
                 ("sys.argv", argv),
                 ("vendi.STATE_DB", self.tmp / "vendita_stato.sqlite"),
                 ("vendi.COVER_DIR", self.tmp / "copertine"),
+                *([("vendi.CoverCheck.distances", fake_cover_distances)] if self.fake_covers else []),
                 ("vendi.load_token", lambda: "token-finto"),
                 ("vendi.DiscogsAPI", lambda token: self.api),
                 ("vendi.AIVision", FakeAI),

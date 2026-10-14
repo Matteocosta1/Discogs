@@ -126,7 +126,7 @@ class TestCoverStore(unittest.TestCase):
             api.images = {3993455: [b"img-a", b"img-b", b"img-c"], 4207270: []}
             store = copertine.CoverStore(api, Path(tmp) / "cop")
             files = store.paths(3993455)
-            self.assertEqual([f.name for f in files], ["3993455-0.jpg", "3993455-1.jpg"])   # al massimo 2
+            self.assertEqual([f.name for f in files], ["3993455-0.jpg", "3993455-1.jpg", "3993455-2.jpg"])  # max 4
             self.assertEqual(files[0].read_bytes(), b"img-a")
             n = len(api.log)
             self.assertEqual(store.paths(3993455), files)                                   # dalla cache
@@ -174,12 +174,14 @@ class FakeMatcher:
 
 class FakeCopertine:
     CoverStore, Matcher, MAX_CANDIDATES = FakeStore, FakeMatcher, 6
+    STRONG, DOUBT = copertine.STRONG, copertine.DOUBT
 
 
 class CoverRun(TempRun):
     def setUp(self):
         super().setUp()
         FakeMatcher.distances = {}
+        self.run.fake_covers = False
         p = mock.patch("vendi.copertine_module", lambda: FakeCopertine)
         p.start()
         self.addCleanup(p.stop)
@@ -205,16 +207,17 @@ class TestCopertineNelRiconoscimento(CoverRun):
         self.assertEqual((row["esito"], row["release_id"]), ("da_verificare", 1901512))   # come prima
         self.assertIn("nessuna copertina riconosciuta", row["dettagli"])
 
-    def test_copertina_conferma_un_riconoscimento_dubbio(self):
-        """Caso 2: white label abbinata per il solo titolo a una release russa: da verificare... a meno
-        che la copertina non sia proprio quella."""
+    def test_copertina_non_scioglie_una_trappola(self):
+        """Caso 2: white label abbinata per il solo titolo a una release russa. Anche se la copertina
+        "somiglia" resta da verificare: una busta bianca somiglia a tutte le buste bianche."""
         self.run.main(csv=False)
         self.assertIn("IMG_0002", self.run.to_check())
         FakeMatcher.distances = {("IMG_0002", 5819891): 0.10}
         self.run.main("--riprova", csv=False)
         row = self.state().execute("SELECT * FROM foto WHERE external_id = 'IMG_0002'").fetchone()
-        self.assertEqual((row["esito"], row["release_id"]), ("trovato", 5819891))
-        self.assertIn("supera il dubbio", row["dettagli"])
+        self.assertEqual((row["esito"], row["release_id"]), ("da_verificare", 5819891))
+        self.assertIn("non si può confrontare", row["motivo"])
+        self.assertNotIn("supera il dubbio", row["dettagli"])
 
     def test_release_confermata_in_passato_non_si_verifica(self):
         self.run.main(csv=False)
@@ -255,6 +258,7 @@ class TestAltreStampeDelMaster(CoverRun):
             self.addCleanup(p.stop)
 
     def test_la_stampa_che_combacia_meglio_vince(self):
+        FakeMatcher.distances = {("IMG_0020", 4207271): 0.10}   # e la copertina combacia (porta d'uscita)
         self.run.main(csv=False)
         row = self.state().execute("SELECT * FROM foto WHERE external_id = 'IMG_0020'").fetchone()
         self.assertEqual((row["esito"], row["release_id"]), ("trovato", 4207271))
@@ -324,6 +328,7 @@ class TestGoogleVision(CoverRun):
         self.assertEqual(FakeGoogle.calls, 0)
 
     def test_google_propone_e_la_coerenza_conferma(self):
+        FakeMatcher.distances = {("IMG_0007", 807332): 0.10}    # e la copertina combacia (porta d'uscita)
         out = self.run.main("--google-vision", "--senza-secondo-tentativo", csv=False)
         self.assertIn("Google Vision (ricerca web dell'immagine) attivo", out)
         row = self.state().execute("SELECT * FROM foto WHERE external_id = 'IMG_0007'").fetchone()
@@ -396,3 +401,57 @@ class TestRetroConDiscografia(unittest.TestCase):
         label = self.ev(["Sound Signature", "SS049", "DANCE OF THE MEDUSA"])
         back = self.ev(["Sound Signature", "SS050", "SS051", "ALTRO TITOLO"])   # il disco è proprio SS050?
         self.assertIn("in contrasto", vendi.photos_in_contrast(self.con, [("a", label), ("b", back)]))
+
+
+class TestPortaDUscita(CoverRun):
+    """Nessun disco va in vendita se la sua copertina non combacia con quella su Discogs."""
+    photos = {"NM": ["IMG_0004"], "VG+": ["IMG_0003"]}
+
+    def row(self, eid):
+        return self.state().execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
+
+    def test_senza_codice_e_copertina_diversa_si_ferma(self):
+        # IMG_0004: artista e titolo puliti (prima andava in vendita senza guardare la copertina)
+        FakeMatcher.distances = {("IMG_0004", 3993455): 0.9}
+        self.run.main(csv=False)
+        row = self.row("IMG_0004")
+        self.assertEqual(row["esito"], "da_verificare")
+        self.assertIn(vendi.COVER_REASON, row["motivo"])
+        self.assertIn("IMG_0004", self.run.to_check())
+
+    def test_senza_codice_e_copertina_uguale_va_in_vendita(self):
+        FakeMatcher.distances = {("IMG_0004", 3993455): 0.10, ("IMG_0003", 3993455): 0.10}
+        self.run.main(csv=False)
+        self.assertEqual(self.row("IMG_0004")["esito"], "trovato")
+        self.assertNotIn("IMG_0004", self.run.to_check())
+
+    def test_con_codice_e_copertina_chiaramente_diversa_si_ferma(self):
+        # IMG_0003: trovato con il numero di catalogo, ma la copertina è un'altra
+        FakeMatcher.distances = {("IMG_0004", 3993455): 0.10, ("IMG_0003", 3993455): 0.9}
+        self.run.main(csv=False)
+        row = self.row("IMG_0003")
+        self.assertEqual(row["esito"], "da_verificare")
+        self.assertIn("anche se trovato con il catno", row["motivo"])
+
+    def test_con_codice_e_copertina_solo_poco_simile_passa(self):
+        # riflessi o foto storta: zona di dubbio, il codice basta
+        d = copertine.STRONG["pil"] + copertine.DOUBT["pil"] - 0.01
+        FakeMatcher.distances = {("IMG_0004", 3993455): 0.10, ("IMG_0003", 3993455): d}
+        self.run.main(csv=False)
+        self.assertEqual(self.row("IMG_0003")["esito"], "trovato")
+
+    def test_gemini_d_accordo_non_scavalca_la_copertina(self):
+        class Gemini:
+            model = "finto"
+
+            def choose(self, images, shortlist):
+                return {"release_id": 3993455, "confidence": "high", "reason": "sicuro"}, 0.0
+
+        rec = vendi.Recognition(esito="da_verificare", release={"id": 3993455}, metodo="ai",
+                                motivo=f"{vendi.COVER_REASON} (copertina (pil): distanza 0.90)", details="",
+                                candidates=[(1.0, {"id": 3993455}, "")])
+        with mock.patch("vendi.load_image", lambda p: p), mock.patch.object(vendi.AIVision, "prepare", lambda img: img):
+            vendi.second_opinion(rec, "foto", Gemini(), {})
+        self.assertEqual(rec.esito, "da_verificare")
+        self.assertIn("Gemini concorda", rec.details)
+        self.assertTrue(vendi.is_trap("riga della scaletta"))

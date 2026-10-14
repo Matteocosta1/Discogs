@@ -17,10 +17,11 @@ import json
 import sys
 from pathlib import Path
 
-MAX_IMAGES = 2            # immagini per release scaricate da Discogs (prima la principale)
+MAX_IMAGES = 4            # immagini per release scaricate da Discogs (prima la principale, poi retro/etichette)
 MAX_CANDIDATES = 6        # candidati confrontati per disco (richieste API: 1 + immagini per candidato)
 STRONG = {"vision": 0.55, "pil": 0.35}   # sotto: stessa copertina
 GAP = {"vision": 0.15, "pil": 0.12}      # distacco dal secondo candidato per una scelta univoca
+DOUBT = {"vision": 0.15, "pil": 0.12}    # oltre STRONG + DOUBT: copertina sicuramente diversa
 
 
 class CoverStore:
