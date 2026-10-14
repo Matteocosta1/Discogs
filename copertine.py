@@ -19,9 +19,12 @@ from pathlib import Path
 
 MAX_IMAGES = 4            # immagini per release scaricate da Discogs (prima la principale, poi retro/etichette)
 MAX_CANDIDATES = 6        # candidati confrontati per disco (richieste API: 1 + immagini per candidato)
-STRONG = {"vision": 0.55, "pil": 0.35}   # sotto: stessa copertina
+# Taratura sulle foto vere (14 ott 2026, 79 dischi online, verdetto dell'AI che guarda le immagini):
+# copertine UGUALI da 0.45 a 1.17 (mediana 0.74), DIVERSE da 0.74 a 1.18 (mediana 0.98).
+# Con Vision sotto 0.65 sono tutte uguali; sopra, uguali e diverse si sovrappongono: decide l'AI.
+STRONG = {"vision": 0.65, "pil": 0.35}   # sotto: stessa copertina (Vision basta, gratis)
 GAP = {"vision": 0.15, "pil": 0.12}      # distacco dal secondo candidato per una scelta univoca
-DOUBT = {"vision": 0.15, "pil": 0.12}    # oltre STRONG + DOUBT: copertina sicuramente diversa
+DOUBT = {"vision": 1.00, "pil": 0.12}    # oltre STRONG + DOUBT: sicuramente diversa (Vision: mai, decide l'AI)
 
 
 class CoverStore:

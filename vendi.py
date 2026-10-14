@@ -1462,6 +1462,7 @@ def ai_cover_match(ai, covers, paths, candidates, cache=None):
     di Vision non basta per decidere: riflessi, foto storte, cellophane). Restituisce
     (release scelta o None, scelta, costo, testo). Mai un errore: in caso di problemi, nessuna scelta.
     candidates: release con "_cover" (distanza di Vision) già calcolata."""
+    ai = getattr(covers, "ai", None) or ai   # per le copertine il modello più accurato (Opus), se c'è
     if ai is None or not hasattr(ai, "match_covers") or covers is None:
         return None, None, 0.0, ""
     cm = copertine_module()
@@ -3788,6 +3789,7 @@ def run(opened):
         cm = copertine_module()
         trusted = [r[0] for r in state.execute("SELECT release_id FROM conferme")]
         covers = CoverCheck(cm.CoverStore(api, COVER_DIR), cm.Matcher(), trusted)
+        covers.ai = ai2 or ai   # chi guarda le copertine nei casi dubbi: il secondo modello (Opus) se attivo
         print(f"Confronto delle copertine: {covers.matcher.backend}"
               + (f", {len(trusted)} release già confermate a mano" if trusted else ""))
     # Nomi ripetuti: prima di elaborare qualsiasi foto, ognuna deve essere riconoscibile senza equivoci.
