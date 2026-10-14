@@ -281,6 +281,11 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "proposto": r["disco"] or "", "release": r["release_id"],
             "link": f"https://www.discogs.com/release/{r['release_id']}", "prezzo": r["price"], "candidati": "",
         })
+    # Immagine principale della scheda: la copertina ufficiale Discogs (più ordinata delle foto fatte a
+    # mano), se è già in cache; le foto del disco restano nelle miniature accanto.
+    for d in selling + checking:
+        cover = Path(cover_dir) / f"{d['release']}-0.jpg" if cover_dir and thumbs and d.get("release") else None
+        d["discogs"] = (thumbnail(cover, thumbs) or "") if cover and cover.exists() else ""
     for d in checking:   # foto non più nella loro cartella (prove vecchie, foto spostate): nascosti
         d["nascosto"] = not d["foto"] and not d.get("bozza")
     natural = lambda d: (d["lotto"], d["foto_nome"] or d["id"])  # noqa: E731
@@ -348,6 +353,7 @@ main{padding:20px 24px 60px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
 .card{background:var(--panel);border:1px solid var(--line);display:flex;flex-direction:column}
 .pics{display:grid;grid-template-columns:1fr;aspect-ratio:1;background:var(--chip);position:relative;overflow:hidden}
+.pics .tag{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.65);color:#fff;font-size:11px;padding:2px 6px;letter-spacing:.04em}
 .pics img{width:100%;height:100%;object-fit:cover;display:block;cursor:zoom-in}
 .pics .thumbs{position:absolute;right:6px;bottom:6px;display:flex;gap:4px}
 .pics .thumbs img{width:44px;height:44px;border:2px solid var(--panel)}
@@ -442,9 +448,10 @@ function stats() {
     ? `${hidden} nascosti: righe non più online su Discogs e dischi da controllare con le foto non più nella loro cartella` : "";
 }
 function pics(d) {
-  if (!d.foto.length) return `<div class="pics nopic">foto non trovata<br>${esc(d.foto_nome)}</div>`;
-  const [first, ...rest] = d.foto;
-  return `<div class="pics"><img src="${esc(first)}" alt="" loading="lazy">
+  if (!d.foto.length && !d.discogs) return `<div class="pics nopic">foto non trovata<br>${esc(d.foto_nome)}</div>`;
+  // La copertina Discogs davanti (se c'è), le foto del disco nelle miniature
+  const [first, ...rest] = d.discogs ? [d.discogs, ...d.foto] : d.foto;
+  return `<div class="pics"><img src="${esc(first)}" alt="" loading="lazy">${d.discogs ? `<span class="tag">Discogs</span>` : ""}
     <div class="thumbs">${rest.map(u => `<img src="${esc(u)}" alt="" loading="lazy">`).join("")}</div></div>`;
 }
 function grade(d) {
