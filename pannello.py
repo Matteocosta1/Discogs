@@ -194,7 +194,21 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "nascosto": (not ready) and (r["online"] or "") in NOT_CURRENT,
         })
 
+    # Annunci in Draft su Discogs: non sono in vendita, vanno guardati e rimessi in vendita a mano.
+    # Si spostano nella scheda Da controllare (sempre visibili, anche senza foto).
+    drafts = [d for d in selling if d["online"] == ONLINE_IT["bozza"] and not d.get("pronto") and not d["nascosto"]]
+    selling = [d for d in selling if d not in drafts]
+
     checking = []
+    for d in drafts:
+        checking.append({
+            "id": d["id"], "motivo": "In bozza su Discogs: controllalo e rimettilo in vendita",
+            "dettaglio": "Non è visibile ai compratori. Se il disco in mano combacia: Edit -> Status: For Sale.",
+            "esito": "bozza", "bozza": True, "grado": d["grado"], "copertina": d["copertina"],
+            "lotto": d["lotto"], "cartella": "", "foto_nome": d["foto_nome"], "foto": d["foto"],
+            "proposto": d["disco"], "release": d["release"], "link": d["link"], "annuncio": d["annuncio"],
+            "prezzo": d["prezzo"], "candidati": "", "scelte": [], "copie": "",
+        })
     keys = sorted(problems) + ["non_vendibile"]
     for r in state.execute("SELECT * FROM foto WHERE esito IN ({})".format(",".join("?" * len(keys))), keys):
         if r["esito"] == "non_vendibile":
@@ -225,7 +239,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "link": f"https://www.discogs.com/release/{r['release_id']}", "prezzo": r["price"], "candidati": "",
         })
     for d in checking:   # foto non più nella loro cartella (prove vecchie, foto spostate): nascosti
-        d["nascosto"] = not d["foto"]
+        d["nascosto"] = not d["foto"] and not d.get("bozza")
     natural = lambda d: (d["lotto"], d["foto_nome"] or d["id"])  # noqa: E731
     selling.sort(key=natural)
     checking.sort(key=natural)
@@ -401,7 +415,7 @@ function cardCheck(d) {
   return `<article class="card">${pics(d)}<div class="body">
     <div class="reason">${esc(d.motivo)}</div>
     ${d.dettaglio ? `<div class="detail">${esc(d.dettaglio)}</div>` : ""}
-    ${d.proposto ? `<div class="title">Proposto: ${esc(d.proposto)}</div>` : `<div class="title">Nessun disco proposto</div>`}
+    ${d.bozza ? `<div class="title">${esc(d.proposto)}</div>` : d.proposto ? `<div class="title">Proposto: ${esc(d.proposto)}</div>` : `<div class="title">Nessun disco proposto</div>`}
     <div class="chips"><span class="chip g">${grade(d)}</span>${d.lotto ? `<span class="chip">${esc(d.lotto)}</span>` : ""}
       ${d.prezzo ? `<span class="chip">${euro(d.prezzo)}</span>` : ""}</div>
     <div class="meta">${esc(d.foto_nome)} · ${esc(d.id)}</div>
@@ -409,7 +423,8 @@ function cardCheck(d) {
         <a href="https://www.discogs.com/release/${c.id}" target="_blank" rel="noopener">vedi</a>
         <button class="act small" data-act="abbina" data-id="${esc(d.id)}" data-release="${c.id}">È questo</button></div>`).join("")}</div>`
       : d.candidati ? `<details><summary>altre release possibili</summary><p>${esc(d.candidati)}</p></details>` : ""}
-    ${LIVE ? `<div class="cardbtns">
+    ${d.bozza ? `<div class="links">${d.annuncio ? `<a href="${esc(d.annuncio)}" target="_blank" rel="noopener">Apri l'annuncio</a>` : `<a href="https://www.discogs.com/sell/manage" target="_blank" rel="noopener">Apri l'inventario</a>`}</div>` : ""}
+    ${LIVE && !d.bozza ? `<div class="cardbtns">
       <button class="act small ghost" data-act="abbina-id" data-id="${esc(d.id)}">Altra release…</button>
       ${d.copie ? `<button class="act small ghost" data-act="copie" data-id="${esc(d.id)}" data-copie="${esc(d.copie)}" data-cartella="${esc(d.cartella)}">Sono copie diverse</button>` : ""}
       <button class="act small warn" data-act="togli" data-id="${esc(d.id)}">Togli</button></div>` : ""}
