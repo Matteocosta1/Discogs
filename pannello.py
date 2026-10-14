@@ -13,6 +13,9 @@ Si può anche rigenerare da solo, senza elaborare niente:  python pannello.py
 
 import html
 import json
+import os
+import re
+import sys
 from pathlib import Path
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".heic", ".heif", ".png"}
@@ -81,6 +84,28 @@ def images_of(path_text, thumbs_dir=None):
     return out
 
 
+CAND_RE = re.compile(r"^(\d+) (.*?)(?: \[punteggio [^\]]*\])? https://www\.discogs\.com/release/\d+$")
+
+
+def parse_candidates(text, proposed_id=None, proposed_text=""):
+    """[{id, testo}] dal testo di format_candidates(); la release proposta sempre per prima."""
+    out, seen = [], set()
+    if proposed_id:
+        out.append({"id": int(proposed_id), "testo": proposed_text or f"release {proposed_id}"})
+        seen.add(int(proposed_id))
+    for item in (text or "").split(" | "):
+        m = CAND_RE.match(item.strip())
+        if m and int(m.group(1)) not in seen:
+            seen.add(int(m.group(1)))
+            out.append({"id": int(m.group(1)), "testo": m.group(2)})
+    return out[:12]
+
+
+def lot_folder_of(path_text):
+    """Cartella del lotto (quella che contiene le cartelle dei gradi) dalla foto o dalla sottocartella."""
+    return str(Path(path_text).parent.parent) if path_text else ""
+
+
 def lot_of(path_text):
     return Path(path_text).parent.parent.name if path_text else ""
 
@@ -141,10 +166,13 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
         checking.append({
             "id": r["external_id"], "motivo": title[:1].upper() + title[1:], "dettaglio": detail,
             "esito": r["esito"], "grado": r["media"] or "", "copertina": r["sleeve"] or r["media"] or "",
-            "lotto": lot_of(r["foto"]), "foto_nome": display_name(r), "foto": images_of(r["foto"], thumbs),
+            "lotto": lot_of(r["foto"]), "cartella": lot_folder_of(r["foto"]),
+            "foto_nome": display_name(r), "foto": images_of(r["foto"], thumbs),
             "proposto": r["disco"] or "", "release": r["release_id"] or "",
             "link": f"https://www.discogs.com/release/{r['release_id']}" if r["release_id"] else "",
             "prezzo": r["prezzo"], "candidati": r["candidati"] or "",
+            "scelte": parse_candidates(r["candidati"], r["release_id"], r["disco"]),
+            "copie": (m.group(1) if (m := re.search(r"--copie-diverse (\S+)", r["motivo"] or "")) else ""),
         })
     for r in state.execute("SELECT a.*, f.foto, f.n_foto, f.disco FROM annunci_api a LEFT JOIN foto f ON "
                            "f.external_id = a.external_id OR a.external_id LIKE f.external_id || '-copia%' "
@@ -166,9 +194,10 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
     return {"vendita": selling, "controllo": checking}
 
 
-def render(data, generated):
+def render(data, generated, live=False):
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
-    return PAGE.replace("__DATA__", payload).replace("__WHEN__", html.escape(generated))
+    return (PAGE.replace("__DATA__", payload).replace("__WHEN__", html.escape(generated))
+            .replace("__LIVE__", "true" if live else "false"))
 
 
 def write_panel(out_dir, data, generated):
@@ -194,6 +223,7 @@ PAGE = r"""<!doctype html>
   --green:#8a9a4a; --green-ink:#111209; --warn:#e58a5c; --warn-bg:#2c1c13; --ok:#8ac08a; --chip:#262916;
 }}
 *{box-sizing:border-box}
+[hidden]{display:none !important}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}
 header{padding:28px 24px 12px;border-bottom:3px solid var(--ink)}
 h1{margin:0;font-size:44px;line-height:1;letter-spacing:-.02em;text-transform:uppercase;font-weight:900}
@@ -236,6 +266,18 @@ details p{font-family:var(--mono);font-size:11px;white-space:pre-wrap;margin:6px
 a{color:var(--green);font-weight:700}
 .links{display:flex;gap:12px;margin-top:auto;padding-top:4px;font-size:13px}
 .empty{padding:40px;text-align:center;color:var(--muted);border:2px dashed var(--line)}
+.actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 24px;border-bottom:1px solid var(--line);background:var(--panel)}
+.act{border:2px solid var(--ink);background:var(--ink);color:var(--bg);padding:7px 12px;font-weight:800;cursor:pointer;font-size:13px}
+.act.ghost{background:transparent;color:var(--ink)}
+.act.small{padding:4px 8px;font-size:12px}
+.act.warn{border-color:var(--warn);color:var(--warn);background:transparent}
+.act:disabled{opacity:.5;cursor:wait}
+.hint{font-family:var(--mono);font-size:11px;color:var(--muted)}
+#log{margin:0;padding:12px 24px;background:#111;color:#ddd;font:12px/1.4 var(--mono);max-height:40vh;overflow:auto;white-space:pre-wrap}
+.choices{display:flex;flex-direction:column;gap:4px}
+.choice{display:flex;gap:8px;align-items:center;font-size:12.5px}
+.choice .t{flex:1}
+.cardbtns{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
 #zoom{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;align-items:center;justify-content:center;z-index:9;cursor:zoom-out}
 #zoom img{max-width:94vw;max-height:94vh}
 @media (max-width:600px){header,nav,main{padding-left:16px;padding-right:16px}h1{font-size:32px}}
@@ -255,10 +297,19 @@ a{color:var(--green);font-weight:700}
   <select id="lot"><option value="">Tutti i lotti</option></select>
   <select id="view"><option value="attuali">Solo attuali</option><option value="tutti">Mostra anche i nascosti</option></select>
 </nav>
+<div id="actions" class="actions" hidden>
+  <button class="act" data-job="pubblica" id="btn-pubblica">Pubblica su Discogs</button>
+  <button class="act ghost" data-job="verifica">Verifica su Discogs</button>
+  <button class="act ghost" id="btn-elabora">Elabora un lotto…</button>
+  <span class="hint" id="live-hint">Pannello collegato allo script: i pulsanti agiscono davvero.</span>
+</div>
+<div id="offline" class="actions" hidden><span class="hint">Pagina statica. Per i pulsanti (scegli, togli, pubblica): nel Terminale <code>python pannello.py</code></span></div>
+<pre id="log" hidden></pre>
 <main><div class="grid" id="grid"></div></main>
 <div id="zoom"><img alt=""></div>
 <script>
 const DATA = __DATA__;
+const LIVE = __LIVE__;
 const euro = v => v == null || v === "" ? "" : Number(v).toLocaleString("it-IT",{style:"currency",currency:"EUR"});
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let tab = "vendita";
@@ -304,6 +355,7 @@ function cardSale(d) {
     ${d.calcolo ? `<details><summary>come è stato calcolato il prezzo</summary><p>${esc(d.calcolo)}</p></details>` : ""}
     <div class="links"><a href="${esc(d.link)}" target="_blank" rel="noopener">Release su Discogs</a>
       ${d.annuncio ? `<a href="${esc(d.annuncio)}" target="_blank" rel="noopener">Annuncio</a>` : ""}</div>
+    ${LIVE && d.pronto ? `<div class="cardbtns"><button class="act small warn" data-act="togli" data-id="${esc(d.id)}">Togli (non pubblicare)</button></div>` : ""}
   </div></article>`;
 }
 function cardCheck(d) {
@@ -314,7 +366,14 @@ function cardCheck(d) {
     <div class="chips"><span class="chip g">${grade(d)}</span>${d.lotto ? `<span class="chip">${esc(d.lotto)}</span>` : ""}
       ${d.prezzo ? `<span class="chip">${euro(d.prezzo)}</span>` : ""}</div>
     <div class="meta">${esc(d.foto_nome)} · ${esc(d.id)}</div>
-    ${d.candidati ? `<details><summary>altre release possibili</summary><p>${esc(d.candidati)}</p></details>` : ""}
+    ${LIVE && d.scelte.length ? `<div class="choices">${d.scelte.map(c => `<div class="choice"><span class="t">${esc(c.testo)}</span>
+        <a href="https://www.discogs.com/release/${c.id}" target="_blank" rel="noopener">vedi</a>
+        <button class="act small" data-act="abbina" data-id="${esc(d.id)}" data-release="${c.id}">È questo</button></div>`).join("")}</div>`
+      : d.candidati ? `<details><summary>altre release possibili</summary><p>${esc(d.candidati)}</p></details>` : ""}
+    ${LIVE ? `<div class="cardbtns">
+      <button class="act small ghost" data-act="abbina-id" data-id="${esc(d.id)}">Altra release…</button>
+      ${d.copie ? `<button class="act small ghost" data-act="copie" data-id="${esc(d.id)}" data-copie="${esc(d.copie)}" data-cartella="${esc(d.cartella)}">Sono copie diverse</button>` : ""}
+      <button class="act small warn" data-act="togli" data-id="${esc(d.id)}">Togli</button></div>` : ""}
     <div class="links">${d.link ? `<a href="${esc(d.link)}" target="_blank" rel="noopener">Confronta su Discogs</a>` : ""}
       <a href="https://www.discogs.com/search/?type=release&format=Vinyl&q=${encodeURIComponent(d.proposto || "")}" target="_blank" rel="noopener">Cerca</a></div>
   </div></article>`;
@@ -340,16 +399,241 @@ document.getElementById("grid").addEventListener("click", e => {
 zoom.onclick = () => zoom.style.display = "none";
 document.addEventListener("keydown", e => { if (e.key === "Escape") zoom.style.display = "none"; });
 draw();
+
+// ----- Pannello collegato allo script (python pannello.py): azioni vere -----
+document.getElementById(LIVE ? "actions" : "offline").hidden = false;
+async function call(body) {
+  const r = await fetch("/api/azione", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  return r.json();
+}
+function setBusy(b) { document.querySelectorAll(".act").forEach(x => x.disabled = b); }
+async function runJob(body) {
+  const log = document.getElementById("log");
+  log.hidden = false; log.textContent = "Avvio…\n"; setBusy(true);
+  const start = await call(body);
+  if (!start.ok) { log.textContent += start.messaggio + "\n"; setBusy(false); return; }
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1000));
+    const st = await (await fetch("/api/log")).json();
+    log.textContent = st.log; log.scrollTop = log.scrollHeight;
+    if (!st.attivo) break;
+  }
+  setBusy(false);
+  log.textContent += "\n— Fatto. Ricarico il pannello. —";
+  setTimeout(() => location.reload(), 1200);
+}
+document.querySelectorAll("[data-job]").forEach(b => b.onclick = () => {
+  if (b.dataset.job === "pubblica" && !confirm("Pubblicare ORA su Discogs tutti gli annunci pronti?")) return;
+  runJob({azione: b.dataset.job});
+});
+document.getElementById("btn-elabora").onclick = () => {
+  const cartella = prompt("Cartella del lotto (es. /Users/a1/Desktop/lotto-07):", localStorage.getItem("cartella") || "");
+  if (!cartella) return;
+  const grado = prompt("Grado dei dischi (M, NM, VG+, oppure M_NM per disco M e copertina NM).\nServe solo se nella cartella ci sono foto sciolte da raggruppare 2 a 2:", localStorage.getItem("grado") || "M");
+  try { localStorage.setItem("cartella", cartella); if (grado) localStorage.setItem("grado", grado); } catch (e) {}
+  runJob({azione: "elabora", cartella, grado: grado || ""});
+};
+document.getElementById("grid").addEventListener("click", async e => {
+  const b = e.target.closest("[data-act]"); if (!b) return;
+  const id = b.dataset.id; let body = null;
+  if (b.dataset.act === "abbina") body = {azione: "abbina", disco: id, release: Number(b.dataset.release)};
+  if (b.dataset.act === "abbina-id") {
+    const v = prompt("Numero della release Discogs giusta (dall'indirizzo discogs.com/release/NUMERO):");
+    if (!v || !/^\d+$/.test(v.trim())) return; body = {azione: "abbina", disco: id, release: Number(v.trim())};
+  }
+  if (b.dataset.act === "togli") { if (!confirm(`Togliere ${id} dall'inventario?`)) return; body = {azione: "togli", disco: id}; }
+  if (b.dataset.act === "copie") { runJob({azione: "elabora", cartella: b.dataset.cartella, grado: "", copie: b.dataset.copie}); return; }
+  if (!body) return;
+  setBusy(true);
+  const r = await call(body);
+  if (!r.ok) { alert(r.messaggio); setBusy(false); return; }
+  location.reload();
+});
 </script>
 </body>
 </html>
 """
 
 
+# --------------------------------------------------------------------------
+# Pannello collegato allo script: python pannello.py
+# --------------------------------------------------------------------------
+
+PORT = 8765
+
+
+class Job:
+    """Un comando dello script lanciato dal pannello (vendi.py --pubblica, verifica_inventario.py, ...):
+    uno alla volta, con l'output raccolto per la pagina."""
+
+    def __init__(self):
+        self.proc, self.log, self.thread = None, "", None
+
+    @property
+    def active(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self, argv, cwd):
+        import subprocess
+        import threading
+        if self.active:
+            return False
+        self.log = "$ " + " ".join(argv) + "\n"
+        self.proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                     bufsize=1, env={**os.environ, "PYTHONUNBUFFERED": "1"})
+
+        def pump():
+            for line in self.proc.stdout:
+                self.log += line
+            self.proc.wait()
+            self.log += f"\n[finito, codice {self.proc.returncode}]\n"
+
+        self.thread = threading.Thread(target=pump, daemon=True)
+        self.thread.start()
+        return True
+
+
+def dd_base():
+    import discogs_dump as dd
+    return dd.BASE_DIR
+
+
+def make_handler(vendi, out_dir, job):
+    import http.server
+    import sqlite3
+
+    def state():
+        con = sqlite3.connect(vendi.STATE_DB)
+        con.row_factory = sqlite3.Row
+        return con
+
+    def fresh_page():
+        con = state()
+        try:
+            data = collect(con, vendi.REASONS, vendi.PROBLEMS, vendi.display_name, vendi.listing_owner,
+                           vendi.NOT_SELLABLE_REASON, out_dir)
+        finally:
+            con.close()
+        import datetime as dt
+        return render(data, dt.datetime.now().strftime("%d/%m/%Y %H:%M"), live=True)
+
+    def script(name, *args):
+        return [sys.executable, str(dd_base() / name), *args]
+
+    def action(body):
+        """Azioni immediate (nello stato) o comandi dello script (job in sottoprocesso)."""
+        what = body.get("azione")
+        if what in ("pubblica", "verifica", "elabora"):
+            if what == "pubblica":
+                argv = script("vendi.py", "--pubblica", "--senza-pannello")
+            elif what == "verifica":
+                argv = script("verifica_inventario.py")
+            else:
+                folder = (body.get("cartella") or "").strip()
+                if not folder or not Path(folder).expanduser().is_dir():
+                    return {"ok": False, "messaggio": f"Cartella non trovata: {folder}"}
+                argv = script("vendi.py", str(Path(folder).expanduser()), "--senza-pannello", "--si")
+                if body.get("grado"):
+                    argv += ["--grado", body["grado"]]
+                if body.get("copie"):
+                    argv += ["--copie-diverse", body["copie"]]
+            if not job.start(argv, str(dd_base())):
+                return {"ok": False, "messaggio": "C'è già un comando in corso: aspetta che finisca."}
+            return {"ok": True}
+        if job.active:
+            return {"ok": False, "messaggio": "C'è un comando in corso: aspetta che finisca."}
+        con = vendi.open_state(vendi.STATE_DB)
+        try:
+            if what == "togli":
+                targets, rows, rest = vendi.remove_discs(con, out_dir, [body.get("disco", "")])
+                msg = f"Tolto: {', '.join(targets)}" + (f"; tornano da elaborare: {', '.join(rest)}" if rest else "")
+            elif what == "abbina":
+                import discogs_dump as dd
+                db = dd.open_db(dd.DEFAULT_DB)
+                try:
+                    done = vendi.assign_releases(con, db, vendi.DiscogsAPI(vendi.load_token()),
+                                                 f"{body.get('disco', '')}={body.get('release', '')}")
+                finally:
+                    db.close()
+                msg = "; ".join(f"{eid} -> {vendi.describe_release(r)}" for eid, r in done)
+            else:
+                return {"ok": False, "messaggio": f"Azione sconosciuta: {what}"}
+            vendi.write_outputs(con, out_dir, [], [])
+        except SystemExit as e:
+            return {"ok": False, "messaggio": str(e)}
+        finally:
+            con.close()
+        return {"ok": True, "messaggio": msg}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def send(self, code, ctype, body):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path in ("/", "/index.html", "/pannello.html"):
+                return self.send(200, "text/html; charset=utf-8", fresh_page().encode("utf-8"))
+            if path == "/api/log":
+                return self.send(200, "application/json", json.dumps({"attivo": job.active, "log": job.log}).encode())
+            if path.startswith("/miniature/") and "/.." not in path:
+                f = Path(out_dir) / "miniature" / Path(path).name
+                if f.is_file():
+                    return self.send(200, "image/jpeg", f.read_bytes())
+            self.send(404, "text/plain", b"non trovato")
+
+        def do_POST(self):
+            if self.path != "/api/azione":
+                return self.send(404, "text/plain", b"non trovato")
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+                result = action(body)
+            except Exception as e:  # mai lasciare la pagina senza risposta
+                result = {"ok": False, "messaggio": f"Errore: {e}"}
+            self.send(200, "application/json", json.dumps(result, ensure_ascii=False).encode("utf-8"))
+
+    return Handler
+
+
+def serve(port=PORT, open_browser=True):
+    import http.server
+    import vendi
+    out_dir = vendi.OUT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    handler = make_handler(vendi, out_dir, Job())
+    server = http.server.HTTPServer(("127.0.0.1", port), handler)
+    url = f"http://127.0.0.1:{port}/"
+    print(f"Pannello su {url}  (Ctrl+C per chiudere)")
+    if open_browser and sys.platform == "darwin":
+        import subprocess
+        subprocess.run(["open", url], check=False)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nPannello chiuso.")
+    finally:
+        server.server_close()
+
+
 def main():
+    import argparse
     import datetime as dt
     import sqlite3
     import vendi
+    parser = argparse.ArgumentParser(description="Pannello dell'inventario: pagina con le foto e i pulsanti")
+    parser.add_argument("--solo-file", action="store_true",
+                        help="rigenera solo risultati/pannello.html (pagina statica, senza pulsanti) e esce")
+    parser.add_argument("--porta", type=int, default=PORT)
+    parser.add_argument("--senza-browser", action="store_true", help="non aprire il browser")
+    args = parser.parse_args()
     out_dir = vendi.OUT_DIR
     state = sqlite3.connect(vendi.STATE_DB)
     state.row_factory = sqlite3.Row
@@ -358,6 +642,8 @@ def main():
     finally:
         state.close()
     print(f"Pannello aggiornato: {path}  ({dt.datetime.now():%H:%M})")
+    if not args.solo_file:
+        serve(args.porta, not args.senza_browser)
 
 
 if __name__ == "__main__":

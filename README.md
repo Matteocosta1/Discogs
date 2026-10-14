@@ -26,14 +26,22 @@ Gli script:
 - **`verifica_modifica_annuncio.py`**: verifica su un solo annuncio che la
   modifica via API non azzeri commenti, external_id e gli altri campi.
 
-**Flusso consigliato per ogni lotto:**
+**Flusso consigliato per ogni lotto (un comando, poi il pannello):**
 
-1. `python3 rinomina_foto.py ~/Pictures/Dischi` (foto nuove con nomi unici), oppure, se fotografi
-   più lati di ogni disco, `python3 raggruppa_foto.py ~/Desktop/scatti --grado VG+ --destinazione
-   ~/Pictures/Dischi` (una sottocartella per disco);
-2. `caffeinate -i python3 vendi.py ~/Pictures/Dischi` (CSV + annunci API);
-3. carica i nuovi `risultati/inventario_NNN.csv` su Discogs;
-4. `python3 verifica_inventario.py` (cosa è davvero online, righe scartate).
+1. Le foto del lotto (fronte e retro di ogni disco, in ordine, con AirDrop
+   "Tutti i dati delle foto") in una cartella, es. `~/Desktop/lotto-07`.
+2. `python vendi.py ~/Desktop/lotto-07 --grado M`: raggruppa le foto sciolte
+   2 a 2 in `M/disco-NNN` (anteprima e conferma), riconosce, prezza. Niente va
+   online: i dischi restano **pronti**. Alla fine si apre il pannello.
+3. `python pannello.py`: pannello con le foto e i pulsanti. Per ogni disco
+   fermo si sceglie la release giusta con "È questo"; "Togli" per i dischi da
+   non vendere; "Pubblica su Discogs" mette online tutti i pronti via API.
+   Da riga di comando: `python vendi.py --abbina disco-003=24344624`,
+   `python vendi.py --togli disco-019`, `python vendi.py --pubblica`.
+4. `python verifica_inventario.py` (o il pulsante "Verifica su Discogs").
+
+Con `--csv` vendi.py lavora come prima (file `inventario_NNN.csv` da caricare
+a mano su Discogs). Con `--bozza` gli annunci vanno subito online come bozze.
 
 Ogni script che modifica lo stato ne fa prima una copia in `data/backup/`.
 
