@@ -65,6 +65,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -2304,6 +2305,39 @@ def free_rows(state, out_dir, rows):
     return freed
 
 
+def group_loose_photos(args):
+    """--grado: le foto sciolte nella cartella del lotto vanno in <grado>/disco-NNN prima dell'elaborazione
+    (raggruppa_foto.py, con anteprima e conferma). Senza foto sciolte non fa niente."""
+    import raggruppa_foto
+    source = Path(args.cartella).expanduser()
+    if not raggruppa_foto.loose_photos(source):
+        return
+    grades = read_grades(args.grado)
+    if not grades:
+        raise SystemExit(f"--grado non valido: {args.grado} (usa {GRADE_FORMATS})")
+    grade_dir = source / grade_text(*grades)
+    groups = raggruppa_foto.plan(source, grade_dir, raggruppa_foto.PAUSE_SECONDS, args.per_disco)
+    raggruppa_foto.show_plan(groups, grade_dir, raggruppa_foto.PAUSE_SECONDS, args.per_disco)
+    if args.simula:
+        print("Simulazione: le foto restano dove sono.")
+        return
+    if not args.si and not raggruppa_foto.ask_confirmation(f"Spostare le foto in {len(groups)} sottocartelle?"):
+        raise SystemExit("Annullato: nessuna foto è stata spostata.")
+    raggruppa_foto.move_groups(groups, grade_dir)
+
+
+def open_panel(out_dir):
+    """Apre risultati/pannello.html nel browser (solo su macOS, fuori dai test)."""
+    import subprocess
+    path = Path(out_dir) / "pannello.html"
+    if sys.platform != "darwin" or not path.exists():
+        return
+    try:
+        subprocess.run(["open", str(path)], check=False, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def assign_releases(state, con, api, text):
     """--abbina disco-001=24344624,...: la release scelta a mano per un disco fermo. La foto passa a
     esito trovato (fonte/metodo 'manuale', niente controlli automatici: ha deciso una persona) e la
@@ -2936,6 +2970,16 @@ def run(opened):
     parser.add_argument("--csv", action="store_true",
                         help="come prima: i dischi trovati nel database locale finiscono nei file inventario_NNN.csv "
                              "da caricare a mano, quelli trovati solo via API vanno online subito")
+    parser.add_argument("--grado", metavar="GRADO",
+                        help="foto sciolte nella cartella del lotto (es. appena arrivate con AirDrop): prima le "
+                             "raggruppa in <cartella>/<GRADO>/disco-NNN (anteprima e conferma), poi le elabora. "
+                             f"GRADO: {', '.join(GRADES)} oppure DISCO_COPERTINA, es. M_NM")
+    parser.add_argument("--per-disco", type=int, default=2, metavar="N",
+                        help="con --grado: foto per disco, nell'ordine di scatto (default 2: fronte e retro); "
+                             "0 = un disco nuovo dopo una pausa tra gli scatti")
+    parser.add_argument("--si", action="store_true", help="con --grado: sposta le foto senza chiedere conferma")
+    parser.add_argument("--senza-pannello", action="store_true",
+                        help="non aprire il pannello (risultati/pannello.html) alla fine")
     parser.add_argument("--abbina", metavar="DISCO=RELEASE",
                         help="riconoscimento a mano: assegna a un disco fermo la release Discogs giusta, es. "
                              "disco-001=24344624 (più dischi separati da virgola); al prossimo lancio viene prezzato "
@@ -3066,6 +3110,9 @@ def run(opened):
         write_outputs(state, Path(args.uscita).expanduser(), [], [])
         print(f"Pubblicati: {done}; rifiutati: {stats['problemi']}; richieste API: {api.calls}")
         return
+
+    if args.grado:
+        group_loose_photos(args)
 
     photos, warnings = scan_photos(args.cartella)
     for w in warnings:
@@ -3529,6 +3576,8 @@ def run(opened):
             print(f"Simulazione in {out_dir / 'simulazione'}/")
         state.close()
         con.close()
+        if not args.senza_pannello and not args.simula:
+            open_panel(out_dir)
 
 
 if __name__ == "__main__":

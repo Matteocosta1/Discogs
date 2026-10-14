@@ -135,5 +135,48 @@ class TestAbbina(TempRun):
             self.run.main(csv=False, folder=False)
 
 
+class TestGradoInline(TempRun):
+    """--grado: foto sciolte nella cartella del lotto, raggruppate 2 a 2 e poi elaborate, in un comando."""
+    photos = {}
+
+    def setUp(self):
+        super().setUp()
+        import test_dischi_cartella as tdc
+        from unittest import mock
+        for target, values in ((tp.OCR, tdc.OCR), (tp.BARCODES, tdc.BARCODES)):
+            patcher = mock.patch.dict(target, values)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        # 4 foto sciolte = 2 dischi: Francisco (barcode sul retro) e Theo Parrish (catalogo in etichetta)
+        self.run.photos.mkdir(exist_ok=True)
+        for name in ("d1_fronte", "d1_retro", "d4_etichetta", "d4_fronte"):   # in ordine di nome
+            (self.run.photos / f"{name}.jpg").write_bytes(f"foto finta {name}".encode())
+
+    def test_raggruppa_e_elabora(self):
+        out = self.run.main("--grado", "M", "--si", csv=False)
+        self.assertIn("dischi: 2 (2 foto per disco nell'ordine di scatto)", out)
+        self.assertTrue((self.run.photos / "M" / "disco-001" / "d1_retro.jpg").exists())
+        self.assertTrue((self.run.photos / "M" / "disco-002" / "d4_etichetta.jpg").exists())
+        rows = {r["release_id"]: r for r in self.state().execute("SELECT * FROM annunci_api")}
+        self.assertEqual(set(rows), {572658, 4207270})
+        self.assertEqual({r["stato"] for r in rows.values()}, {"pronto"})
+        self.assertEqual({r["media"] for r in rows.values()}, {"M"})
+        out = self.run.main("--grado", "M", "--si", csv=False)          # niente foto sciolte: non fa niente
+        self.assertNotIn("Spostate", out)
+        self.assertIn("foto già in vendita:         2", out)
+
+    def test_foto_dispari_si_ferma(self):
+        (self.run.photos / "d2_fronte.jpg").write_bytes(b"x")
+        with self.assertRaises(SystemExit) as e:
+            self.run.main("--grado", "M", "--si", csv=False)
+        self.assertIn("non sono divisibili per 2", str(e.exception))
+        self.assertFalse((self.run.photos / "M").exists())
+
+    def test_simula_non_sposta(self):
+        out = self.run.main("--grado", "M", "--simula", csv=False)
+        self.assertIn("le foto restano dove sono", out)
+        self.assertFalse((self.run.photos / "M").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

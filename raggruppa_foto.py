@@ -73,11 +73,32 @@ def suspicion(group):
     return ""
 
 
-def plan(source, grade_dir, pause):
-    """[(nome sottocartella, gruppo, sospetto)] oppure SystemExit se qualche foto non ha la data di scatto."""
+def fixed_groups(photos, per_disc):
+    """Gruppi di esattamente per_disc foto nell'ordine di scatto (data EXIF se c'è per tutte, altrimenti
+    l'ordine dei nomi: i nomi IMG_NNNN dell'iPhone seguono lo scatto). SystemExit se il conto non torna."""
+    if len(photos) % per_disc:
+        raise SystemExit(f"Mi fermo: {len(photos)} foto non sono divisibili per {per_disc} per disco: manca o "
+                         "avanza una foto (un disco fotografato una volta sola, o uno scatto doppio). Nessuna foto "
+                         "è stata spostata.")
+    taken, missing = taken_times(photos)
+    if missing:
+        print(f"Attenzione: {len(missing)} foto senza data di scatto: uso l'ordine dei nomi dei file.")
+        ordered = photos
+    else:
+        ordered = [p for _t, p in sorted(taken, key=lambda x: (x[0], vendi.natural_key(x[1].name)))]
+    when = {p: t for t, p in taken}
+    return [[(when.get(p), p) for p in ordered[i:i + per_disc]] for i in range(0, len(ordered), per_disc)]
+
+
+def plan(source, grade_dir, pause, per_disc=0):
+    """[(nome sottocartella, gruppo, sospetto)] oppure SystemExit se qualche foto non ha la data di scatto.
+    per_disc > 0: gruppi fissi di tante foto (es. 2: fronte e retro), nell'ordine di scatto."""
     photos = loose_photos(source)
     if not photos:
         raise SystemExit(f"Nessuna foto in {source}.")
+    if per_disc:
+        start = first_free_number(grade_dir)
+        return [(f"disco-{start + i:03d}", group, "") for i, group in enumerate(fixed_groups(photos, per_disc))]
     taken, missing = taken_times(photos)
     if missing:
         raise SystemExit(f"Mi fermo: {len(missing)} foto senza data di scatto (EXIF DateTimeOriginal), non posso "
@@ -106,6 +127,9 @@ def main():
                         help="cartella del lotto: le foto vanno in <destinazione>/<grado>/disco-NNN")
     parser.add_argument("--pausa", type=float, default=PAUSE_SECONDS,
                         help=f"secondi tra due scatti oltre i quali inizia un nuovo disco (default {PAUSE_SECONDS})")
+    parser.add_argument("--per-disco", type=int, default=0, metavar="N",
+                        help="foto per disco fisse, nell'ordine di scatto (es. 2: fronte e retro); al posto della pausa")
+    parser.add_argument("--si", action="store_true", help="sposta senza chiedere conferma")
     parser.add_argument("--simula", action="store_true", help="mostra solo l'anteprima, non sposta niente")
     args = parser.parse_args()
 
@@ -117,23 +141,33 @@ def main():
         raise SystemExit(f"Grado non valido: {args.grado} (usa {vendi.GRADE_FORMATS})")
     grade_dir = Path(args.destinazione).expanduser() / vendi.grade_text(*grades)
 
-    groups = plan(source, grade_dir, args.pausa)
-    print(f"Foto: {sum(len(g) for _n, g, _s in groups)}, dischi: {len(groups)} (nuovo disco dopo più di "
-          f"{args.pausa:g} secondi tra due scatti) -> {grade_dir}/")
+    groups = plan(source, grade_dir, args.pausa, args.per_disco)
+    show_plan(groups, grade_dir, args.pausa, args.per_disco)
+    if args.simula:
+        print("\nSimulazione: nessuna foto è stata spostata.")
+        return
+    if not args.si and not ask_confirmation(f"\nSpostare le foto in {len(groups)} sottocartelle?"):
+        print("Annullato: nessuna foto è stata spostata.")
+        return
+    move_groups(groups, grade_dir)
+
+
+def show_plan(groups, grade_dir, pause, per_disc=0):
+    how = f"{per_disc} foto per disco nell'ordine di scatto" if per_disc else \
+        f"nuovo disco dopo più di {pause:g} secondi tra due scatti"
+    print(f"Foto: {sum(len(g) for _n, g, _s in groups)}, dischi: {len(groups)} ({how}) -> {grade_dir}/")
     for name, group, why in groups:
-        print(f"  {name}: {len(group)} foto, {group[0][0]:%H:%M:%S}-{group[-1][0]:%H:%M:%S}"
+        times = (f"{group[0][0]:%H:%M:%S}-{group[-1][0]:%H:%M:%S}" if group[0][0] and group[-1][0] else "")
+        print(f"  {name}: {len(group)} foto{', ' + times if times else ''}"
               f" ({', '.join(p.name for _t, p in group)})" + (f"   SOSPETTO: {why}" if why else ""))
     suspicious = [(name, why) for name, _g, why in groups if why]
     if suspicious:
         print(f"\nGruppi sospetti: {len(suspicious)}, controllali dopo lo spostamento:")
         for name, why in suspicious:
             print(f"  {name}: {why}")
-    if args.simula:
-        print("\nSimulazione: nessuna foto è stata spostata.")
-        return
-    if not ask_confirmation(f"\nSpostare le foto in {len(groups)} sottocartelle?"):
-        print("Annullato: nessuna foto è stata spostata.")
-        return
+
+
+def move_groups(groups, grade_dir):
     for name, group, _why in groups:
         target = grade_dir / name
         target.mkdir(parents=True, exist_ok=False)
