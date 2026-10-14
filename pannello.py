@@ -449,7 +449,8 @@ function stats() {
 function pics(d) {
   if (!d.foto.length && !d.discogs) return `<div class="pics nopic">foto non trovata<br>${esc(d.foto_nome)}</div>`;
   // La copertina Discogs davanti (se c'è), le foto del disco nelle miniature
-  const [first, ...rest] = d.discogs ? [d.discogs, ...d.foto] : d.foto;
+  // Con la copertina Discogs si vede solo quella, pulita (niente miniature delle foto fatte a mano)
+  const [first, ...rest] = d.discogs ? [d.discogs] : d.foto;
   return `<div class="pics"><img src="${esc(first)}" alt="" loading="lazy">
     <div class="thumbs">${rest.map(u => `<img src="${esc(u)}" alt="" loading="lazy">`).join("")}</div></div>`;
 }

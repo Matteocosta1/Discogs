@@ -129,7 +129,7 @@ struct DiscCard: View {
                 Rectangle().fill(.quaternary).aspectRatio(1, contentMode: .fit)
             }
             HStack(spacing: 4) {
-                ForEach(Array((cover == nil ? Array(own.dropFirst()) : own).enumerated()), id: \.offset) { _, img in
+                ForEach(Array((cover == nil ? Array(own.dropFirst()) : []).enumerated()), id: \.offset) { _, img in
                     Image(uiImage: img).resizable().scaledToFill().frame(width: 44, height: 44).clipped()
                         .border(.background, width: 2).onTapGesture { zoom = ZoomImage(image: img) }
                 }
