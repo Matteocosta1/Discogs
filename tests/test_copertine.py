@@ -256,5 +256,69 @@ class TestAltreStampeDelMaster(CoverRun):
         self.assertEqual(vendi.dd.releases_by_master(con, [None]), [])
 
 
+class SearchingAPI(tp.FakeAPI):
+    """Discogs che risponde alla ricerca libera (q=...) con la release di Omar-S."""
+    def search(self, **params):
+        self.log.append(("search", params.get("q", "")))
+        if "omar" in (params.get("q") or "").lower():
+            return {"results": [{"id": 807332, "title": "Omar-S - Test Omar-S EP", "label": ["FXHE Records"],
+                                 "catno": "FXHE-TEST", "country": "US", "year": "2006", "format": ["Vinyl", "12\""]}]}
+        return {"results": []}
+
+
+class FakeGoogle:
+    guesses_by_image = {}
+    calls = 0
+
+    def __init__(self, key, wallet=None):
+        self.wallet = wallet
+        FakeGoogle.calls = 0
+
+    def guesses(self, image_b64):
+        FakeGoogle.calls += 1
+        self.wallet.spent += vendi.GOOGLE_VISION_COST
+        return list(FakeGoogle.guesses_by_image.get(image_b64, []))
+
+
+class TestGoogleVision(CoverRun):
+    photos = {"VG+": ["IMG_0007"]}   # etichetta Omar-S: OCR nulla, l'AI non legge nulla
+
+    def setUp(self):
+        super().setUp()
+        self.run.api = SearchingAPI()
+        for target, value in (("vendi.GoogleVision", FakeGoogle), ("vendi.load_env_value", lambda *a: "chiave")):
+            p = mock.patch(target, value)
+            p.start()
+            self.addCleanup(p.stop)
+        FakeGoogle.guesses_by_image = {"IMG_0007": ["Omar-S Test Omar-S EP", "FXHE Records"]}
+        FakeGoogle.calls = 0
+
+    def test_senza_google_non_trovato(self):
+        self.run.main("--senza-secondo-tentativo", csv=False)
+        self.assertIn("IMG_0007", self.run.to_check())
+        self.assertEqual(FakeGoogle.calls, 0)
+
+    def test_google_propone_e_la_coerenza_conferma(self):
+        out = self.run.main("--google-vision", "--senza-secondo-tentativo", csv=False)
+        self.assertIn("Google Vision (ricerca web dell'immagine) attivo", out)
+        row = self.state().execute("SELECT * FROM foto WHERE external_id = 'IMG_0007'").fetchone()
+        self.assertEqual((row["esito"], row["release_id"], row["fonte"]), ("trovato", 807332, "ai+api-google"))
+        self.assertIn("ipotesi di Google: Omar-S Test Omar-S EP", row["dettagli"])
+        self.assertEqual(FakeGoogle.calls, 1)
+        self.assertIn(("search", "Omar-S Test Omar-S EP"), self.run.api.log)
+        self.assertIn("Google Vision: 1 foto inviate", out)
+        self.assertNotIn("IMG_0007", self.run.to_check())
+
+    def test_google_non_viene_chiamato_se_l_ai_trova(self):
+        self.run.photos.joinpath("VG+", "IMG_0003.JPG").write_bytes(b"foto finta IMG_0003")
+        self.run.main("--google-vision", "--senza-secondo-tentativo", csv=False)
+        self.assertEqual(FakeGoogle.calls, 1)      # solo per IMG_0007, non per IMG_0003 (trovato in locale)
+
+    def test_ipotesi_sbagliata_non_passa(self):
+        FakeGoogle.guesses_by_image = {"IMG_0007": ["Moodymann Silentintroduction"]}
+        self.run.main("--google-vision", "--senza-secondo-tentativo", csv=False)
+        self.assertIn("IMG_0007", self.run.to_check())    # Discogs non trova nulla di coerente: resta fermo
+
+
 if __name__ == "__main__":
     unittest.main()

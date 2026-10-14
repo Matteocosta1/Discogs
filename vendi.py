@@ -1089,6 +1089,81 @@ AI_CHOOSE_SCHEMA = {
 CONFIDENCE_IT = {"high": "alta", "medium": "media", "low": "bassa"}
 
 
+# --------------------------------------------------------------------------
+# Secondo servizio di riconoscimento: Google Cloud Vision (ricerca web dell'immagine), facoltativo
+# --------------------------------------------------------------------------
+
+GOOGLE_VISION_URL = "https://vision.googleapis.com/v1/images:annotate"
+GOOGLE_VISION_COST = 0.0035   # € per immagine (3,50 $ ogni 1000, oltre le 1000 gratuite al mese)
+
+
+class GoogleVision:
+    """Riconoscimento della copertina con la ricerca web di Google (WEB_DETECTION): restituisce le
+    "migliori ipotesi" di cosa mostra la foto (es. "theo parrish dance of the medusa"). Entra solo
+    quando né la parte locale né l'AI hanno trovato candidati; quello che propone viene poi
+    verificato come sempre (coerenza con la foto, copertina, scelta dell'AI). Chiave in .env:
+    GOOGLE_VISION_KEY (console.cloud.google.com, API Cloud Vision)."""
+
+    def __init__(self, key, wallet=None):
+        self.key = key
+        self.wallet = wallet
+        self.calls = 0
+
+    def guesses(self, image_b64):
+        """Ipotesi di Google, dalla più probabile: etichette "best guess", entità web, titoli delle
+        pagine con la stessa immagine. Lista di stringhe (vuota se niente)."""
+        body = {"requests": [{"image": {"content": image_b64},
+                              "features": [{"type": "WEB_DETECTION", "maxResults": 10}]}]}
+        req = urllib.request.Request(f"{GOOGLE_VISION_URL}?key={urllib.parse.quote(self.key)}",
+                                     data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "User-Agent": USER_AGENT})
+        if self.wallet is not None:
+            if self.wallet.spent + GOOGLE_VISION_COST > self.wallet.budget + 1e-9:
+                raise BudgetReached()
+            self.wallet.spent += GOOGLE_VISION_COST
+        self.calls += 1
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read() or b"{}")
+        web = (data.get("responses") or [{}])[0].get("webDetection") or {}
+        out = []
+        for g in web.get("bestGuessLabels") or []:
+            if g.get("label"):
+                out.append(g["label"])
+        for e in web.get("webEntities") or []:
+            if e.get("description") and (e.get("score") or 0) >= 0.5:
+                out.append(e["description"])
+        for pg in (web.get("pagesWithMatchingImages") or [])[:5]:
+            title = (pg.get("pageTitle") or "")
+            title = re.sub(r"<[^>]+>", "", title)
+            if title:
+                out.append(title)
+        seen, uniq = set(), []
+        for g in out:
+            k = dd.normalize_text(g)
+            if k and k not in seen:
+                seen.add(k)
+                uniq.append(g.strip())
+        return uniq[:8]
+
+
+def google_candidates(api, google, image_b64, ev):
+    """Candidati Discogs dalle ipotesi di Google: ricerca libera su Discogs per ogni ipotesi; le
+    ipotesi entrano tra le scritte principali della foto (così i controlli di coerenza possono
+    passare). (candidati, testo delle ipotesi)."""
+    guesses = google.guesses(image_b64)
+    if not guesses:
+        return [], ""
+    fmt_param = {"format": ALLOWED_FORMATS[0]} if len(ALLOWED_FORMATS) == 1 else {}
+    found = {}
+    for g in guesses[:4]:
+        res = api.search(q=g, type="release", **fmt_param)
+        for r in res.get("results", [])[:10]:
+            if format_allowed({"formats": r.get("format", [])}) and r["id"] not in found:
+                found[r["id"]] = api_result_as_release(r)
+    ev.add_lines([(g, 1.0) for g in guesses], main=guesses[:3])
+    return list(found.values()), "ipotesi di Google: " + "; ".join(guesses[:4])
+
+
 class BudgetReached(Exception):
     """Il tetto di spesa AI non permette un'altra chiamata."""
 
@@ -1452,14 +1527,14 @@ def copertine_module():
     return copertine
 
 
-def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PHOTOS, covers=None):
+def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PHOTOS, covers=None, google=None):
     """Riconosce il disco di una foto, o di più foto dello stesso disco (path = lista: sottocartella).
     cache: dati AI già pagati per questo disco ({"read": ..., "choice": ...}), che non vengono mai
     richiesti di nuovo. Un riconoscimento senza codice (AI o artista e titolo) che non supera
     check_match ha esito da_verificare: la release proposta resta salvata ma il disco non va in vendita.
     Con più foto: se i codici letti in foto diverse portano a release diverse, da_verificare."""
     ev = Evidence()
-    rec = identify(path, con, api, use_ocr, ai, cache, ev, max_photos, covers)
+    rec = identify(path, con, api, use_ocr, ai, cache, ev, max_photos, covers, google)
     rec.metodo = method_of(rec.fonte, rec.release)
     if rec.esito == "trovato" and ev.per_photo:
         rec.motivo = photos_in_contrast(con, ev.per_photo, rec.release_id)
@@ -1533,7 +1608,7 @@ def photos_in_contrast(con, per_photo, release_id=None):
 CONTRAST_REASON = "foto della cartella in contrasto"
 
 
-def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, covers=None):
+def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, covers=None, google=None):
     """Cascata barcode -> catno -> artista/titolo -> AI. Restituisce un Recognition.
     path: una foto, o la lista delle foto di un disco in sottocartella (indizi uniti, una sola
     chiamata AI con al massimo max_photos foto)."""
@@ -1589,6 +1664,26 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, c
         ranked = score_candidates([{**local[r["id"]], "_code": r.get("_code")} if r["id"] in local else r
                                    for r in found], ev)
     ranked = [x for x in ranked if coherent(x[1], read, ocr_text)]  # l'AI non può inventare
+    google_note = ""
+    if not ranked and google is not None and image is not None:
+        # Terzo servizio: la ricerca web di Google propone, poi la coerenza e l'AI verificano
+        try:
+            first = image[0] if isinstance(image, list) else image
+            b64 = first[0] if isinstance(first, tuple) else first
+            found, google_note = google_candidates(api, google, b64, ev)
+        except BudgetReached:
+            raise
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            google_note = f"Google Vision non ha risposto ({e})"
+            found = []
+        if found:
+            local = {r["id"]: r for r in dd.get_releases(con, [r["id"] for r in found])}
+            ranked = score_candidates([{**local[r["id"]], "_fonte": "api"} if r["id"] in local else r
+                                       for r in found], ev)
+            ranked = [x for x in ranked if coherent(x[1], read, ev.text)]
+            base = base or "api-google"
+    if google_note:
+        ev.ai_note = (ev.ai_note or "") + "; " + google_note
     if not ranked:
         return Recognition("non_trovato", "", None, [], ev.describe() + "; nessun candidato coerente con la foto",
                            cost, read)
@@ -1674,10 +1769,10 @@ def expand_by_master(con, ranked, ev, read, ocr_text):
     return merged
 
 
-def recognize_safely(path, con, api, use_ocr, ai, cache, max_photos=AI_MAX_PHOTOS, covers=None):
+def recognize_safely(path, con, api, use_ocr, ai, cache, max_photos=AI_MAX_PHOTOS, covers=None, google=None):
     """recognize() con gli errori trasformati in esito "errore"; None se il tetto di spesa AI è raggiunto."""
     try:
-        return recognize(path, con, api, use_ocr, ai, cache, max_photos, covers)
+        return recognize(path, con, api, use_ocr, ai, cache, max_photos, covers, google)
     except BudgetReached:
         return None
     except (ApiError, OSError, ValueError) as e:
@@ -3142,6 +3237,9 @@ def run(opened):
                         help="ignora lo stato salvato per le foto di questa cartella e le rielabora da capo (anche l'AI, "
                              "che viene pagata di nuovo); solo insieme a --bozza; prima legge l'inventario Discogs e "
                              "salta tutte le foto online (o state online)")
+    parser.add_argument("--google-vision", action="store_true",
+                        help="terzo servizio sui dischi non trovati: ricerca web dell'immagine con Google Cloud "
+                             "Vision (chiave GOOGLE_VISION_KEY in .env; circa 0,35 cent a foto, conta nel tetto AI)")
     parser.add_argument("--senza-copertine", action="store_true",
                         help="non confrontare le foto con le copertine di Discogs (copertine.py)")
     parser.add_argument("--senza-ai", action="store_true",
@@ -3286,6 +3384,11 @@ def run(opened):
               f"spesa finora {money(ai_spent_before)}, tetto {money(args.ai_tetto)}")
     if not args.simula:
         recover_pending_listings(state, api, identity["username"])
+    google = None
+    if args.google_vision and ai is not None:
+        google = GoogleVision(load_env_value("GOOGLE_VISION_KEY", "la chiave API di Google Cloud Vision",
+                                             "console.cloud.google.com (API Cloud Vision)"), wallet=ai.wallet)
+        print("Google Vision (ricerca web dell'immagine) attivo come terzo servizio, solo sui dischi non trovati")
     covers = None
     if not args.senza_copertine:
         cm = copertine_module()
@@ -3350,14 +3453,15 @@ def run(opened):
                     or (args.riprova and row["esito"] in PROBLEMS)
                     or (ai and unsure and cache["read"] is None)
                     or (ai2 and unsure and cache2["read"] is None)):
-                rec = recognize_safely(photo.images, con, api, use_ocr, ai, cache, args.ai_max_foto, covers)
+                rec = recognize_safely(photo.images, con, api, use_ocr, ai, cache, args.ai_max_foto, covers, google)
                 if rec is None:
                     budget_stop = True
                     break
                 # Secondo tentativo con un modello più forte, solo se il primo non ha trovato il disco
                 rec2, second = None, False
                 if ai2 and rec.esito in ("non_trovato", "multiplo"):
-                    rec2 = recognize_safely(photo.images, con, api, use_ocr, ai2, cache2, args.ai_max_foto, covers)
+                    rec2 = recognize_safely(photo.images, con, api, use_ocr, ai2, cache2, args.ai_max_foto, covers,
+                                            google)
                     if rec2 is None:  # tetto di spesa: salvo il primo tentativo e mi fermo
                         budget_stop = True
                     else:
@@ -3687,6 +3791,8 @@ def run(opened):
         print(f"  riconosciuti in questa esecuzione: {stats['ric_locale']} al primo colpo (senza AI), "
               f"{stats['ric_ai']} con l'AI, {stats['ric_secondo']} con il secondo tentativo"
               + (f", {stats['ric_copertina']} con la copertina" if stats["ric_copertina"] else ""))
+        if google is not None and google.calls:
+            print(f"  Google Vision: {google.calls} foto inviate ({money(google.calls * GOOGLE_VISION_COST)})")
         if covers is not None and covers.compared:
             print(f"  confronti con le copertine di Discogs: {covers.compared} (immagini scaricate: {covers.store.calls})")
         print(f"  righe nel CSV di inventario: {stats['righe_csv']} ({stats['copie_csv']} copie)")
