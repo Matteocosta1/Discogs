@@ -3435,6 +3435,8 @@ def run(opened):
                         help="non chiedere la seconda opinione a Gemini (attiva da sola se in .env c'è GEMINI_API_KEY)")
     parser.add_argument("--gemini-modello", default=GEMINI_DEFAULT, choices=sorted(GEMINI_MODELS),
                         help=f"modello Gemini per la seconda opinione (default {GEMINI_DEFAULT})")
+    parser.add_argument("--senza-google", action="store_true",
+                        help="non usare Google Vision (si attiva da solo se in .env c'è GOOGLE_VISION_KEY)")
     parser.add_argument("--google-vision", action="store_true",
                         help="terzo servizio sui dischi non trovati: ricerca web dell'immagine con Google Cloud "
                              "Vision (chiave GOOGLE_VISION_KEY in .env; circa 0,35 cent a foto, conta nel tetto AI)")
@@ -3595,9 +3597,12 @@ def run(opened):
         gemini = GeminiVision(gemini_key, args.gemini_modello, wallet=ai.wallet)
         print(f"Gemini ({args.gemini_modello}) come seconda opinione sui dischi riconosciuti senza codice")
     google = None
-    if args.google_vision and ai is not None:
-        google = GoogleVision(load_env_value("GOOGLE_VISION_KEY", "la chiave API di Google Cloud Vision",
-                                             "console.cloud.google.com (API Cloud Vision)"), wallet=ai.wallet)
+    google_key = None if (args.senza_google or ai is None) else env_value_or_none("GOOGLE_VISION_KEY")
+    if args.google_vision and ai is not None and not google_key:
+        google_key = load_env_value("GOOGLE_VISION_KEY", "la chiave API di Google Cloud Vision",
+                                    "https://console.cloud.google.com/apis/credentials")
+    if google_key:
+        google = GoogleVision(google_key, wallet=ai.wallet)
         print("Google Vision (ricerca web dell'immagine) attivo come terzo servizio, solo sui dischi non trovati")
     covers = None
     if not args.senza_copertine:

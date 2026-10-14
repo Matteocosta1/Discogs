@@ -310,7 +310,8 @@ class TestGoogleVision(CoverRun):
     def setUp(self):
         super().setUp()
         self.run.api = SearchingAPI()
-        for target, value in (("vendi.GoogleVision", FakeGoogle), ("vendi.load_env_value", lambda *a: "chiave")):
+        for target, value in (("vendi.GoogleVision", FakeGoogle), ("vendi.load_env_value", lambda *a: "chiave"),
+                              ("vendi.env_value_or_none", lambda k: "chiave" if k == "GOOGLE_VISION_KEY" else None)):
             p = mock.patch(target, value)
             p.start()
             self.addCleanup(p.stop)
@@ -318,7 +319,7 @@ class TestGoogleVision(CoverRun):
         FakeGoogle.calls = 0
 
     def test_senza_google_non_trovato(self):
-        self.run.main("--senza-secondo-tentativo", csv=False)
+        self.run.main("--senza-secondo-tentativo", "--senza-google", "--senza-gemini", csv=False)
         self.assertIn("IMG_0007", self.run.to_check())
         self.assertEqual(FakeGoogle.calls, 0)
 

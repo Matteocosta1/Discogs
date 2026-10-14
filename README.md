@@ -360,8 +360,8 @@ Modello `gemini-3-flash` (0,50 / 3,00 $ per milione di token, ottobre 2026): poc
 centesimo a disco, nello stesso tetto di spesa dell'AI. `--gemini-modello` per cambiarlo,
 `--senza-gemini` per spegnerlo. Non viene mai richiesta due volte per la stessa foto.
 
-**Terzo servizio (facoltativo): Google Cloud Vision.** Con `--google-vision`
-(chiave `GOOGLE_VISION_KEY` in `.env`, circa 0,35 cent a foto, 1000 gratis al
+**Terzo servizio (facoltativo): Google Cloud Vision.** Si attiva da solo se in `.env` c'è
+`GOOGLE_VISION_KEY=...` (`--senza-google` per spegnerlo; chiave, circa 0,35 cent a foto, 1000 gratis al
 mese), sui dischi che né la parte locale né l'AI hanno trovato lo script
 chiede a Google "cosa mostra questa immagine" (ricerca web) e cerca su Discogs
 le ipotesi ricevute. Quello che Google propone deve poi superare gli stessi
