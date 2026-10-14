@@ -398,3 +398,23 @@ class TestPannello(DiscBase):
         self.assertEqual(len(data["controllo"]), 1)
         self.assertEqual(data["controllo"][0]["foto_nome"], "VG+/disco-002 (1 foto)")
         self.assertTrue(data["controllo"][0]["motivo"])
+
+
+class TestPannelloStati(unittest.TestCase):
+    def test_da_caricare_e_scartati(self):
+        import sqlite3
+        import pannello
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript(vendi.STATE_SCHEMA)
+        rows = [("a", 1, None, None), ("b", 1, "assente", None), ("c", 2, "assente", None),
+                ("d", 1, "in_vendita", "2026-10-14")]
+        for eid, part, online, seen in rows:
+            con.execute("INSERT INTO righe_csv (external_id, parte, release_id, price, media, quantita, online,"
+                        " online_visto) VALUES (?,?,1,10,'M',1,?,?)", (eid, part, online, seen))
+        data = pannello.collect(con, vendi.REASONS, vendi.PROBLEMS, vendi.display_name, vendi.listing_owner, "")
+        got = {d["id"]: (d["online"], d["nascosto"]) for d in data["vendita"]}
+        self.assertEqual(got["b"], ("Non trovato online", True))        # file 1 già caricato: scartata
+        self.assertEqual(got["c"], ("Da caricare su Discogs", False))   # file 2 mai caricato
+        self.assertEqual(got["d"], ("Online", False))
+        self.assertFalse(got["a"][1])

@@ -53,8 +53,19 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
     def foto(eid):
         return state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
 
+    # File CSV già caricati: almeno una riga vista online. Una riga "non online" di un file mai caricato
+    # è solo da caricare (si vede); di un file già caricato è stata scartata o tolta (nascosta).
+    uploaded = {r[0] for r in state.execute("SELECT DISTINCT parte FROM righe_csv WHERE online_visto IS NOT NULL")}
+
+    def sale_status(r):
+        online = r["online"] or ""
+        if online in NOT_CURRENT and not r["online_visto"] and r["parte"] not in uploaded:
+            return "Da caricare su Discogs", False
+        return ONLINE_IT.get(online, online), online in NOT_CURRENT
+
     selling = []
     for r in state.execute("SELECT * FROM righe_csv"):
+        status, hidden = sale_status(r)
         f = foto(r["external_id"])
         path = f["foto"] if f else ""
         selling.append({
@@ -62,9 +73,9 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "grado": r["media"], "copertina": r["sleeve"] or r["media"], "copie": r["quantita"] or 1,
             "prezzo": r["price"], "file": f"inventario_{r['parte']:03d}.csv", "lotto": lot_of(path),
             "foto_nome": display_name(f) if f else "", "foto": images_of(path),
-            "online": ONLINE_IT.get(r["online"] or "", r["online"] or ""), "calcolo": r["calcolo"] or "",
+            "online": status, "calcolo": r["calcolo"] or "",
             "link": f"https://www.discogs.com/release/{r['release_id']}", "annuncio": "",
-            "nascosto": (r["online"] or "") in NOT_CURRENT,
+            "nascosto": hidden,
         })
     for r in state.execute("SELECT * FROM annunci_api WHERE stato = 'pubblicato'"):
         f = foto(listing_owner(r["external_id"]))
