@@ -153,13 +153,36 @@ def applica(args):
     if not OUT.exists():
         raise SystemExit("Prima lancia la prova: python3 riconosci_di_nuovo.py")
     with OUT.open(newline="", encoding="utf-8") as fh:
-        todo = [r for r in csv.DictReader(fh) if r["esito"] == "proposta" and r["listing_id"]]
+        todo = [r for r in csv.DictReader(fh) if r["esito"] == "proposta"]
     if not todo:
         raise SystemExit("Nessuna proposta da applicare.")
     saved = vendi.backup_state(vendi.STATE_DB, vendi.BACKUPS_TO_KEEP)
     print(f"Backup dello stato: {saved}")
     state = vendi.open_state(vendi.STATE_DB)
     api = vendi.DiscogsAPI(vendi.load_token())
+    # Gli annunci veri si cercano nell'inventario ATTUALE (i numeri salvati possono essere vecchi,
+    # i dischi caricati con il CSV non li hanno): per external_id della foto o della riga CSV.
+    print("Leggo l'inventario su Discogs...")
+    inv = vendi.fetch_inventory(api, api.identity()["username"], statuses=("For Sale", "Draft"))
+    kept = []
+    for r in todo:
+        row = state.execute("SELECT riga_csv FROM foto WHERE external_id = ?", (r["foto"],)).fetchone()
+        eids = {r["foto"]} | ({row["riga_csv"]} if row and row["riga_csv"] else set())
+        old_id = int(r["online_release"].rsplit("/", 1)[-1])
+        found = [i for i in inv.by_listing.values()
+                 if (i.get("external_id") or "") in eids or any((i.get("external_id") or "").startswith(e + "-")
+                                                               for e in eids)]
+        if not found:
+            same = [i for i in inv.by_listing.values() if (i.get("release") or {}).get("id") == old_id]
+            found = same if len(same) == 1 else []
+        if not found:
+            print(f"  {r['online_disco']}: non è più su Discogs, salto")
+            continue
+        for item in found:
+            kept.append({**r, "listing_id": str(item["id"])})
+    todo = kept
+    if not todo:
+        raise SystemExit("Nessuna delle proposte ha ancora un annuncio su Discogs.")
     done = 0
     for r in todo:
         new_id = int(r["nuovo_release"].rsplit("/", 1)[-1])
