@@ -81,10 +81,15 @@ class Matcher:
         return self._cache[key]
 
     def distance(self, a, b):
+        """Distanza tra due immagini, o None se non si può calcolare (mai un errore: il confronto delle
+        copertine è un aiuto, non deve mai fermare il riconoscimento)."""
         fa, fb = self.feature(a), self.feature(b)
         if fa is None or fb is None:
             return None
-        return _vision_distance(fa, fb) if self.backend == "vision" else _pil_distance(fa, fb)
+        try:
+            return _vision_distance(fa, fb) if self.backend == "vision" else _pil_distance(fa, fb)
+        except Exception:
+            return None
 
     def compare(self, photos, covers_by_id):
         """{release_id: distanza minima tra le foto del disco e le immagini della release} (solo le
@@ -133,6 +138,8 @@ def _vision_available():
 
 
 def _vision_feature(path):
+    """Impronta Vision della foto come vettore normalizzato (lunghezza 1): la distanza si calcola qui,
+    senza passare dal metodo computeDistance di Vision (con pyobjc il valore di uscita non arriva)."""
     import Foundation
     import Vision
     url = Foundation.NSURL.fileURLWithPath_(str(path))
@@ -144,18 +151,19 @@ def _vision_feature(path):
     results = request.results()
     if not results:
         raise RuntimeError("Vision: nessuna impronta")
-    return results[0]
+    obs = results[0]
+    raw = bytes(obs.data())
+    count = int(obs.elementCount())
+    fmt = "d" if int(obs.elementType()) == 2 else "f"   # 1 = float, 2 = double
+    import struct
+    vec = struct.unpack(f"<{count}{fmt}", raw[:count * struct.calcsize(fmt)])
+    norm = sum(v * v for v in vec) ** 0.5 or 1.0
+    return [v / norm for v in vec]
 
 
 def _vision_distance(a, b):
-    result = a.computeDistance_toFeaturePrintObservation_error_(None, b, None)
-    # pyobjc restituisce (ok, distanza, errore)
-    if isinstance(result, tuple):
-        ok, distance = result[0], result[1]
-        if not ok:
-            raise RuntimeError("Vision: distanza non calcolabile")
-        return float(distance)
-    return float(result)
+    """Distanza euclidea tra due impronte normalizzate: 0 = identiche, circa 1,4 = del tutto diverse."""
+    return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
 
 
 # --------------------------------------------------------------------------

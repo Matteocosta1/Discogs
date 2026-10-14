@@ -79,6 +79,30 @@ class TestMatcherPillow(unittest.TestCase):
         self.assertIn("troppo simili", self.matcher.verdict(d)[1])
 
 
+class TestMaiUnErrore(unittest.TestCase):
+    def test_distanza_che_fallisce_diventa_none(self):
+        m = copertine.Matcher("vision")
+        m._cache = {"a": [1.0, 0.0], "b": None, "c": "rotto"}
+        self.assertIsNone(m.distance("a", "b"))
+        self.assertIsNone(m.distance("a", "c"))
+        self.assertAlmostEqual(copertine._vision_distance([1.0, 0.0], [0.0, 1.0]), 2 ** 0.5)
+        self.assertEqual(copertine._vision_distance([0.6, 0.8], [0.6, 0.8]), 0.0)
+
+    def test_cover_check_non_ferma_il_riconoscimento(self):
+        class Broken:
+            backend = "vision"
+
+            def compare(self, *a):
+                raise TypeError("float() argument must be a string or a real number, not 'NoneType'")
+
+        check = vendi.CoverCheck(FakeStore(None, None), Broken())
+        chosen, text = check.pick(["foto"], [{"id": 1}, {"id": 2}])
+        self.assertIsNone(chosen)
+        self.assertIn("confronto non riuscito", text)
+        ok, text = check.confirms(["foto"], {"id": 1})
+        self.assertFalse(ok)
+
+
 class FakeDownloadAPI(tp.FakeAPI):
     """Discogs con le immagini delle release: GET /releases/{id} ha 'images', download() le restituisce."""
     images = {}   # release_id -> [bytes]

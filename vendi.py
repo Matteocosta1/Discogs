@@ -1503,7 +1503,13 @@ class CoverCheck:
         return self.matcher.compare([str(p) for p in photos], {k: v for k, v in covers.items() if v})
 
     def pick(self, photos, candidates):
-        """(release scelta o None, testo del confronto)."""
+        """(release scelta o None, testo del confronto). Mai un errore: in caso di problemi, nessuna scelta."""
+        try:
+            return self._pick(photos, candidates)
+        except Exception as e:  # il confronto è un aiuto: non deve mai fermare il lotto
+            return None, f"copertine: confronto non riuscito ({type(e).__name__}: {e})"
+
+    def _pick(self, photos, candidates):
         distances = self.distances(photos, candidates)
         chosen_id, text = self.matcher.verdict(distances)
         for r in candidates:
@@ -1513,7 +1519,13 @@ class CoverCheck:
         return chosen, text
 
     def confirms(self, photos, release):
-        """(True se la copertina della release è quella delle foto, testo)."""
+        """(True se la copertina della release è quella delle foto, testo). Mai un errore."""
+        try:
+            return self._confirms(photos, release)
+        except Exception as e:
+            return False, f"copertina: confronto non riuscito ({type(e).__name__}: {e})"
+
+    def _confirms(self, photos, release):
         distances = self.distances(photos, [release])
         d = distances.get(release["id"])
         if d is None:
