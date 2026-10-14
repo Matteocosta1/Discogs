@@ -2928,12 +2928,27 @@ def open_panel(out_dir):
     # Solo se lanciato a mano da un Terminale: mai dai test o da un altro programma (pannello.py)
     if sys.platform != "darwin" or not path.exists() or not sys.stdout.isatty():
         return
-    target = str(path)
-    try:
-        with socket.create_connection(("127.0.0.1", 8765), timeout=0.3):
-            target = "http://127.0.0.1:8765/"
-    except OSError:
-        pass
+    def live():
+        try:
+            with socket.create_connection(("127.0.0.1", 8765), timeout=0.3):
+                return True
+        except OSError:
+            return False
+
+    # Sempre il pannello COLLEGATO (con i pulsanti Conferma, Togli...): se non è acceso lo accende in
+    # sottofondo; solo se non parte si apre il file statico.
+    if not live():
+        try:
+            subprocess.Popen([sys.executable, str(Path(__file__).with_name("pannello.py")), "--senza-browser"],
+                             cwd=str(Path(__file__).parent), stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            pass
+        for _ in range(40):
+            if live():
+                break
+            time.sleep(0.25)
+    target = "http://127.0.0.1:8765/" if live() else str(path)
     try:
         subprocess.run(["open", target], check=False, timeout=10)
     except (OSError, subprocess.SubprocessError):

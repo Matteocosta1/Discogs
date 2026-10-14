@@ -479,6 +479,8 @@ draw();
 
 // ----- Pannello collegato allo script (python pannello.py): azioni vere -----
 document.getElementById(LIVE ? "actions" : "offline").hidden = false;
+// Pagina statica aperta dal file: se il pannello collegato è acceso, si passa a quello (con i pulsanti)
+if (!LIVE) fetch("http://127.0.0.1:8765/api/log", {mode: "no-cors"}).then(() => { location.href = "http://127.0.0.1:8765/"; }).catch(() => {});
 async function call(body) {
   const r = await fetch("/api/azione", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
   return r.json();
