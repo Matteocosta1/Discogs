@@ -236,6 +236,13 @@ lotto-02/
   e disco-019). Se è lo stesso disco togli dal lotto la cartella in più e
   rilancia; se sono copie diverse rilancia con
   `--copie-diverse disco-013,disco-019`.
+- **`risultati/pannello.html`**: l'inventario da guardare, con le foto. Doppio
+  clic e si apre in Safari (le HEIC si vedono solo lì). Due schede: IN VENDITA
+  (foto, disco, grado, prezzo, copie, file CSV, lotto, stato online, come è
+  stato calcolato il prezzo) e DA CONTROLLARE (foto, motivo in chiaro, disco
+  proposto con link per confrontarlo). Ricerca per titolo/lotto/cartella e
+  filtro per lotto. Si riscrive a ogni lancio; per rifarlo senza elaborare
+  niente: `python pannello.py`.
 - **`risultati/registro.csv`**: tutto quello che è in vendita in un posto
   solo, una riga per disco: lotto, file CSV da cui proviene (o API), disco,
   grado del disco e della copertina, copie, prezzo, foto, link. Si riscrive a

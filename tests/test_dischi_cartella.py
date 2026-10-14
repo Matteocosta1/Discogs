@@ -378,3 +378,23 @@ class TestRaggruppaFoto(TempRun):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPannello(DiscBase):
+    def test_pannello_con_vendita_e_controllo(self):
+        import json as _json
+        self.disc("disco-001", "d1_fronte", "d1_retro")              # in vendita
+        self.disc("disco-002", "d2_fronte")                           # niente indizi: da controllare
+        with mock.patch.dict(tp.OCR, {"d2_fronte": []}):
+            self.run.main("--senza-ai")
+        page = (self.run.out / "pannello.html").read_text(encoding="utf-8")
+        data = _json.loads(page.split("const DATA = ", 1)[1].split(";\n", 1)[0].replace("<\\/", "</"))
+        self.assertEqual([d["release"] for d in data["vendita"]], [572658])
+        sale = data["vendita"][0]
+        self.assertIn("Francisco - Music Business", sale["disco"])
+        self.assertEqual((sale["file"], sale["lotto"], sale["grado"]), ("inventario_001.csv", "Dischi", "VG+"))
+        self.assertEqual(len(sale["foto"]), 2)
+        self.assertTrue(sale["foto"][0].startswith("file://") and sale["foto"][0].endswith("d1_fronte.jpg"))
+        self.assertEqual(len(data["controllo"]), 1)
+        self.assertEqual(data["controllo"][0]["foto_nome"], "VG+/disco-002 (1 foto)")
+        self.assertTrue(data["controllo"][0]["motivo"])

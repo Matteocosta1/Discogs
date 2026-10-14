@@ -2626,6 +2626,13 @@ def write_registry(state, out_dir, csv_rows, api_rows):
     write_csv(out_dir / "registro.csv", REGISTRY_HEADER, rows)
 
 
+def write_panel_from_state(state, out_dir):
+    """risultati/pannello.html: inventario visivo (in vendita e da controllare) con le foto."""
+    import pannello
+    data = pannello.collect(state, REASONS, PROBLEMS, display_name, listing_owner, NOT_SELLABLE_REASON)
+    return pannello.write_panel(out_dir, data, dt.datetime.now().strftime("%d/%m/%Y %H:%M"))
+
+
 def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_collectors=(), simulated_rows_info=()):
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2649,6 +2656,7 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
     published = sorted(state.execute("SELECT * FROM annunci_api WHERE stato = 'pubblicato'").fetchall(),
                        key=lambda r: natural_key(r["external_id"]))
     write_registry(state, out_dir, all_rows, published)
+    write_panel_from_state(state, out_dir)
     write_csv(out_dir / "annunci_pubblicati_api.csv", LISTING_HEADER + ["listing_id", "link"],
               [[r["external_id"], r["release_id"], f"{r['price']:.2f}", GRADES[r["media"]], GRADES[r["sleeve"]],
                 API_STATUS[r["status"] or "FOR_SALE"], r["calcolo"] or "", r["listing_id"], f"https://www.discogs.com/sell/item/{r['listing_id']}"]
