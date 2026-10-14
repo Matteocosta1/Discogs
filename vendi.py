@@ -2560,7 +2560,8 @@ def open_panel(out_dir):
     import socket
     import subprocess
     path = Path(out_dir) / "pannello.html"
-    if sys.platform != "darwin" or not path.exists():
+    # Solo se lanciato a mano da un Terminale: mai dai test o da un altro programma (pannello.py)
+    if sys.platform != "darwin" or not path.exists() or not sys.stdout.isatty():
         return
     target = str(path)
     try:

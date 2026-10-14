@@ -317,6 +317,7 @@ class Run:
             options = (*options, "--corsie-off")
         if csv:
             options = (*options, "--csv")
+        options = (*options, "--senza-pannello")   # mai aprire il browser dai test
         argv = ["vendi.py", *([str(self.photos)] if folder else []), "--db", str(self.db), "--uscita", str(self.out),
                 *options]
         output = io.StringIO()
