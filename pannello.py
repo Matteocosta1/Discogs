@@ -152,6 +152,28 @@ WAITING_SQL = """
 """
 
 
+ORDER_FILE = "ordine_discogs.json"
+
+
+def listing_ids(row):
+    """Id degli annunci Discogs visti per una riga (colonna online_annunci, JSON)."""
+    try:
+        return [int(i) for i in json.loads(row["online_annunci"] or "[]")]
+    except (ValueError, TypeError, KeyError, IndexError):
+        return []
+
+
+def discogs_order(out_dir):
+    """{listing_id: posizione} nell'ordine della pagina Discogs (risultati/ordine_discogs.json), o {}."""
+    if not out_dir:
+        return {}
+    try:
+        ids = json.loads((Path(out_dir) / ORDER_FILE).read_text())
+        return {int(i): n for n, i in enumerate(ids)}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
 def collect(state, reasons, problems, display_name, listing_owner, not_sellable_reason, out_dir=None):
     """Dati del pannello dallo stato di vendi.py (con out_dir: miniature delle foto in out_dir/miniature)."""
     thumbs = Path(out_dir) / "miniature" if out_dir else None
@@ -181,7 +203,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "foto_nome": display_name(f) if f else "", "foto": images_of(path, thumbs),
             "online": status, "calcolo": r["calcolo"] or "",
             "link": f"https://www.discogs.com/release/{r['release_id']}", "annuncio": "",
-            "nascosto": hidden,
+            "nascosto": hidden, "_annunci": listing_ids(r),
         })
         # Riga mai vista online e senza più le foto: una prova vecchia, non qualcosa da caricare
         if status == "Da caricare su Discogs" and not selling[-1]["foto"]:
@@ -200,6 +222,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "link": f"https://www.discogs.com/release/{r['release_id']}",
             "annuncio": f"https://www.discogs.com/sell/item/{r['listing_id']}" if r["listing_id"] else "",
             "nascosto": (not ready) and (r["online"] or "") in NOT_CURRENT,
+            "_annunci": listing_ids(r) + ([r["listing_id"]] if r["listing_id"] else []),
         })
 
     # Confermati a mano ma senza annuncio (il prezzo non è riuscito): restano visibili.
@@ -211,6 +234,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "lotto": lot_of(f["foto"]), "foto_nome": display_name(f), "foto": pics,
             "online": "Confermato, senza prezzo", "pronto": False, "calcolo": "",
             "link": f"https://www.discogs.com/release/{f['release_id']}", "annuncio": "", "nascosto": not pics,
+            "_annunci": [],
         })
 
     # Annunci in Draft su Discogs: non sono in vendita, vanno guardati e rimessi in vendita a mano.
@@ -260,7 +284,15 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
     for d in checking:   # foto non più nella loro cartella (prove vecchie, foto spostate): nascosti
         d["nascosto"] = not d["foto"] and not d.get("bozza")
     natural = lambda d: (d["lotto"], d["foto_nome"] or d["id"])  # noqa: E731
-    selling.sort(key=natural)
+    # In vendita: lo stesso ordine della pagina Discogs (dal più recente, salvato da verifica_inventario.py);
+    # i dischi che lì non compaiono ancora (appena pubblicati, da pubblicare) vanno in cima: sono i più recenti.
+    order = discogs_order(out_dir)
+    if order:
+        selling.sort(key=lambda d: (min((order.get(i, -1) for i in d["_annunci"]), default=-1), natural(d)))
+    else:
+        selling.sort(key=natural)
+    for d in selling:
+        d.pop("_annunci", None)
     checking.sort(key=natural)
     return {"vendita": selling, "controllo": checking}
 
