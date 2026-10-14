@@ -2555,13 +2555,21 @@ def group_loose_photos(args):
 
 
 def open_panel(out_dir):
-    """Apre risultati/pannello.html nel browser (solo su macOS, fuori dai test)."""
+    """Apre il pannello nel browser (solo su macOS, fuori dai test): quello collegato (python pannello.py)
+    se è acceso, altrimenti il file risultati/pannello.html."""
+    import socket
     import subprocess
     path = Path(out_dir) / "pannello.html"
     if sys.platform != "darwin" or not path.exists():
         return
+    target = str(path)
     try:
-        subprocess.run(["open", str(path)], check=False, timeout=10)
+        with socket.create_connection(("127.0.0.1", 8765), timeout=0.3):
+            target = "http://127.0.0.1:8765/"
+    except OSError:
+        pass
+    try:
+        subprocess.run(["open", target], check=False, timeout=10)
     except (OSError, subprocess.SubprocessError):
         pass
 
