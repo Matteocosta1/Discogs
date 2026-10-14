@@ -175,6 +175,9 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "link": f"https://www.discogs.com/release/{r['release_id']}", "annuncio": "",
             "nascosto": hidden,
         })
+        # Riga mai vista online e senza più le foto: una prova vecchia, non qualcosa da caricare
+        if status == "Da caricare su Discogs" and not selling[-1]["foto"]:
+            selling[-1]["nascosto"] = True
     for r in state.execute("SELECT * FROM annunci_api WHERE stato IN ('pubblicato', 'pronto')"):
         f = foto(listing_owner(r["external_id"]))
         path = f["foto"] if f else ""

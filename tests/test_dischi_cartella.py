@@ -415,7 +415,8 @@ class TestPannelloStati(unittest.TestCase):
         data = pannello.collect(con, vendi.REASONS, vendi.PROBLEMS, vendi.display_name, vendi.listing_owner, "")
         got = {d["id"]: (d["online"], d["nascosto"]) for d in data["vendita"]}
         self.assertEqual(got["b"], ("Non trovato online", True))        # file 1 già caricato: scartata
-        self.assertEqual(got["c"], ("Da caricare su Discogs", False))   # file 2 mai caricato
+        self.assertEqual(got["c"][0], "Da caricare su Discogs")         # file 2 mai caricato
+        self.assertTrue(got["c"][1])                                     # ...ma senza foto: prova vecchia, nascosta
         self.assertEqual(got["d"], ("Online", False))
         self.assertFalse(got["a"][1])
 
