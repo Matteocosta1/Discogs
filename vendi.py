@@ -1021,6 +1021,7 @@ AI_MODELS = {
     "claude-sonnet-5": (2.00, 10.00),
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-opus-5": (5.00, 25.00),
+    "claude-opus-5-5": (4.00, 20.00),
 }
 AI_SECOND_MODEL = "claude-sonnet-5-5"   # secondo tentativo sulle foto non riconosciute dal primo modello
 # Questi modelli ragionano prima di rispondere (non si può spegnere su tutti): il ragionamento usa
@@ -2157,6 +2158,7 @@ CREATE TABLE IF NOT EXISTS foto (
     hash        TEXT,     -- SHA-256 del contenuto della foto (riconosce la stessa foto anche spostata)
     ai2_dati    TEXT,     -- secondo tentativo con un modello più forte: cosa ha letto
     ai2_scelta  TEXT,     -- secondo tentativo: scelta tra i candidati
+    ai2_modello TEXT,     -- secondo tentativo: modello che ha letto e scelto (vuoto = claude-sonnet-5-5)
     secondo     TEXT,     -- modello del secondo tentativo, se è lui ad aver riconosciuto il disco
     disco       TEXT,     -- artista - titolo (etichetta, paese, anno) della release trovata
     metodo      TEXT,     -- barcode / catno / locale-testo / ai
@@ -2304,7 +2306,7 @@ def open_state(path):
                                 ("foto", "hash", "TEXT"), ("foto", "ai2_dati", "TEXT"),
                                 ("foto", "ai2_scelta", "TEXT"), ("foto", "secondo", "TEXT"),
                                 ("righe_csv", "online_annunci", "TEXT"), ("annunci_api", "online_annunci", "TEXT"),
-                                ("foto", "n_foto", "INTEGER"), ("foto", "hash_foto", "TEXT"),
+                                ("foto", "n_foto", "INTEGER"), ("foto", "hash_foto", "TEXT"), ("foto", "ai2_modello", "TEXT"),
                                 ("collezionistici", "sleeve", "TEXT")]:  # stato di una versione precedente
         if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
@@ -3474,8 +3476,10 @@ def run(opened):
             same_photo = row is not None and row["hash"] == photo.sha256  # stesso contenuto, anche se spostata
             cache = {"read": json.loads(row["ai_dati"]) if same_photo and row["ai_dati"] else None,
                      "choice": json.loads(row["ai_scelta"]) if same_photo and row["ai_scelta"] else None}
-            cache2 = {"read": json.loads(row["ai2_dati"]) if same_photo and row["ai2_dati"] else None,
-                      "choice": json.loads(row["ai2_scelta"]) if same_photo and row["ai2_scelta"] else None}
+            # La lettura del secondo tentativo vale solo per lo stesso modello: cambiando modello si rifà
+            same2 = same_photo and ai2 is not None and (row["ai2_modello"] or "claude-sonnet-5-5") == ai2.model
+            cache2 = {"read": json.loads(row["ai2_dati"]) if same2 and row["ai2_dati"] else None,
+                      "choice": json.loads(row["ai2_scelta"]) if same2 and row["ai2_scelta"] else None}
             unsure = row is not None and row["esito"] in ("non_trovato", "multiplo")
             if (not same_photo or row["esito"] in ("errore", "sospeso", "rielabora")
                     or (args.riprova and row["esito"] in PROBLEMS)
@@ -3507,8 +3511,8 @@ def run(opened):
                 state.execute(
                     "INSERT OR REPLACE INTO foto (external_id, cartella, foto, impronta, media, sleeve, esito, fonte,"
                     " release_id, candidati, dettagli, aggiornato, ai_dati, ai_costo, ai_scelta, disco, metodo, motivo,"
-                    " hash, ai2_dati, ai2_scelta, secondo, n_foto, hash_foto)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " hash, ai2_dati, ai2_scelta, secondo, n_foto, hash_foto, ai2_modello)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (eid, photo.folder, str(photo.path), fingerprint, photo.media, photo.sleeve, final.esito,
                      final.fonte, final.release_id, format_candidates(final.candidates), final.details, now(),
                      json.dumps(rec.ai_read) if rec.ai_read is not None else None,
@@ -3519,7 +3523,8 @@ def run(opened):
                      (row["ai2_dati"] if same_photo and row else None),
                      json.dumps(rec2.ai_choice) if rec2 and rec2.ai_choice is not None else
                      (row["ai2_scelta"] if same_photo and row else None),
-                     ai2.model if second else None, *disc_columns(photo)),
+                     ai2.model if second else None, *disc_columns(photo),
+                     ai2.model if rec2 is not None else (row["ai2_modello"] if same_photo and row else None)),
                 )
                 rec = final
                 state.commit()

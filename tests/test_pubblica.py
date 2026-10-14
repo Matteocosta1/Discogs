@@ -135,6 +135,24 @@ class TestAbbina(TempRun):
             self.run.main(csv=False, folder=False)
 
 
+class TestSecondoModello(TempRun):
+    """Cambiando il modello del secondo tentativo (es. Opus 5.5) la lettura si rifà: quella del modello
+    precedente non vale per il nuovo."""
+    photos = {"VG+": ["IMG_0007"]}   # nessuno lo trova
+
+    def test_opus_rilegge(self):
+        self.run.main(csv=False)
+        self.assertIn(("claude-sonnet-5-5", "IMG_0007"), tp.FakeAI.calls)
+        tp.FakeAI.calls = []
+        self.run.main("--riprova", csv=False)                            # stesso modello: niente di nuovo
+        self.assertNotIn(("claude-sonnet-5-5", "IMG_0007"), tp.FakeAI.calls)
+        self.run.main("--riprova", "--ai-modello-secondo", "claude-opus-5-5", csv=False)
+        self.assertIn(("claude-opus-5-5", "IMG_0007"), tp.FakeAI.calls)
+        row = self.state().execute("SELECT ai2_modello FROM foto WHERE external_id = 'IMG_0007'").fetchone()
+        self.assertEqual(row[0], "claude-opus-5-5")
+        self.assertEqual(vendi.AI_MODELS["claude-opus-5-5"], (4.00, 20.00))
+
+
 class TestGradoInline(TempRun):
     """--grado: foto sciolte nella cartella del lotto, raggruppate 2 a 2 e poi elaborate, in un comando."""
     photos = {}
