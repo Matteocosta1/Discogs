@@ -194,6 +194,19 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "nascosto": (not ready) and (r["online"] or "") in NOT_CURRENT,
         })
 
+    # Confermati a mano nel pannello (Conferma / È questo): aspettano prezzo e annuncio, li fa il pulsante
+    # Pubblica su Discogs (metti_in_vendita.py).
+    import metti_in_vendita
+    for f in state.execute(metti_in_vendita.WAITING_SQL):
+        pics = images_of(f["foto"], thumbs)
+        selling.append({
+            "id": f["external_id"], "disco": f["disco"] or "", "release": f["release_id"], "grado": f["media"],
+            "copertina": f["sleeve"] or f["media"], "copie": 1, "prezzo": None, "file": "API",
+            "lotto": lot_of(f["foto"]), "foto_nome": display_name(f), "foto": pics,
+            "online": "Confermato: da pubblicare", "pronto": True, "calcolo": "",
+            "link": f"https://www.discogs.com/release/{f['release_id']}", "annuncio": "", "nascosto": not pics,
+        })
+
     # Annunci in Draft su Discogs: non sono in vendita, vanno guardati e rimessi in vendita a mano.
     # Si spostano nella scheda Da controllare (sempre visibili, anche senza foto).
     drafts = [d for d in selling if d["online"] == ONLINE_IT["bozza"] and not d.get("pronto") and not d["nascosto"]]
@@ -322,6 +335,7 @@ a{color:var(--green);font-weight:700}
 .act{border:2px solid var(--ink);background:var(--ink);color:var(--bg);padding:7px 12px;font-weight:800;cursor:pointer;font-size:13px}
 .act.ghost{background:transparent;color:var(--ink)}
 .act.small{padding:4px 8px;font-size:12px}
+.act.ok{font-weight:700}
 .act.warn{border-color:var(--warn);color:var(--warn);background:transparent}
 .act:disabled{opacity:.5;cursor:wait}
 .hint{font-family:var(--mono);font-size:11px;color:var(--muted)}
@@ -363,6 +377,7 @@ a{color:var(--green);font-weight:700}
 <script>
 const DATA = __DATA__;
 const LIVE = __LIVE__;
+const NO_CONFIRM = ["non_vendibile", "in_corso", "rifiutato", "stesso_disco"];
 const euro = v => v == null || v === "" ? "" : Number(v).toLocaleString("it-IT",{style:"currency",currency:"EUR"});
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let tab = "vendita";
@@ -424,7 +439,9 @@ function cardCheck(d) {
         <button class="act small" data-act="abbina" data-id="${esc(d.id)}" data-release="${c.id}">È questo</button></div>`).join("")}</div>`
       : d.candidati ? `<details><summary>altre release possibili</summary><p>${esc(d.candidati)}</p></details>` : ""}
     ${d.bozza ? `<div class="links">${d.annuncio ? `<a href="${esc(d.annuncio)}" target="_blank" rel="noopener">Apri l'annuncio</a>` : `<a href="https://www.discogs.com/sell/manage" target="_blank" rel="noopener">Apri l'inventario</a>`}</div>` : ""}
+    ${LIVE && d.bozza ? `<div class="cardbtns"><button class="act small ok" data-act="bozza-vendita" data-id="${esc(d.id)}">Conferma: metti in vendita</button></div>` : ""}
     ${LIVE && !d.bozza ? `<div class="cardbtns">
+      ${d.release && !NO_CONFIRM.includes(d.esito) ? `<button class="act small ok" data-act="conferma" data-id="${esc(d.id)}" data-release="${esc(d.release)}">Conferma</button>` : ""}
       <button class="act small ghost" data-act="abbina-id" data-id="${esc(d.id)}">Altra release…</button>
       ${d.copie ? `<button class="act small ghost" data-act="copie" data-id="${esc(d.id)}" data-copie="${esc(d.copie)}" data-cartella="${esc(d.cartella)}">Sono copie diverse</button>` : ""}
       <button class="act small warn" data-act="togli" data-id="${esc(d.id)}">Togli</button></div>` : ""}
@@ -477,7 +494,7 @@ async function runJob(body) {
   setTimeout(() => location.reload(), 1200);
 }
 document.querySelectorAll("[data-job]").forEach(b => b.onclick = () => {
-  if (b.dataset.job === "pubblica" && !confirm("Pubblicare ORA su Discogs tutti gli annunci pronti?")) return;
+  if (b.dataset.job === "pubblica" && !confirm("Mettere in vendita ORA su Discogs tutti i dischi da pubblicare (anche i confermati)?")) return;
   runJob({azione: b.dataset.job});
 });
 document.getElementById("btn-elabora").onclick = () => {
@@ -494,6 +511,10 @@ document.getElementById("grid").addEventListener("click", async e => {
   if (b.dataset.act === "abbina-id") {
     const v = prompt("Numero della release Discogs giusta (dall'indirizzo discogs.com/release/NUMERO):");
     if (!v || !/^\d+$/.test(v.trim())) return; body = {azione: "abbina", disco: id, release: Number(v.trim())};
+  }
+  if (b.dataset.act === "conferma") body = {azione: "abbina", disco: id, release: Number(b.dataset.release)};
+  if (b.dataset.act === "bozza-vendita") {
+    if (!confirm(`Rimettere in vendita su Discogs ${id}?`)) return; body = {azione: "bozza_vendita", disco: id};
   }
   if (b.dataset.act === "togli") { if (!confirm(`Togliere ${id} dall'inventario?`)) return; body = {azione: "togli", disco: id}; }
   if (b.dataset.act === "copie") { runJob({azione: "elabora", cartella: b.dataset.cartella, grado: "", copie: b.dataset.copie}); return; }
@@ -552,6 +573,35 @@ def dd_base():
     return dd.BASE_DIR
 
 
+def draft_to_sale(vendi, con, eid):
+    """Un annuncio in Draft (bozza) controllato a mano torna In vendita su Discogs. Rilegge per verificare."""
+    api = vendi.DiscogsAPI(vendi.load_token())
+    ids = [r[0] for r in con.execute("SELECT listing_id FROM annunci_api WHERE external_id = ? AND listing_id",
+                                     (eid,))]
+    if not ids:   # annuncio caricato con il CSV: si cerca tra le bozze per external_id
+        inv = vendi.fetch_inventory(api, api.identity()["username"], statuses=("Draft",))
+        ids = [i["id"] for i in inv.by_listing.values()
+               if (i.get("external_id") or "") == eid or (i.get("external_id") or "").startswith(eid + "-")]
+    if not ids:
+        raise SystemExit(f"Non trovo l'annuncio di {eid} tra le bozze su Discogs (forse già in vendita: "
+                         "premi Verifica su Discogs).")
+    done = []
+    for lid in ids:
+        full = api.get_listing(lid)
+        if vendi.listing_fields(full).get("status") != "For Sale":
+            api.edit_listing_fields(lid, vendi.listing_edit_body(full, status="For Sale"))
+        after = vendi.listing_fields(api.get_listing(lid)).get("status")
+        if after != "For Sale":
+            raise SystemExit(f"Discogs non l'ha messo in vendita (stato: {after}): fallo dal sito.")
+        con.execute("UPDATE annunci_api SET online = 'in_vendita', online_ultimo = 'in_vendita', status = 'FOR_SALE'"
+                    " WHERE listing_id = ?", (lid,))
+        done.append(str(lid))
+    con.execute("UPDATE righe_csv SET online = 'in_vendita', online_ultimo = 'in_vendita' WHERE external_id = ?",
+                (eid,))
+    con.commit()
+    return f"In vendita: {eid} (annuncio {', '.join(done)})"
+
+
 def make_handler(vendi, out_dir, job):
     import http.server
     import sqlite3
@@ -579,7 +629,7 @@ def make_handler(vendi, out_dir, job):
         what = body.get("azione")
         if what in ("pubblica", "verifica", "elabora"):
             if what == "pubblica":
-                argv = script("vendi.py", "--pubblica", "--senza-pannello")
+                argv = script("metti_in_vendita.py")
             elif what == "verifica":
                 argv = script("verifica_inventario.py")
             else:
@@ -610,6 +660,8 @@ def make_handler(vendi, out_dir, job):
                 finally:
                     db.close()
                 msg = "; ".join(f"{eid} -> {vendi.describe_release(r)}" for eid, r in done)
+            elif what == "bozza_vendita":
+                msg = draft_to_sale(vendi, con, body.get("disco", ""))
             else:
                 return {"ok": False, "messaggio": f"Azione sconosciuta: {what}"}
             vendi.write_outputs(con, out_dir, [], [])

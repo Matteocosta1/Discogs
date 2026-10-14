@@ -89,6 +89,36 @@ class TestPannelloVivo(TempRun):
         row = self.state().execute("SELECT esito, release_id FROM foto WHERE external_id = 'IMG_0001'").fetchone()
         self.assertEqual(tuple(row), ("trovato", 5206239))
 
+    def test_conferma_poi_prezzo_e_pronto(self):
+        import metti_in_vendita
+        page = self.get("/")
+        self.assertIn('data-act="conferma"', page)                         # il pulsante c'è
+        r = self.post({"azione": "abbina", "disco": "IMG_0001", "release": 1901512})   # Conferma = la proposta
+        self.assertTrue(r["ok"], r)
+        data = self.page_data()
+        waiting = [d for d in data["vendita"] if d["id"] == "IMG_0001"]
+        self.assertEqual(waiting[0]["online"], "Confermato: da pubblicare")
+        self.assertEqual([w["external_id"] for w in metti_in_vendita.waiting(self.state())], ["IMG_0001"])
+        # il lancio sul lotto senza AI lo prezza: diventa un annuncio pronto
+        self.run.main("--senza-ai", csv=False)
+        self.assertEqual(metti_in_vendita.waiting(self.state()), [])
+        row = self.state().execute("SELECT stato, release_id FROM annunci_api WHERE external_id = 'IMG_0001'").fetchone()
+        self.assertEqual(tuple(row), ("pronto", 1901512))
+
+    def test_bozza_rimessa_in_vendita(self):
+        con = self.state()
+        con.execute("INSERT INTO annunci_api (external_id, release_id, price, media, sleeve, stato, listing_id, status, online) "
+                    "VALUES ('IMG_0077', 1901512, 10, 'M', 'M', 'pubblicato', 777, 'DRAFT', 'bozza')")
+        con.commit()
+        self.run.api.inventory.append({"id": 777, "status": "Draft", "external_id": "IMG_0077",
+                                       "release": {"id": 1901512}, "price": {"value": 10.0, "currency": "EUR"},
+                                       "condition": "Mint (M)", "sleeve_condition": "Mint (M)"})
+        r = self.post({"azione": "bozza_vendita", "disco": "IMG_0077"})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.run.api._item(777)["status"], "For Sale")
+        row = self.state().execute("SELECT online, status FROM annunci_api WHERE external_id = 'IMG_0077'").fetchone()
+        self.assertEqual(tuple(row), ("in_vendita", "FOR_SALE"))
+
     def test_togli_un_pronto(self):
         r = self.post({"azione": "togli", "disco": "IMG_0003"})
         self.assertTrue(r["ok"], r)
