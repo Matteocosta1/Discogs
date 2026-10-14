@@ -236,6 +236,10 @@ lotto-02/
   e disco-019). Se è lo stesso disco togli dal lotto la cartella in più e
   rilancia; se sono copie diverse rilancia con
   `--copie-diverse disco-013,disco-019`.
+- **`risultati/registro.csv`**: tutto quello che è in vendita in un posto
+  solo, una riga per disco: lotto, file CSV da cui proviene (o API), disco,
+  grado del disco e della copertina, copie, prezzo, foto, link. Si riscrive a
+  ogni lancio dallo stato, quindi è sempre aggiornato (anche dopo `--togli`).
 - **`--togli disco-019-847f678b`** (anche più nomi separati da virgola, o solo
   l'inizio del nome se univoco): toglie un disco già finito in una riga CSV
   NON ancora caricata. La riga viene tolta dal suo `inventario_NNN.csv` (la

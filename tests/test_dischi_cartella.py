@@ -212,6 +212,11 @@ class TestTogli(DiscBase):
         self.assertEqual(self.run.read_csv("da_controllare.csv"), [])  # il tolto non è un problema
         out = self.run.main()                                         # e non torna più
         self.assertIn("dischi tolti (--togli):      1", out)
+        reg = self.run.read_csv("registro.csv")                       # il registro segue lo stato
+        self.assertEqual([(r["file"], r["external_id"], r["grado_disco"], r["copie"], r["foto"]) for r in reg],
+                         [("inventario_002.csv", ids["disco-013"], "VG+", "1", "VG+/disco-013 (2 foto)")])
+        self.assertEqual(reg[0]["lotto"], "Dischi")
+        self.assertIn("Francisco - Music Business", reg[0]["disco"])
         self.assertEqual(len(self.run.inventory()), 1)
 
     def test_togli_riga_gia_online_si_rifiuta(self):

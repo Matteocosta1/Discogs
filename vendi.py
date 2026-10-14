@@ -2597,6 +2597,35 @@ def collector_csv_rows(rows):
     return out
 
 
+REGISTRY_HEADER = ["lotto", "file", "disco", "release_id", "grado_disco", "grado_copertina", "copie", "prezzo",
+                   "foto", "percorso_foto", "external_id", "online", "link"]
+
+
+def write_registry(state, out_dir, csv_rows, api_rows):
+    """registro.csv: tutto quello che è stato messo in vendita, in un posto solo. Una riga per riga CSV
+    (o annuncio API): lotto, file da cui proviene, disco, gradi, copie, prezzo, foto. Si riscrive a
+    ogni lancio dallo stato, quindi è sempre aggiornato (anche dopo --togli)."""
+    def info(eid):
+        r = state.execute("SELECT foto, disco, n_foto FROM foto WHERE external_id = ?", (eid,)).fetchone()
+        if r is None or not r["foto"]:
+            return "", "", "", ""
+        path = Path(r["foto"])
+        return path.parent.parent.name, display_name(r), str(path), r["disco"] or ""
+
+    rows = []
+    for r in csv_rows:
+        lot, photos, path, disco = info(r["external_id"])
+        rows.append([lot, f"inventario_{r['parte']:03d}.csv", disco, r["release_id"], r["media"],
+                     r["sleeve"] or r["media"], r["quantita"], f"{r['price']:.2f}", photos, path, r["external_id"],
+                     r["online"] or "", f"https://www.discogs.com/release/{r['release_id']}"])
+    for r in api_rows:
+        lot, photos, path, disco = info(listing_owner(r["external_id"]))
+        rows.append([lot, "API", disco, r["release_id"], r["media"], r["sleeve"] or r["media"], 1,
+                     f"{r['price']:.2f}", photos, path, r["external_id"], r["online"] or "",
+                     f"https://www.discogs.com/sell/item/{r['listing_id']}"])
+    write_csv(out_dir / "registro.csv", REGISTRY_HEADER, rows)
+
+
 def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_collectors=(), simulated_rows_info=()):
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2619,6 +2648,7 @@ def write_outputs(state, out_dir, simulated_csv, simulated_listings, simulated_c
 
     published = sorted(state.execute("SELECT * FROM annunci_api WHERE stato = 'pubblicato'").fetchall(),
                        key=lambda r: natural_key(r["external_id"]))
+    write_registry(state, out_dir, all_rows, published)
     write_csv(out_dir / "annunci_pubblicati_api.csv", LISTING_HEADER + ["listing_id", "link"],
               [[r["external_id"], r["release_id"], f"{r['price']:.2f}", GRADES[r["media"]], GRADES[r["sleeve"]],
                 API_STATUS[r["status"] or "FOR_SALE"], r["calcolo"] or "", r["listing_id"], f"https://www.discogs.com/sell/item/{r['listing_id']}"]
