@@ -87,8 +87,9 @@ def images_of(path_text, thumbs_dir=None):
 CAND_RE = re.compile(r"^(\d+) (.*?)(?: \[punteggio [^\]]*\])? https://www\.discogs\.com/release/\d+$")
 
 
-def parse_candidates(text, proposed_id=None, proposed_text=""):
-    """[{id, testo}] dal testo di format_candidates(); la release proposta sempre per prima."""
+def parse_candidates(text, proposed_id=None, proposed_text="", thumbs=None, cover_dir=None):
+    """[{id, testo, foto}] dal testo di format_candidates(); la release proposta sempre per prima.
+    foto: miniatura della copertina Discogs, se è già in cache (data/copertine/)."""
     out, seen = [], set()
     if proposed_id:
         out.append({"id": int(proposed_id), "testo": proposed_text or f"release {proposed_id}"})
@@ -98,7 +99,16 @@ def parse_candidates(text, proposed_id=None, proposed_text=""):
         if m and int(m.group(1)) not in seen:
             seen.add(int(m.group(1)))
             out.append({"id": int(m.group(1)), "testo": m.group(2)})
-    return out[:12]
+    out = out[:12]
+    for c in out:
+        cover = Path(cover_dir) / f"{c['id']}-0.jpg" if cover_dir else None
+        c["foto"] = (thumbnail(cover, thumbs) if thumbs and cover and cover.exists() else None) or ""
+    return out
+
+
+def _vendi_module():
+    import vendi
+    return vendi
 
 
 def lot_folder_of(path_text):
@@ -113,6 +123,7 @@ def lot_of(path_text):
 def collect(state, reasons, problems, display_name, listing_owner, not_sellable_reason, out_dir=None):
     """Dati del pannello dallo stato di vendi.py (con out_dir: miniature delle foto in out_dir/miniature)."""
     thumbs = Path(out_dir) / "miniature" if out_dir else None
+    cover_dir = getattr(_vendi_module(), "COVER_DIR", None)
     def foto(eid):
         return state.execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
 
@@ -171,7 +182,7 @@ def collect(state, reasons, problems, display_name, listing_owner, not_sellable_
             "proposto": r["disco"] or "", "release": r["release_id"] or "",
             "link": f"https://www.discogs.com/release/{r['release_id']}" if r["release_id"] else "",
             "prezzo": r["prezzo"], "candidati": r["candidati"] or "",
-            "scelte": parse_candidates(r["candidati"], r["release_id"], r["disco"]),
+            "scelte": parse_candidates(r["candidati"], r["release_id"], r["disco"], thumbs, cover_dir),
             "copie": (m.group(1) if (m := re.search(r"--copie-diverse (\S+)", r["motivo"] or "")) else ""),
         })
     for r in state.execute("SELECT a.*, f.foto, f.n_foto, f.disco FROM annunci_api a LEFT JOIN foto f ON "
@@ -277,6 +288,7 @@ a{color:var(--green);font-weight:700}
 .choices{display:flex;flex-direction:column;gap:4px}
 .choice{display:flex;gap:8px;align-items:center;font-size:12.5px}
 .choice .t{flex:1}
+.choice .cov{width:44px;height:44px;object-fit:cover;background:var(--chip);flex:none;cursor:zoom-in}
 .cardbtns{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
 #zoom{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;align-items:center;justify-content:center;z-index:9;cursor:zoom-out}
 #zoom img{max-width:94vw;max-height:94vh}
@@ -366,7 +378,7 @@ function cardCheck(d) {
     <div class="chips"><span class="chip g">${grade(d)}</span>${d.lotto ? `<span class="chip">${esc(d.lotto)}</span>` : ""}
       ${d.prezzo ? `<span class="chip">${euro(d.prezzo)}</span>` : ""}</div>
     <div class="meta">${esc(d.foto_nome)} · ${esc(d.id)}</div>
-    ${LIVE && d.scelte.length ? `<div class="choices">${d.scelte.map(c => `<div class="choice"><span class="t">${esc(c.testo)}</span>
+    ${LIVE && d.scelte.length ? `<div class="choices">${d.scelte.map(c => `<div class="choice">${c.foto ? `<img class="cov" src="${esc(c.foto)}" alt="">` : `<span class="cov"></span>`}<span class="t">${esc(c.testo)}</span>
         <a href="https://www.discogs.com/release/${c.id}" target="_blank" rel="noopener">vedi</a>
         <button class="act small" data-act="abbina" data-id="${esc(d.id)}" data-release="${c.id}">È questo</button></div>`).join("")}</div>`
       : d.candidati ? `<details><summary>altre release possibili</summary><p>${esc(d.candidati)}</p></details>` : ""}

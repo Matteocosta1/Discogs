@@ -320,6 +320,7 @@ class Run:
             for target, value in [
                 ("sys.argv", argv),
                 ("vendi.STATE_DB", self.tmp / "vendita_stato.sqlite"),
+                ("vendi.COVER_DIR", self.tmp / "copertine"),
                 ("vendi.load_token", lambda: "token-finto"),
                 ("vendi.DiscogsAPI", lambda token: self.api),
                 ("vendi.AIVision", FakeAI),

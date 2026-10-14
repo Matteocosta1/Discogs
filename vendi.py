@@ -846,6 +846,27 @@ class DiscogsAPI:
         if remaining <= 3:
             self._next = max(self._next, time.monotonic() + 15)
 
+    def download(self, url):
+        """Scarica un file (es. un'immagine di Discogs) con le stesse credenziali e lo stesso ritmo."""
+        headers = {"User-Agent": USER_AGENT, "Authorization": f"Discogs token={self._token}"}
+        for attempt in range(3):
+            self._wait_turn()
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    self.calls += 1
+                    self._respect_remaining(resp.headers)
+                    return resp.read()
+            except urllib.error.HTTPError as e:
+                self.calls += 1
+                if e.code == 429:
+                    time.sleep(60)
+                    continue
+                return b""
+            except (urllib.error.URLError, TimeoutError, OSError):
+                time.sleep(3 * (attempt + 1))
+        return b""
+
     def identity(self):
         return self.request("GET", "/oauth/identity")
 
@@ -1156,13 +1177,20 @@ class AIVision:
     def choose(self, image, candidates):
         """Quale candidato è il disco della foto (passo 4)."""
         lines = []
+        with_cover = any("_cover" in r for r in candidates)
         for r in candidates:
             label = f"{r.get('labels') or ', '.join(r.get('label_names', []))}"
-            lines.append(" | ".join(str(x) for x in (
-                r["id"], clean_artist(r.get("artists")), r.get("title"), label, r.get("country") or "",
-                r.get("year") or "", r.get("formats") or "", ", ".join(r.get("barcodes", [])[:3]))))
+            cols = [r["id"], clean_artist(r.get("artists")), r.get("title"), label, r.get("country") or "",
+                    r.get("year") or "", r.get("formats") or "", ", ".join(r.get("barcodes", [])[:3])]
+            if with_cover:
+                cols.append(f"cover distance {r['_cover']:.2f}" if "_cover" in r else "cover not compared")
+            lines.append(" | ".join(str(x) for x in cols))
         text = "\n".join(lines)
-        return self._call(image, AI_CHOOSE_PROMPT.format(candidates=text), AI_CHOOSE_SCHEMA, 400,
+        prompt = AI_CHOOSE_PROMPT.format(candidates=text)
+        if with_cover:
+            prompt += ("\n\nThe last column is the visual distance between the photo and that release's Discogs "
+                       "cover images (0 = identical; lower is more similar). Use it as one clue among the others.")
+        return self._call(image, prompt, AI_CHOOSE_SCHEMA, 400,
                           extra_input_tokens=len(text) // 3)
 
 
@@ -1231,7 +1259,8 @@ def coherent(release, ai_data, ocr_text):
 
 # Metodi di riconoscimento: con barcode o catno esatti la release è certa; con
 # l'AI o con artista e titolo (locale-testo) va verificata.
-UNVERIFIED_METHODS = ("ai", "locale-testo")
+UNVERIFIED_METHODS = ("ai", "locale-testo", "copertina")
+COVER_DIR = dd.DATA_DIR / "copertine"
 COMPILATION_WORDS_RE = re.compile(r"\b(various artists|compilation|compiled by|v\s*/\s*a)\b", re.I)
 TRACK_ARTIST_RE = re.compile(r"^\s*(?:[A-Ha-h]\s?\d{1,2}|\d{1,2})\s*[.):\-–]?\s+(.+?)\s+[-–—]\s+\S")
 
@@ -1247,6 +1276,8 @@ def method_of(fonte, release):
             return code
     if not fonte:
         return ""
+    if fonte.startswith("copertina"):
+        return "copertina"
     return "ai" if fonte.startswith("ai") else "locale-testo"
 
 
@@ -1376,14 +1407,59 @@ def merge_ranked(*lists):
     return out
 
 
-def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PHOTOS):
+class CoverCheck:
+    """Confronto visivo con le copertine di Discogs (copertine.py), usato dal riconoscimento:
+    - tra più candidati, sceglie quello con la copertina riconosciuta (se stacca gli altri);
+    - conferma un riconoscimento senza codice se la copertina della release proposta è la stessa.
+    trusted: release già confermate a mano in passato (tabella conferme): per loro niente verifica."""
+
+    def __init__(self, store, matcher, trusted=()):
+        self.store, self.matcher, self.trusted = store, matcher, set(trusted)
+        self.compared = 0
+
+    def distances(self, photos, candidates, release_data=None):
+        covers = {}
+        for r in candidates[:copertine_module().MAX_CANDIDATES]:
+            try:
+                covers[r["id"]] = self.store.paths(r["id"], (release_data or {}).get(r["id"]))
+            except (ApiError, ApiUncertain, OSError):
+                continue
+        self.compared += 1
+        return self.matcher.compare([str(p) for p in photos], {k: v for k, v in covers.items() if v})
+
+    def pick(self, photos, candidates):
+        """(release scelta o None, testo del confronto)."""
+        distances = self.distances(photos, candidates)
+        chosen_id, text = self.matcher.verdict(distances)
+        for r in candidates:
+            if r["id"] in distances:
+                r["_cover"] = distances[r["id"]]
+        chosen = next((r for r in candidates if r["id"] == chosen_id), None)
+        return chosen, text
+
+    def confirms(self, photos, release):
+        """(True se la copertina della release è quella delle foto, testo)."""
+        distances = self.distances(photos, [release])
+        d = distances.get(release["id"])
+        if d is None:
+            return False, "copertina: nessun confronto possibile"
+        return self.matcher.strong(d), f"copertina ({self.matcher.backend}): distanza {d:.2f}" + (
+            ", riconosciuta" if self.matcher.strong(d) else ", diversa o non riconoscibile")
+
+
+def copertine_module():
+    import copertine
+    return copertine
+
+
+def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PHOTOS, covers=None):
     """Riconosce il disco di una foto, o di più foto dello stesso disco (path = lista: sottocartella).
     cache: dati AI già pagati per questo disco ({"read": ..., "choice": ...}), che non vengono mai
     richiesti di nuovo. Un riconoscimento senza codice (AI o artista e titolo) che non supera
     check_match ha esito da_verificare: la release proposta resta salvata ma il disco non va in vendita.
     Con più foto: se i codici letti in foto diverse portano a release diverse, da_verificare."""
     ev = Evidence()
-    rec = identify(path, con, api, use_ocr, ai, cache, ev, max_photos)
+    rec = identify(path, con, api, use_ocr, ai, cache, ev, max_photos, covers)
     rec.metodo = method_of(rec.fonte, rec.release)
     if rec.esito == "trovato" and ev.per_photo:
         rec.motivo = photos_in_contrast(con, ev.per_photo, rec.release_id)
@@ -1391,10 +1467,22 @@ def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PH
             rec.esito = "da_verificare"
             rec.details += f"; DA VERIFICARE: {rec.motivo}"
     if rec.esito == "trovato" and rec.metodo in UNVERIFIED_METHODS:
-        rec.motivo = check_match(rec.release, ev, rec.ai_read)
-        if rec.motivo:
-            rec.esito = "da_verificare"
-            rec.details += f"; DA VERIFICARE: {rec.motivo}"
+        if covers and rec.release_id in covers.trusted:
+            rec.details += "; release già confermata a mano in passato: nessuna verifica"
+        elif rec.metodo == "copertina":
+            pass  # scelta sulla copertina: il testo non può smentirla
+        else:
+            rec.motivo = check_match(rec.release, ev, rec.ai_read)
+            if rec.motivo and covers:
+                paths = list(path) if isinstance(path, (list, tuple)) else [path]
+                ok, text = covers.confirms(paths, rec.release)
+                rec.details += f"; {text}"
+                if ok:
+                    rec.details += f" (supera il dubbio: {rec.motivo})"
+                    rec.motivo = ""
+            if rec.motivo:
+                rec.esito = "da_verificare"
+                rec.details += f"; DA VERIFICARE: {rec.motivo}"
     if is_unofficial(rec.release):
         rec.details += "; formato 'Unofficial Release': probabilmente bloccata dal marketplace (decide l'API)"
     return rec
@@ -1445,7 +1533,7 @@ def photos_in_contrast(con, per_photo, release_id=None):
 CONTRAST_REASON = "foto della cartella in contrasto"
 
 
-def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS):
+def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, covers=None):
     """Cascata barcode -> catno -> artista/titolo -> AI. Restituisce un Recognition.
     path: una foto, o la lista delle foto di un disco in sottocartella (indizi uniti, una sola
     chiamata AI con al massimo max_photos foto)."""
@@ -1516,12 +1604,23 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS):
         return Recognition("trovato", f"ai+{source(r)}-{(base or 'testo').split('-')[-1]}", r, ranked,
                            ev.describe(), cost, read)
 
-    # 4. L'AI sceglie tra i candidati reali
+    # 4a. Le copertine: se una sola combacia con le foto, è quella (niente seconda chiamata AI)
     shortlist = [r for _s, r, _w in ranked[:AI_MAX_CANDIDATES]]
     ids = [r["id"] for r in shortlist]
     choice = cache.get("choice")
     if choice is not None and choice.get("release_id") not in ids and choice.get("_ids") != ids:
         choice = None  # i candidati sono cambiati (es. database aggiornato): la scelta va rifatta
+    if choice is None and covers is not None:
+        by_cover, text = covers.pick(paths, shortlist)
+        if by_cover is not None:
+            choice = {"release_id": by_cover["id"], "confidence": "high", "reason": text, "_ids": ids}
+            return Recognition("trovato", f"copertina+{source(by_cover)}", by_cover, ranked,
+                               ev.describe() + "; " + text, cost, read, choice)
+        ev_note = text
+    else:
+        ev_note = ""
+
+    # 4b. L'AI sceglie tra i candidati reali (con le distanze delle copertine, se ci sono)
     if choice is None:
         if image is None:  # scelta non in cache e AI spenta: resta da controllare
             return Recognition("multiplo", base, None, ranked, ev.describe(), cost, read)
@@ -1532,7 +1631,7 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS):
         cost += c
         choice["_ids"] = ids
     chosen = next((r for r in shortlist if r["id"] == choice.get("release_id")), None)
-    details = ev.describe()
+    details = ev.describe() + (f"; {ev_note}" if ev_note else "")
     if choice.get("reason"):
         details += f"; scelta AI ({CONFIDENCE_IT.get(choice.get('confidence'), '?')}): {choice['reason']}"
     if chosen is None:
@@ -1541,10 +1640,10 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS):
     return Recognition("trovato", f"ai-scelta+{source(chosen)}", chosen, ranked, details, cost, read, choice)
 
 
-def recognize_safely(path, con, api, use_ocr, ai, cache, max_photos=AI_MAX_PHOTOS):
+def recognize_safely(path, con, api, use_ocr, ai, cache, max_photos=AI_MAX_PHOTOS, covers=None):
     """recognize() con gli errori trasformati in esito "errore"; None se il tetto di spesa AI è raggiunto."""
     try:
-        return recognize(path, con, api, use_ocr, ai, cache, max_photos)
+        return recognize(path, con, api, use_ocr, ai, cache, max_photos, covers)
     except BudgetReached:
         return None
     except (ApiError, OSError, ValueError) as e:
@@ -3009,6 +3108,8 @@ def run(opened):
                         help="ignora lo stato salvato per le foto di questa cartella e le rielabora da capo (anche l'AI, "
                              "che viene pagata di nuovo); solo insieme a --bozza; prima legge l'inventario Discogs e "
                              "salta tutte le foto online (o state online)")
+    parser.add_argument("--senza-copertine", action="store_true",
+                        help="non confrontare le foto con le copertine di Discogs (copertine.py)")
     parser.add_argument("--senza-ai", action="store_true",
                         help="non usa l'AI: solo riconoscimento locale gratuito (le foto incerte vanno da controllare)")
     parser.add_argument("--ai-tetto", type=float, default=50.0,
@@ -3151,6 +3252,13 @@ def run(opened):
               f"spesa finora {money(ai_spent_before)}, tetto {money(args.ai_tetto)}")
     if not args.simula:
         recover_pending_listings(state, api, identity["username"])
+    covers = None
+    if not args.senza_copertine:
+        cm = copertine_module()
+        trusted = [r[0] for r in state.execute("SELECT release_id FROM conferme")]
+        covers = CoverCheck(cm.CoverStore(api, COVER_DIR), cm.Matcher(), trusted)
+        print(f"Confronto delle copertine: {covers.matcher.backend}"
+              + (f", {len(trusted)} release già confermate a mano" if trusted else ""))
     # Nomi ripetuti: prima di elaborare qualsiasi foto, ognuna deve essere riconoscibile senza equivoci.
     conflicts = check_photo_identity(state, photos)
     if conflicts:
@@ -3180,7 +3288,7 @@ def run(opened):
     simulated_csv, simulated_listings, simulated_collectors, simulated_rows_info = [], [], [], []
     stats = {"collezionistici": 0, "righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0,
              "non_vendibili": 0, "non_verificati": 0, "secondo_tentati": 0, "secondo_recuperate": 0,
-             "secondo_costo": 0.0, "ric_locale": 0, "ric_ai": 0, "ric_secondo": 0, "tolti": 0, "pronti": 0,
+             "secondo_costo": 0.0, "ric_locale": 0, "ric_ai": 0, "ric_secondo": 0, "ric_copertina": 0, "tolti": 0, "pronti": 0,
              "pubblicati": 0}
     sale_errors = []
     price_calls = 0
@@ -3208,14 +3316,14 @@ def run(opened):
                     or (args.riprova and row["esito"] in PROBLEMS)
                     or (ai and unsure and cache["read"] is None)
                     or (ai2 and unsure and cache2["read"] is None)):
-                rec = recognize_safely(photo.images, con, api, use_ocr, ai, cache, args.ai_max_foto)
+                rec = recognize_safely(photo.images, con, api, use_ocr, ai, cache, args.ai_max_foto, covers)
                 if rec is None:
                     budget_stop = True
                     break
                 # Secondo tentativo con un modello più forte, solo se il primo non ha trovato il disco
                 rec2, second = None, False
                 if ai2 and rec.esito in ("non_trovato", "multiplo"):
-                    rec2 = recognize_safely(photo.images, con, api, use_ocr, ai2, cache2, args.ai_max_foto)
+                    rec2 = recognize_safely(photo.images, con, api, use_ocr, ai2, cache2, args.ai_max_foto, covers)
                     if rec2 is None:  # tetto di spesa: salvo il primo tentativo e mi fermo
                         budget_stop = True
                     else:
@@ -3227,7 +3335,8 @@ def run(opened):
                             rec2.details += f"; riconosciuto al secondo tentativo ({ai2.model})"
                 final = rec2 if second else rec
                 if final.esito == "trovato":
-                    stats["ric_secondo" if second else "ric_ai" if final.fonte.startswith("ai") else "ric_locale"] += 1
+                    stats["ric_secondo" if second else "ric_copertina" if final.fonte.startswith("copertina")
+                          else "ric_ai" if final.fonte.startswith("ai") else "ric_locale"] += 1
                 old_cost = row["ai_costo"] if same_photo and row["ai_costo"] else 0.0
                 state.execute(
                     "INSERT OR REPLACE INTO foto (external_id, cartella, foto, impronta, media, sleeve, esito, fonte,"
@@ -3542,7 +3651,10 @@ def run(opened):
         print("Riepilogo di questa esecuzione")
         print(f"  dischi elaborati:            {total} (foto totali: {sum(len(p.images) for p in photos)})")
         print(f"  riconosciuti in questa esecuzione: {stats['ric_locale']} al primo colpo (senza AI), "
-              f"{stats['ric_ai']} con l'AI, {stats['ric_secondo']} con il secondo tentativo")
+              f"{stats['ric_ai']} con l'AI, {stats['ric_secondo']} con il secondo tentativo"
+              + (f", {stats['ric_copertina']} con la copertina" if stats["ric_copertina"] else ""))
+        if covers is not None and covers.compared:
+            print(f"  confronti con le copertine di Discogs: {covers.compared} (immagini scaricate: {covers.store.calls})")
         print(f"  righe nel CSV di inventario: {stats['righe_csv']} ({stats['copie_csv']} copie)")
         waiting = state.execute("SELECT COUNT(*) FROM annunci_api WHERE stato = 'pronto'").fetchone()[0]
         if stats["pronti"] or waiting:
