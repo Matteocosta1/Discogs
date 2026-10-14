@@ -1592,13 +1592,20 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, c
     if not ranked:
         return Recognition("non_trovato", "", None, [], ev.describe() + "; nessun candidato coerente con la foto",
                            cost, read)
+    ranked = expand_by_master(con, ranked, ev, read, ocr_text)
 
     def source(r):
         return "api" if r.get("_fonte") == "api" else "locale"
 
-    # Un solo candidato coerente, o un vincitore chiaro: niente seconda chiamata
+    # Un solo candidato coerente, o un vincitore chiaro: niente seconda chiamata. A meno che
+    # un'altra stampa dello stesso master non combaci meglio (catalogo, anno, paese in foto).
     if a_release is not None and coherent(a_release, read, ocr_text):
-        return Recognition("trovato", "ai+" + a_fonte, a_release, ranked, ev.describe(), cost, read)
+        own = next((sc for sc, r, _w in ranked if r["id"] == a_release["id"]), 0.0)
+        better = [r for sc, r, _w in ranked if r.get("_master_sibling") and sc > own]
+        if not better:
+            return Recognition("trovato", "ai+" + a_fonte, a_release, ranked, ev.describe(), cost, read)
+        ev.ai_note = (ev.ai_note or "") + (f"; altre stampe dello stesso master combaciano meglio: "
+                                           f"{', '.join(str(r['id']) for r in better[:5])}")
     if len(ranked) == 1:
         r = ranked[0][1]
         return Recognition("trovato", f"ai+{source(r)}-{(base or 'testo').split('-')[-1]}", r, ranked,
@@ -1638,6 +1645,33 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, c
         return Recognition("non_trovato", base, None, ranked, details + "; l'AI non ha trovato il disco tra i candidati",
                            cost, read, choice)
     return Recognition("trovato", f"ai-scelta+{source(chosen)}", chosen, ranked, details, cost, read, choice)
+
+
+MASTER_SIBLINGS = 80   # versioni dello stesso master aggiunte ai candidati (al massimo)
+
+
+def expand_by_master(con, ranked, ev, read, ocr_text):
+    """Aggiunge ai candidati le altre stampe degli stessi master (stesso album, altra edizione): il
+    testo trova spesso una sola versione, ma catalogo, paese e anno in foto possono indicare un'altra.
+    Le versioni aggiunte entrano con lo stesso punteggio del testo (è lo stesso album) più i bonus
+    di catalogo/etichetta/anno/paese, e devono essere coerenti con la foto come le altre."""
+    masters = [r.get("master_id") for _s, r, _w in ranked[:5] if r.get("master_id")]
+    if not masters:
+        return ranked
+    known = {r["id"] for _s, r, _w in ranked}
+    ids = dd.releases_by_master(con, masters, exclude=known, limit=MASTER_SIBLINGS)
+    if not ids:
+        return ranked
+    siblings = [r for r in dd.get_releases(con, ids) if format_allowed(r)]
+    extra = [x for x in score_candidates(siblings, ev) if coherent(x[1], read, ocr_text)]
+    if not extra:
+        return ranked
+    for _s, r, why in extra:
+        r["_master_sibling"] = True
+        why.append("altra versione dello stesso master")
+    merged = ranked + extra
+    merged.sort(key=lambda x: -x[0])
+    return merged
 
 
 def recognize_safely(path, con, api, use_ocr, ai, cache, max_photos=AI_MAX_PHOTOS, covers=None):

@@ -212,5 +212,49 @@ class TestCopertineNelRiconoscimento(CoverRun):
         self.assertEqual(row["esito"], "da_verificare")
 
 
+class TestAltreStampeDelMaster(CoverRun):
+    """Il testo trova la stampa US del 2012, ma la foto dice UK 2015: l'altra versione dello stesso
+    master (titolo diverso, che il testo non avrebbe trovato) entra tra i candidati e vince."""
+    photos = {"VG+": ["IMG_0020"]}
+
+    def setUp(self):
+        super().setUp()
+        read = {"photo_type": "front", "compilation": False, "artist": "Theo Parrish", "title": "Dance Of The Medusa",
+                "label": "Sound Signature", "catno": "", "year": "2015", "country": "UK", "barcode": "",
+                "readable_text": "THEO PARRISH\nDANCE OF THE MEDUSA\nMade in UK 2015", "recognized_artist": "",
+                "recognized_title": ""}
+        for target, values in ((tp.OCR, {"IMG_0020": []}), (tp.AI_READ, {"IMG_0020": read}),
+                               (tp.AI_CHOICE, {"IMG_0020": {"release_id": 4207271, "confidence": "medium",
+                                                            "reason": "UK 2015"}})):
+            p = mock.patch.dict(target, values)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_la_stampa_che_combacia_meglio_vince(self):
+        self.run.main(csv=False)
+        row = self.state().execute("SELECT * FROM foto WHERE external_id = 'IMG_0020'").fetchone()
+        self.assertEqual((row["esito"], row["release_id"]), ("trovato", 4207271))
+        self.assertIn("anno, paese", row["candidati"])
+
+    def test_expand_by_master_aggiunge_le_altre_versioni(self):
+        """Se il testo trova solo la stampa US, l'altra versione del master entra tra i candidati."""
+        import sqlite3
+        con = sqlite3.connect(self.run.db)
+        con.row_factory = sqlite3.Row
+        self.addCleanup(con.close)
+        us = vendi.dd.get_releases(con, [4207270])[0]
+        ev = vendi.Evidence()
+        read = tp.AI_READ["IMG_0020"]
+        vendi.ai_evidence(ev, read)
+        ranked = vendi.score_candidates([us], ev)
+        merged = vendi.expand_by_master(con, ranked, ev, read, "")
+        self.assertEqual([r["id"] for _s, r, _w in merged], [4207271, 4207270])       # UK 2015 davanti
+        self.assertTrue(merged[0][1]["_master_sibling"])
+        self.assertIn("altra versione dello stesso master", merged[0][2])
+        self.assertEqual(vendi.expand_by_master(con, [], ev, read, ""), [])
+        self.assertEqual(vendi.dd.releases_by_master(con, [777], exclude=[4207270]), [4207271])
+        self.assertEqual(vendi.dd.releases_by_master(con, [None]), [])
+
+
 if __name__ == "__main__":
     unittest.main()

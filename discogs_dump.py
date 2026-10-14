@@ -506,6 +506,18 @@ def word_frequency(con, word):
     return row[0] if row else 0
 
 
+def releases_by_master(con, master_ids, exclude=(), limit=80):
+    """Le altre versioni (stampe) degli stessi master: id delle release con quei master_id, escluse
+    quelle già note. Serve a scegliere la stampa giusta quando il testo trova solo una versione."""
+    master_ids = [m for m in dict.fromkeys(master_ids) if m]
+    if not master_ids:
+        return []
+    marks = ",".join("?" * len(master_ids))
+    rows = con.execute(f"SELECT id FROM releases WHERE master_id IN ({marks}) ORDER BY id LIMIT ?",
+                       (*master_ids, limit + len(exclude))).fetchall()
+    return [r[0] for r in rows if r[0] not in set(exclude)][:limit]
+
+
 def get_releases(con, ids):
     """Dettagli delle release indicate, con etichette, numeri di catalogo e barcode di ognuna."""
     ids = list(dict.fromkeys(ids))

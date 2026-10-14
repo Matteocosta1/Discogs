@@ -40,10 +40,14 @@ RELEASES = [
     # Francisco - Music Business: stesso disco in LP e in CD (catalogo del CD semplificato)
     (572658, "Francisco", "Music Business", "Nature Records", "NAT2130", "Italy", 2005, "Vinyl, LP, Album"),
     (568083, "Francisco", "Music Business", "Nature Records", "NATCD2130", "Italy", 2005, "CD, Album"),
+    # Ristampa UK di Dance Of The Medusa con un titolo diverso: stesso master (777) della 4207270
+    (4207271, "Theo Parrish", "Medusa", "Sound Signature UK", "SSUK-049", "UK", 2015, "Vinyl, 12\", Reissue"),
 ]
+MASTERS = {4207270: 777, 4207271: 777}
 
 # Prezzo suggerito (uguale per tutti i gradi) e dati del marketplace di ogni release.
 MARKET = {
+    4207271: (18.0, {"want": 20, "have": 100}, {"num_for_sale": 7, "lowest_price": {"value": 18.0}}),
     1901512: (120.0, {"want": 50, "have": 100}, {"num_for_sale": 0}),           # 240 €, collezionistico
     5206239: (13.0, {"want": 10, "have": 100}, {"num_for_sale": 12, "lowest_price": {"value": 26.0}}),
     5819891: (15.0, {"want": 1, "have": 5}, {"num_for_sale": 3, "lowest_price": {"value": 15.0}}),
@@ -113,7 +117,7 @@ def build_db(path):
     for rid, artist, title, label, catno, country, year, formats in RELEASES:
         con.execute("INSERT INTO releases VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (rid, title, artist, f"{label} ({catno})", catno, formats, country, str(year), year,
-                     "", "", None, "Accepted", ""))
+                     "", "", MASTERS.get(rid), "Accepted", ""))
         con.execute("INSERT INTO catnos VALUES (?,?,?,?)", (rid, label, catno, dd.normalize_catno(catno)))
     for rid, barcode in RELEASE_BARCODES:
         con.execute("INSERT INTO barcodes VALUES (?,?,?,?)", (rid, barcode, dd.normalize_catno(barcode), ""))
