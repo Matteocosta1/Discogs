@@ -3625,6 +3625,11 @@ def run(opened):
                              "(invece di 4), al massimo 3 candidati, niente Gemini, niente secondo tentativo, niente "
                              "Google. La porta d'uscita resta: senza copertina che combacia il disco va a mano. "
                              "Alla fine stampa i tempi, per confrontarli con la modalità completa")
+    parser.add_argument("--super-veloce", action="store_true",
+                        help="modalità super veloce, tutta gratis: nessuna AI. Barcode e scritte lette sul Mac "
+                             "(servono solo a trovare i candidati), poi Vision di Apple confronta le foto con le "
+                             "copertine Discogs (1 immagine, al massimo 5 candidati). Decide solo Vision: se la "
+                             "copertina non combacia nettamente, il disco va a mano. Alla fine stampa i tempi")
     parser.add_argument("--senza-copertine", action="store_true",
                         help="non confrontare le foto con le copertine di Discogs (copertine.py)")
     parser.add_argument("--senza-ai", action="store_true",
@@ -3767,14 +3772,21 @@ def run(opened):
     state = open_state(STATE_DB)
     opened.append(state)
     ai = ai2 = None
+    if args.super_veloce:
+        args.veloce = args.senza_ai = True
     if args.veloce:
         args.senza_gemini = args.senza_google = args.senza_secondo_tentativo = True
         cmv = copertine_module()
         cmv.MAX_IMAGES, cmv.MAX_CANDIDATES = 1, 3
         global AI_COVER_IMAGES
         AI_COVER_IMAGES = 1
-        print("MODALITÀ VELOCE: barcode, catalogo e copertine (1 immagine, 3 candidati); niente Gemini, "
-              "niente secondo tentativo. Porta d'uscita attiva.")
+        if args.super_veloce:
+            cmv.MAX_CANDIDATES = 5
+            print("MODALITÀ SUPER VELOCE: nessuna AI. Barcode e scritte (sul Mac) trovano i candidati, Vision di "
+                  "Apple confronta le copertine (1 immagine, 5 candidati). Copertina non netta = a mano.")
+        else:
+            print("MODALITÀ VELOCE: barcode, catalogo e copertine (1 immagine, 3 candidati); niente Gemini, "
+                  "niente secondo tentativo. Porta d'uscita attiva.")
     ai_spent_before = state.execute("SELECT COALESCE(SUM(ai_costo), 0) FROM foto").fetchone()[0]
     if not args.senza_ai:
         ai = AIVision(args.ai_modello, args.ai_tetto, ai_spent_before)
@@ -4206,7 +4218,8 @@ def run(opened):
         print()
         elapsed = time.monotonic() - run_started
         done_n = max(1, total - stats["gia_fatte"])
-        print("Riepilogo di questa esecuzione" + (" (MODALITÀ VELOCE)" if args.veloce else ""))
+        print("Riepilogo di questa esecuzione" + (" (MODALITÀ SUPER VELOCE)" if args.super_veloce
+                                                 else " (MODALITÀ VELOCE)" if args.veloce else ""))
         print(f"  tempo: {elapsed / 60:.1f} min, in media {elapsed / done_n:.0f} secondi a disco "
               f"({done_n} dischi elaborati davvero)")
         print(f"  dischi elaborati:            {total} (foto totali: {sum(len(p.images) for p in photos)})")

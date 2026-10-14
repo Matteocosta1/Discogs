@@ -491,6 +491,28 @@ class TestPrimaLeCopertine(CoverRun):
         self.run.main(csv=False)
         self.assertNotEqual([c for c in tp.FakeAI.calls if c[1] == "IMG_0021"], [])  # tocca all'AI
 
+    def super_veloce(self):
+        cmv = vendi.copertine_module()
+        for target, name in ((cmv, "MAX_IMAGES"), (cmv, "MAX_CANDIDATES"), (vendi, "AI_COVER_IMAGES")):
+            p = mock.patch.object(target, name, getattr(target, name, None), create=True)
+            p.start()
+            self.addCleanup(p.stop)
+        self.run.main("--super-veloce", csv=False)
+        return self.state().execute("SELECT * FROM foto WHERE external_id = 'IMG_0021'").fetchone()
+
+    def test_super_veloce_copertina_netta_va_in_vendita_senza_ai(self):
+        FakeMatcher.distances = {("IMG_0021", 4207271): 0.10}
+        row = self.super_veloce()
+        self.assertEqual((row["esito"], row["release_id"]), ("trovato", 4207271))
+        self.assertEqual(tp.FakeAI.calls, [])
+        self.assertEqual(row["ai_costo"], 0)
+
+    def test_super_veloce_nessuna_copertina_netta_va_a_mano(self):
+        FakeMatcher.distances = {}
+        row = self.super_veloce()
+        self.assertNotEqual(row["esito"], "trovato")
+        self.assertEqual(tp.FakeAI.calls, [])
+
 
 def fake_match_covers(answers):
     """match_covers finto per FakeAI: answers {foto: release_id scelto (0 = nessuno)}."""
