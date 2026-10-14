@@ -1,0 +1,5 @@
+Secrets.xcconfig
+*.xcuserstate
+xcuserdata/
+DerivedData/
+supabase/.env
