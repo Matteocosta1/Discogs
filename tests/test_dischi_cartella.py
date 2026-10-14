@@ -152,12 +152,87 @@ class TestDiscoInSottocartella(DiscBase):
         self.run.main("--bozza")                                      # nessun doppione
         self.assertEqual(len(self.run.api.listings), 2)
 
-    def test_due_sottocartelle_stessa_release_due_copie_senza_controllo_scatti(self):
+    def test_due_sottocartelle_stessa_release_si_fermano(self):
+        """Lotto-05: disco-013 e disco-019 erano lo stesso disco fotografato due volte, finiti come 2 copie."""
         self.disc("disco-001", "d1_fronte", "d1_retro")
-        self.disc("disco-005", "d3_retro")                            # un altro disco con lo stesso barcode
+        self.disc("disco-005", "d3_retro")                            # stesso barcode: stesso disco o copia?
         out = self.run.main()
-        self.assertEqual([(r["release_id"], r["quantity"]) for r in self.run.inventory()], [("572658", "2")])
+        self.assertEqual(self.run.inventory(), [])
+        self.assertIn("--copie-diverse disco-001,disco-005", out)
         self.assertNotIn("date di scatto usate", out)
+        self.assertEqual({r["esito"] for r in self.foto().values()}, {"stesso_disco"})
+        self.assertEqual(len(self.run.read_csv("da_controllare.csv")), 2)
+
+    def test_due_sottocartelle_copie_diverse_confermate(self):
+        self.disc("disco-001", "d1_fronte", "d1_retro")
+        self.disc("disco-005", "d3_retro")
+        self.run.main()                                               # si fermano
+        self.run.main("--copie-diverse", "disco-001,disco-005")       # confermate: 2 copie
+        self.assertEqual([(r["release_id"], r["quantity"]) for r in self.run.inventory()], [("572658", "2")])
+
+    def test_conferma_parziale_non_basta(self):
+        self.disc("disco-001", "d1_fronte", "d1_retro")
+        self.disc("disco-005", "d3_retro")
+        self.run.main("--copie-diverse", "disco-001")
+        self.assertEqual(self.run.inventory(), [])
+
+    def test_tolta_la_cartella_in_piu_resta_una_copia(self):
+        import shutil
+        self.disc("disco-001", "d1_fronte", "d1_retro")
+        extra = self.disc("disco-005", "d3_retro")
+        self.run.main()
+        shutil.rmtree(extra)
+        self.run.main()
+        self.assertEqual([(r["release_id"], r["quantity"]) for r in self.run.inventory()], [("572658", "1")])
+
+
+class TestTogli(DiscBase):
+    """--togli: un disco già finito in una riga CSV (non ancora caricata) va tolto."""
+
+    def due_copie(self):
+        self.disc("disco-013", "d1_fronte", "d1_retro")
+        self.disc("disco-019", "d3_retro")
+        self.run.main("--copie-diverse", "disco-013,disco-019")      # come il lotto-05: riga con 2 copie
+        self.assertEqual([r["quantity"] for r in self.run.inventory()], ["2"])
+        return {eid.rsplit("-", 1)[0]: eid for eid in self.foto()}
+
+    def test_togli_un_doppione(self):
+        ids = self.due_copie()
+        out = self.run.main("--togli", "disco-019")                   # basta l'inizio del nome, se univoco
+        self.assertIn(f"Tolto: {ids['disco-019']}", out)
+        self.assertEqual(self.run.inventory(), [])                    # la riga è tolta, niente più x2
+        archived = list((self.run.out / "archivio").glob("inventario_001_*.csv"))
+        self.assertEqual(len(archived), 1)                            # il file di prima non si perde
+        self.run.main()                                               # disco-013 torna da solo, file nuovo
+        rows = self.run.inventory()
+        self.assertEqual([(r["release_id"], r["quantity"]) for r in rows], [("572658", "1")])
+        self.assertEqual(rows[0]["external_id"], ids["disco-013"])
+        self.assertTrue((self.run.out / "inventario_002.csv").exists())
+        self.assertEqual(self.foto()[ids["disco-019"]]["esito"], "tolto")
+        self.assertEqual(self.run.read_csv("da_controllare.csv"), [])  # il tolto non è un problema
+        out = self.run.main()                                         # e non torna più
+        self.assertIn("dischi tolti (--togli):      1", out)
+        self.assertEqual(len(self.run.inventory()), 1)
+
+    def test_togli_riga_gia_online_si_rifiuta(self):
+        ids = self.due_copie()
+        con = self.state()
+        con.execute("UPDATE righe_csv SET online = 'in_vendita', online_visto = '2026-10-14'")
+        con.commit()
+        with self.assertRaises(SystemExit) as e:
+            self.run.main("--togli", ids["disco-019"])
+        self.assertIn("già online", str(e.exception))
+        self.assertEqual([r["quantity"] for r in self.run.inventory()], ["2"])
+
+    def test_togli_nome_ambiguo_o_assente(self):
+        self.due_copie()
+        with self.assertRaises(SystemExit) as e:
+            self.run.main("--togli", "disco")
+        self.assertIn("corrisponde a più dischi", str(e.exception))
+        with self.assertRaises(SystemExit) as e:
+            self.run.main("--togli", "disco-099")
+        self.assertIn("nessun disco", str(e.exception))
+        self.assertEqual([r["quantity"] for r in self.run.inventory()], ["2"])   # niente toccato
 
     def test_stessa_foto_in_due_sottocartelle_si_ferma(self):
         self.disc("disco-001", "d1_fronte", "d1_retro")

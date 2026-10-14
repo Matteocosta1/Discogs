@@ -2292,6 +2292,54 @@ def free_rows(state, out_dir, rows):
     return freed
 
 
+def disc_matches(photo, names):
+    """True se il disco è tra quelli indicati: per external_id, per nome (M/disco-013) o per sottocartella."""
+    return bool({photo.external_id, photo.path.name, f"{photo.folder}/{photo.path.name}"} & names)
+
+
+def find_disc(state, name):
+    """external_id della foto/disco indicato con --togli: nome esatto, oppure inizio univoco (disco-019)."""
+    row = state.execute("SELECT external_id FROM foto WHERE external_id = ?", (name,)).fetchone()
+    if row:
+        return row[0]
+    found = [r[0] for r in state.execute("SELECT external_id FROM foto WHERE external_id LIKE ? ESCAPE '\\'",
+                                          (name.replace("_", "\\_").replace("%", "\\%") + "-%",))]
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        raise SystemExit(f"--togli: nessun disco '{name}' nello stato. Usa il nome che compare nell'output "
+                         "(es. disco-019-847f678b).")
+    raise SystemExit(f"--togli: '{name}' corrisponde a più dischi ({', '.join(sorted(found, key=natural_key))}): "
+                     "scrivi il nome completo.")
+
+
+def remove_discs(state, out_dir, names):
+    """--togli: toglie dei dischi dall'inventario. La riga CSV che li contiene viene tolta (copiata nella
+    tabella rielaborati, il file CSV di prima resta in risultati/archivio/); le altre copie della riga
+    tornano da elaborare al prossimo lancio, con il riconoscimento già fatto, in un file CSV nuovo.
+    Mai su righe o annunci che sono stati online: lì si corregge su Discogs.
+    Restituisce (dischi tolti, righe tolte, copie che tornano da elaborare)."""
+    targets = [find_disc(state, n) for n in names]
+    rows = {}
+    for eid in targets:
+        if state.execute("SELECT 1 FROM annunci_api WHERE external_id = ? OR external_id LIKE ?",
+                         (eid, eid + "-copia%")).fetchone():
+            raise SystemExit(f"--togli: {eid} è già stato messo in vendita via API: toglilo da Discogs.")
+        foto = state.execute("SELECT riga_csv FROM foto WHERE external_id = ?", (eid,)).fetchone()
+        row = foto["riga_csv"] and state.execute("SELECT * FROM righe_csv WHERE external_id = ?",
+                                                 (foto["riga_csv"],)).fetchone()
+        if row:
+            if row["online_visto"] or (row["online"] and row["online"] not in FREEABLE):
+                raise SystemExit(f"--togli: la riga {row['external_id']} di inventario_{row['parte']:03d}.csv "
+                                 "risulta già online su Discogs: correggila su Discogs, non qui.")
+            rows[row["external_id"]] = row
+    freed = free_rows(state, out_dir, [("righe_csv", r) for r in rows.values()])
+    state.executemany("UPDATE foto SET esito = 'tolto', motivo = 'tolto a mano con --togli', riga_csv = NULL"
+                      " WHERE external_id = ?", [(e,) for e in targets])
+    state.commit()
+    return targets, list(rows.values()), sorted(freed - set(targets), key=natural_key)
+
+
 def prepare_rework(state, photos, out_dir, inventory, sales=None):
     """--rielabora: le foto indicate tornano da elaborare da capo (riconoscimento, AI compresa,
     prezzo e annuncio). inventory: l'inventario Discogs letto all'inizio (None se non leggibile).
@@ -2327,7 +2375,8 @@ def prepare_rework(state, photos, out_dir, inventory, sales=None):
         else:
             skipped.add(owner)
     free_rows(state, out_dir, to_free)
-    redo = ids - skipped
+    removed = {r[0] for r in state.execute("SELECT external_id FROM foto WHERE esito = 'tolto'")}
+    redo = ids - skipped - removed
     archive = [("foto", r["external_id"], json.dumps(dict(r)), now())
                for r in state.execute("SELECT * FROM foto").fetchall() if r["external_id"] in redo]
     state.executemany("DELETE FROM collezionistici WHERE external_id = ?", [(e,) for e in redo])
@@ -2734,6 +2783,13 @@ def run(opened):
                         help="non pubblica annunci via API e non modifica i CSV veri: scrive tutto in risultati/simulazione/")
     parser.add_argument("--riprova", action="store_true",
                         help="rianalizza anche le foto finite da controllare (non trovate, più release, senza prezzo)")
+    parser.add_argument("--togli", metavar="DISCHI",
+                        help="toglie dall'inventario uno o più dischi (es. disco-019-847f678b, separati da virgola) "
+                             "fotografati per errore o da non vendere: la loro riga CSV viene tolta e le altre copie "
+                             "della riga tornano da elaborare al prossimo lancio; non si usa su righe già online")
+    parser.add_argument("--copie-diverse", metavar="DISCHI",
+                        help="sottocartelle con la stessa release e grado che sono davvero copie diverse "
+                             "(es. disco-013,disco-019): senza questa conferma si fermano da controllare")
     parser.add_argument("--rielabora", action="store_true",
                         help="ignora lo stato salvato per le foto di questa cartella e le rielabora da capo (anche l'AI, "
                              "che viene pagata di nuovo); solo insieme a --bozza; prima legge l'inventario Discogs e "
@@ -2783,6 +2839,28 @@ def run(opened):
     if args.rielabora and args.simula:
         raise SystemExit("--rielabora cambia lo stato vero (data/vendita_stato.sqlite) e non si può usare con --simula:\n"
                          "per ripetere un test usa --rielabora --bozza, gli annunci restano bozze.")
+
+    if args.togli:
+        if args.simula:
+            raise SystemExit("--togli cambia lo stato vero e non si può usare con --simula.")
+        saved = backup_state(STATE_DB, args.backup_da_tenere)
+        if saved:
+            print(f"Backup dello stato: {saved}")
+        state = open_state(STATE_DB)
+        opened.append(state)
+        out_dir = Path(args.uscita).expanduser()
+        targets, rows, rest = remove_discs(state, out_dir, [n.strip() for n in args.togli.split(",") if n.strip()])
+        write_outputs(state, out_dir, [], [])
+        for eid in targets:
+            print(f"Tolto: {eid}")
+        for r in rows:
+            print(f"  riga {r['external_id']} (release {r['release_id']}, {r['quantita']} copie) tolta da "
+                  f"inventario_{r['parte']:03d}.csv; la versione di prima è in {out_dir / 'archivio'}")
+        if rest:
+            print(f"  tornano da elaborare: {', '.join(rest)}: rilancia vendi.py su questa cartella, finiranno "
+                  "in un file CSV nuovo")
+        print("Se avevi già caricato su Discogs il file di prima, NON ricaricarlo: dimmelo e si corregge su Discogs.")
+        return
 
     photos, warnings = scan_photos(args.cartella)
     for w in warnings:
@@ -2850,7 +2928,7 @@ def run(opened):
     simulated_csv, simulated_listings, simulated_collectors, simulated_rows_info = [], [], [], []
     stats = {"collezionistici": 0, "righe_csv": 0, "copie_csv": 0, "api": 0, "problemi": 0, "gia_fatte": 0,
              "non_vendibili": 0, "non_verificati": 0, "secondo_tentati": 0, "secondo_recuperate": 0,
-             "secondo_costo": 0.0, "ric_locale": 0, "ric_ai": 0, "ric_secondo": 0}
+             "secondo_costo": 0.0, "ric_locale": 0, "ric_ai": 0, "ric_secondo": 0, "tolti": 0}
     sale_errors = []
     price_calls = 0
     total = len(photos)
@@ -2941,6 +3019,8 @@ def run(opened):
                     stats["non_vendibili"] += 1  # già controllata: nessuna richiesta a Discogs
                 else:
                     todo.append((photo, row))    # controllo scaduto: si richiede a Discogs
+            elif row["esito"] == "tolto":
+                stats["tolti"] += 1      # tolto a mano con --togli: non si elabora più
             elif row["esito"] != "sospeso":
                 stats["problemi"] += 1
                 if row["esito"] == "da_verificare" and row["release_id"] and row["prezzo"] is None:
@@ -3003,6 +3083,27 @@ def run(opened):
                     print(f"Attenzione: {label}: data di scatto mancante (DateTimeOriginal) per {len(no_exif)} foto "
                           f"({', '.join(p.external_id for p in no_exif)}): non posso controllare se sono lo stesso "
                           "disco, le conto come copie diverse")
+
+            # Più sottocartelle (dischi) con la stessa release e lo stesso grado: copie diverse o lo stesso
+            # disco fotografato due volte? Non si può sapere dalle foto: si ferma finché non lo dici tu
+            # (--copie-diverse), o finché non togli dal lotto la cartella in più.
+            discs = [(p, r) for p, r in members if p.is_disc]
+            confirmed = {n.strip() for n in (args.copie_diverse or "").split(",") if n.strip()}
+            if len(discs) >= 2 and not all(disc_matches(p, confirmed) for p, _ in discs):
+                names_d = ", ".join(p.name for p, _ in discs)
+                reason = (f"stessa release e grado in {len(discs)} cartelle ({names_d}): se è lo stesso disco "
+                          "fotografato più volte togli dal lotto le cartelle in più; se sono copie diverse rilancia "
+                          f"con --copie-diverse {','.join(p.path.name for p, _ in discs)}")
+                for p, _ in discs:
+                    state.execute("UPDATE foto SET esito = 'stesso_disco', motivo = ? WHERE external_id = ?",
+                                  (reason, p.external_id))
+                state.commit()
+                stats["problemi"] += len(discs)
+                print(f"{label} ({', '.join(p.external_id for p, _ in discs)}): DA CONTROLLARE, {reason}")
+                members = [(p, r) for p, r in members if not p.is_disc]
+                if not members:
+                    continue
+                names, label = group_label(members)
 
             # La release si può vendere? Una richiesta per release (GET /releases/{id}), poi in cache.
             # Se è bloccata: niente prezzo, niente statistiche, niente annuncio.
@@ -3199,6 +3300,8 @@ def run(opened):
         print(f"  annunci via API{' (simulati)' if args.simula else ''}: {stats['api']}")
         print(f"  foto da controllare:         {stats['problemi']}")
         print(f"  foto già in vendita:         {stats['gia_fatte']}")
+        if stats["tolti"]:
+            print(f"  dischi tolti (--togli):      {stats['tolti']}")
         print(f"  dischi non vendibili (bloccati da Discogs): {stats['non_vendibili']} (vedi non_vendibili.csv)")
         print(f"  dischi collezionistici:      {stats['collezionistici']} (vedi collezionistici.csv)")
         print(f"  richieste API: {api.calls} (di cui prezzi e dati collezionistici: {price_calls})")

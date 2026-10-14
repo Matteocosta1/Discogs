@@ -227,9 +227,22 @@ lotto-02/
   `non_vendibili.csv`, `collezionistici.csv`, `riconoscimento.csv`) il disco
   compare come `VG+/disco-001 (3 foto)`; nel CSV di inventario con il suo
   external_id.
-- **Copie.** Più copie dello stesso disco = più sottocartelle, oppure un file
-  vuoto `copie-2` (o `copie-3`…) nella sottocartella. Via API (es. con
-  `--bozza`) si crea un annuncio per copia: `disco-002-…`, `disco-002-…-copia2`.
+- **Copie.** Il modo sicuro è un file vuoto `copie-2` (o `copie-3`…) nella
+  sottocartella. Via API (es. con `--bozza`) si crea un annuncio per copia:
+  `disco-002-…`, `disco-002-…-copia2`.
+- **Due sottocartelle con la stessa release e lo stesso grado** si fermano in
+  `da_controllare.csv` (motivo "stesso disco"): dalle foto non si capisce se
+  sono due copie o lo stesso disco fotografato due volte (lotto-05: disco-013
+  e disco-019). Se è lo stesso disco togli dal lotto la cartella in più e
+  rilancia; se sono copie diverse rilancia con
+  `--copie-diverse disco-013,disco-019`.
+- **`--togli disco-019-847f678b`** (anche più nomi separati da virgola, o solo
+  l'inizio del nome se univoco): toglie un disco già finito in una riga CSV
+  NON ancora caricata. La riga viene tolta dal suo `inventario_NNN.csv` (la
+  versione di prima resta in `risultati/archivio/`), il disco non si elabora
+  più, e le altre copie della riga tornano da elaborare al prossimo lancio, in
+  un file CSV nuovo, senza rifare il riconoscimento. Si rifiuta su righe già
+  viste online e su annunci via API: lì si corregge su Discogs.
 - **Stessa foto due volte** (in due sottocartelle, o una foto aggiunta a un
   disco già elaborato): lo script si ferma prima di elaborare, come per i nomi
   ripetuti. Non aggiungere né togliere foto a un disco già messo in vendita.
