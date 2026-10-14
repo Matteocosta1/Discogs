@@ -490,3 +490,88 @@ class TestPrimaLeCopertine(CoverRun):
         FakeMatcher.distances = {}
         self.run.main(csv=False)
         self.assertNotEqual([c for c in tp.FakeAI.calls if c[1] == "IMG_0021"], [])  # tocca all'AI
+
+
+def fake_match_covers(answers):
+    """match_covers finto per FakeAI: answers {foto: release_id scelto (0 = nessuno)}."""
+    def match_covers(self, photos, candidates):
+        key = "+".join(photos)
+        self._pay()
+        tp.FakeAI.calls.append((self.model, "copertine:" + key))
+        TestAICopertine.seen.append([r["id"] for r, _imgs in candidates])
+        rid = answers.get(key, 0)
+        return {"release_id": rid, "confidence": "high" if rid else "low", "reason": "finto"}, 0.01
+    return match_covers
+
+
+class TestAICopertine(CoverRun):
+    """Zona di dubbio di Vision: l'AI guarda le foto accanto alle copertine Discogs e decide."""
+    photos = {"VG+": ["IMG_0021"], "NM": ["IMG_0004"]}
+    seen = []
+    DUBBIO = 0.40   # pil: sopra 0.35 (stessa copertina) e sotto 0.47 (sicuramente diversa)
+
+    def setUp(self):
+        super().setUp()
+        TestAICopertine.seen = []
+        ocr = [("THEO PARRISH", 0.06), ("DANCE OF THE MEDUSA", 0.05), ("SOUND SIGNATURE", 0.02)]
+        read = {"photo_type": "front", "compilation": False, "artist": "Theo Parrish", "title": "Dance Of The Medusa",
+                "label": "Sound Signature", "catno": "", "year": "2015", "country": "UK", "barcode": "",
+                "readable_text": "THEO PARRISH\nDANCE OF THE MEDUSA", "recognized_artist": "",
+                "recognized_title": ""}
+        for target, values in ((tp.OCR, {"IMG_0021": ocr}), (tp.AI_READ, {"IMG_0021": read}),
+                               (tp.AI_CHOICE, {"IMG_0021": {"release_id": 4207271, "confidence": "medium",
+                                                            "reason": "UK 2015"}})):
+            p = mock.patch.dict(target, values)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def answer(self, answers):
+        p = mock.patch.object(tp.FakeAI, "match_covers", fake_match_covers(answers), create=True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def row(self, eid):
+        return self.state().execute("SELECT * FROM foto WHERE external_id = ?", (eid,)).fetchone()
+
+    def test_ai_riconosce_la_copertina_prima_di_leggere(self):
+        self.answer({"IMG_0021": 4207271})
+        FakeMatcher.distances = {("IMG_0021", 4207271): self.DUBBIO, ("IMG_0004", 3993455): 0.10}
+        self.run.main(csv=False)
+        row = self.row("IMG_0021")
+        self.assertEqual((row["esito"], row["release_id"]), ("trovato", 4207271))
+        self.assertTrue(row["fonte"].startswith("copertina-ai"))
+        self.assertIn("copertine guardate dall'AI", row["dettagli"])
+        calls = [c[1] for c in tp.FakeAI.calls if "IMG_0021" in c[1]]
+        self.assertEqual(calls, ["copertine:IMG_0021"])      # solo il confronto, nessuna lettura
+        self.assertIn(4207271, TestAICopertine.seen[0])
+
+    def test_nessuna_copertina_secondo_l_ai_allora_lettura(self):
+        self.answer({})
+        FakeMatcher.distances = {("IMG_0021", 4207271): self.DUBBIO, ("IMG_0004", 3993455): 0.10}
+        self.run.main(csv=False)
+        calls = [c[1] for c in tp.FakeAI.calls if "IMG_0021" in c[1]]
+        self.assertEqual(calls[0], "copertine:IMG_0021")
+        self.assertIn("IMG_0021", calls)                     # poi l'AI legge la foto, come prima
+
+    def test_copertina_lontana_niente_ai_sulle_copertine(self):
+        self.answer({"IMG_0021": 4207271})
+        FakeMatcher.distances = {("IMG_0021", 4207271): 0.9, ("IMG_0004", 3993455): 0.10}
+        self.run.main(csv=False)
+        self.assertNotIn("copertine:IMG_0021", [c[1] for c in tp.FakeAI.calls])
+
+    def test_porta_d_uscita_salvata_dall_ai(self):
+        # IMG_0004: artista e titolo puliti, Vision in dubbio: decide l'AI guardando le copertine
+        self.answer({"IMG_0004": 3993455})
+        FakeMatcher.distances = {("IMG_0004", 3993455): self.DUBBIO}
+        self.run.main(csv=False)
+        row = self.row("IMG_0004")
+        self.assertEqual(row["esito"], "trovato")
+        self.assertIn("stessa grafica di 3993455", row["dettagli"])
+
+    def test_porta_d_uscita_l_ai_dice_diversa(self):
+        self.answer({})
+        FakeMatcher.distances = {("IMG_0004", 3993455): self.DUBBIO}
+        self.run.main(csv=False)
+        row = self.row("IMG_0004")
+        self.assertEqual(row["esito"], "da_verificare")
+        self.assertIn(vendi.COVER_REASON, row["motivo"])

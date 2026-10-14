@@ -1089,6 +1089,34 @@ AI_CHOOSE_SCHEMA = {
 }
 CONFIDENCE_IT = {"high": "alta", "medium": "media", "low": "bassa"}
 
+# L'AI con la vista confronta le foto del disco con le immagini Discogs dei candidati (copertine)
+AI_COVER_CANDIDATES = 3     # candidati in zona di dubbio mostrati all'AI, i più vicini
+AI_COVER_IMAGES = 2         # immagini Discogs per candidato (copertina e retro)
+AI_COVER_EDGE = 768         # lato lungo delle immagini per questo confronto (basta per riconoscere una grafica)
+AI_COVER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "release_id": {"type": "integer"},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "reason": {"type": "string"},
+    },
+    "required": ["release_id", "confidence", "reason"],
+    "additionalProperties": False,
+}
+AI_COVER_PROMPT = """You are checking which Discogs release a vinyl record is, by comparing ARTWORK.
+
+The first {n_photos} image(s) are photos of the record taken by the seller (front and back sleeve; they may be
+taken at an angle, with glare, shrink-wrap, stickers or wear). After them come Discogs reference images:
+{candidates}
+
+Decide whether the seller's photos show the SAME sleeve artwork as one candidate's images: same layout, same
+picture or illustration, same typography and logo placement, same colors. Ignore differences caused by lighting,
+angle, perspective, glare, wear, price stickers and shrink-wrap. Different pressings can share the same artwork:
+if two candidates look identical, prefer the one whose details (label, catalog number, country, text) match what
+is visible in the photos; if you cannot tell them apart, answer the closest one with confidence "medium".
+If NO candidate shows the same artwork, answer release_id 0.
+Use confidence "high" only if you are sure the artwork is the same."""
+
 
 # --------------------------------------------------------------------------
 # Secondo servizio di riconoscimento: Google Cloud Vision (ricerca web dell'immagine), facoltativo
@@ -1348,11 +1376,11 @@ class AIVision:
         small.save(buf, format="JPEG", quality=85)
         return base64.standard_b64encode(buf.getvalue()).decode(), small.size[0] * small.size[1] / 750
 
-    def _call(self, image, prompt, schema, max_tokens, extra_input_tokens=0):
+    def _call(self, image, prompt, schema, max_tokens, extra_input_tokens=0, raw=False):
         """image: una foto preparata (base64, token stimati) o, per un disco con più foto, una lista:
         una sola chiamata con tutte le immagini; il costo stimato le somma tutte."""
         images = image if isinstance(image, list) else [image]
-        if len(images) > 1:
+        if len(images) > 1 and not raw:
             prompt = multi_photo_prompt(prompt, len(images))
         image_tokens = sum(tokens for _data, tokens in images)
         output_config = {"format": {"type": "json_schema", "schema": schema}}
@@ -1404,6 +1432,79 @@ class AIVision:
                        "cover images (0 = identical; lower is more similar). Use it as one clue among the others.")
         return self._call(image, prompt, AI_CHOOSE_SCHEMA, 400,
                           extra_input_tokens=len(text) // 3)
+
+
+    @staticmethod
+    def prepare_small(img):
+        """Come prepare, ma più piccola: per il confronto delle copertine."""
+        small = img.copy()
+        small.thumbnail((AI_COVER_EDGE, AI_COVER_EDGE))
+        return AIVision.prepare(small)
+
+    def match_covers(self, photos, candidates):
+        """photos: foto del disco preparate; candidates: [(release, [immagini Discogs preparate])].
+        Quale candidato ha la stessa grafica delle foto (release_id 0 = nessuno)."""
+        images, lines, n = list(photos), [], len(photos)
+        for i, (r, covers) in enumerate(candidates, 1):
+            first, last = n + 1, n + len(covers)
+            label = f"{r.get('labels') or ', '.join(r.get('label_names', []))}"
+            lines.append(f"- Candidate {i}: release_id {r['id']} = images {first}-{last}: "
+                         f"{clean_artist(r.get('artists'))} - {r.get('title')} ({label}, {r.get('country') or '?'}, "
+                         f"{r.get('year') or '?'})")
+            images += covers
+            n = last
+        prompt = AI_COVER_PROMPT.format(n_photos=len(photos), candidates="\n".join(lines))
+        return self._call(images, prompt, AI_COVER_SCHEMA, 400, raw=True)
+
+
+def ai_cover_match(ai, covers, paths, candidates, cache=None):
+    """L'AI guarda le foto accanto alle immagini Discogs dei candidati in ZONA DI DUBBIO (il confronto
+    di Vision non basta per decidere: riflessi, foto storte, cellophane). Restituisce
+    (release scelta o None, scelta, costo, testo). Mai un errore: in caso di problemi, nessuna scelta.
+    candidates: release con "_cover" (distanza di Vision) già calcolata."""
+    if ai is None or not hasattr(ai, "match_covers") or covers is None:
+        return None, None, 0.0, ""
+    cm = copertine_module()
+    backend = covers.matcher.backend
+    limit = cm.STRONG[backend] + cm.DOUBT[backend]
+    near = sorted((r for r in candidates if r.get("_cover") is not None and r["_cover"] <= limit),
+                  key=lambda r: r["_cover"])[:AI_COVER_CANDIDATES]
+    if not near:
+        return None, None, 0.0, ""
+    ids = sorted(r["id"] for r in near)
+    cached = (cache or {}).get("cover_ai")
+    if cached and cached.get("_ids") == ids:
+        choice, cost = cached, 0.0
+    else:
+        try:
+            photos = [ai.prepare_small(load_image(p)) if hasattr(ai, "prepare_small") else ai.prepare(load_image(p))
+                      for p in paths[:AI_MAX_PHOTOS]]
+            cands = []
+            for r in near:
+                files = covers.store.paths(r["id"])[:AI_COVER_IMAGES]
+                imgs = [ai.prepare_small(load_image(f)) if hasattr(ai, "prepare_small") else ai.prepare(load_image(f))
+                        for f in files]
+                if imgs:
+                    cands.append((r, imgs))
+            if not cands:
+                return None, None, 0.0, ""
+            choice, cost = ai.match_covers(photos, cands)
+        except BudgetReached:
+            return None, None, 0.0, "copertine con l'AI: tetto di spesa raggiunto"
+        except Exception as e:  # il confronto è un aiuto: non deve mai fermare il lotto
+            return None, None, 0.0, f"copertine con l'AI: confronto non riuscito ({type(e).__name__}: {e})"
+        choice = {**(choice or {}), "_ids": ids, "_modello": getattr(ai, "model", "")}
+        if cache is not None:
+            cache["cover_ai"] = choice
+    conf = choice.get("confidence")
+    chosen = next((r for r in near if r["id"] == choice.get("release_id")), None)
+    text = (f"copertine guardate dall'AI ({', '.join(str(r['id']) for r in near)}): "
+            + (f"stessa grafica di {chosen['id']} (sicurezza {CONFIDENCE_IT.get(conf, '?')})" if chosen
+               else "nessuna con la stessa grafica")
+            + (f" - {choice.get('reason')}" if choice.get("reason") else ""))
+    if chosen is not None and conf == "high":
+        return chosen, choice, cost, text
+    return None, choice, cost, text
 
 
 def multi_photo_prompt(prompt, n):
@@ -1721,6 +1822,15 @@ def recognize(path, con, api, use_ocr, ai=None, cache=None, max_photos=AI_MAX_PH
                 # combaciano con un'immagine della release su Discogs. Nessuna eccezione (nemmeno se il
                 # testo torna o se Gemini concorda): copertina diversa o non confrontabile = a mano.
                 ok, text = covers.confirms(paths, rec.release)
+                if not ok and ai is not None:
+                    # zona di dubbio di Vision: l'AI guarda le foto accanto alle immagini Discogs
+                    d, _t = covers.distance(paths, rec.release)
+                    rel = {**rec.release, "_cover": d}
+                    by_ai, _pick, c_cost, ai_text = ai_cover_match(ai, covers, paths, [rel], cache)
+                    rec.ai_cost += c_cost
+                    if ai_text:
+                        text += f"; {ai_text}"
+                    ok = by_ai is not None
                 rec.details += f"; {text}"
                 if ok and rec.motivo and not is_trap(rec.motivo):
                     rec.details += f" (supera il dubbio: {rec.motivo})"
@@ -1854,6 +1964,7 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, c
         if found:
             fonte, ranked = api_fonte, score_candidates(found, ev)
 
+    pre_cost = 0.0
     # 1b. REGOLA PRINCIPALE: prima le copertine, poi l'AI. La parte locale ha trovato più candidati
     # ma nessuno sicuro: si confrontano le foto con le copertine Discogs dei candidati (e delle altre
     # stampe dello stesso disco). Se UNA combacia nettamente è quella: niente AI, costo zero.
@@ -1868,6 +1979,14 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, c
                 where = "api" if by_cover.get("_fonte") == "api" else "locale"
                 return Recognition("trovato", f"copertina+{where}", by_cover, local_ranked,
                                    ev.describe() + "; prima delle AI: " + text)
+            # Zona di dubbio: l'AI guarda le foto accanto alle copertine Discogs (non legge, confronta)
+            by_ai, ai_pick, c_cost, ai_text = ai_cover_match(ai, covers, paths, shortlist, cache)
+            text += f"; {ai_text}" if ai_text else ""
+            if by_ai is not None:
+                where = "api" if by_ai.get("_fonte") == "api" else "locale"
+                return Recognition("trovato", f"copertina-ai+{where}", by_ai, local_ranked,
+                                   ev.describe() + "; prima delle AI: " + text, c_cost, None, ai_pick)
+            pre_cost = c_cost
             ev.ai_note = (ev.ai_note or "") + f"; prima delle AI: {text}"
 
     if ai is None and not cache.get("read"):  # --senza-ai: solo metodi gratuiti
@@ -1876,7 +1995,7 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, c
         return Recognition("non_trovato", "", None, [], ev.describe())
 
     # 2. L'AI guarda la foto e dice cosa vede
-    cost = 0.0
+    cost = pre_cost
     image = None
     if ai is not None:
         image = AIVision.prepare(img) if img is not None else [AIVision.prepare(i) for i in imgs[:max_photos]]
@@ -1951,6 +2070,13 @@ def identify(path, con, api, use_ocr, ai, cache, ev, max_photos=AI_MAX_PHOTOS, c
             choice = {"release_id": by_cover["id"], "confidence": "high", "reason": text, "_ids": ids}
             return Recognition("trovato", f"copertina+{source(by_cover)}", by_cover, ranked,
                                ev.describe() + "; " + text, cost, read, choice)
+        by_ai, ai_pick, c_cost, ai_text = ai_cover_match(ai, covers, paths, shortlist, cache)
+        cost += c_cost
+        if ai_text:
+            text += f"; {ai_text}"
+        if by_ai is not None:
+            return Recognition("trovato", f"copertina-ai+{source(by_ai)}", by_ai, ranked,
+                               ev.describe() + "; " + text, cost, read, {**ai_pick, "_ids": ids})
         ev_note = text
     else:
         ev_note = ""
