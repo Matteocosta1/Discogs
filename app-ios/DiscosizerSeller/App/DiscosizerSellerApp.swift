@@ -75,13 +75,10 @@ struct LoginView: View {
                         Spacer()
                         Text("v0.1").font(Theme.mono(11)).foregroundStyle(Theme.muted)
                     }
-                    VinylMark(size: 230, spinning: true)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 36)
-                    Text("DISCOSIZER").font(Theme.display(58)).foregroundStyle(Theme.text)
-                    Text("SELLER").font(Theme.display(58)).foregroundStyle(Theme.accent).padding(.top, -16)
+                    HustlerTag()
+                        .padding(.top, 40)
                     Text("Fotografa. Riconosci. Vendi su Discogs.")
-                        .font(Theme.mono(13)).foregroundStyle(Theme.muted).padding(.top, 6)
+                        .font(Theme.mono(13)).foregroundStyle(Theme.muted).padding(.top, 16)
 
                     VStack(spacing: 10) {
                         if hasMacToken {

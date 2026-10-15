@@ -68,7 +68,7 @@ struct ConsoleView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
-                    Text("DISCOSIZER SELLER · BUILD 0.1 · KR").font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    Text("VINYL HUSTLER · BUILD 0.1 · KR").font(.caption2.monospaced()).foregroundStyle(.secondary)
                 }
             }
             .themedBackground()

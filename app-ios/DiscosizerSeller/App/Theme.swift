@@ -213,3 +213,37 @@ extension View {
         self.scrollContentBackground(.hidden).background(Theme.bg)
     }
 }
+
+/// Il logo "cartellino" (direzione B): fondo verde, due barre, VINYL / HUSTLER.
+struct HustlerTag: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("CAT. NO. VH—001")
+                Spacer()
+                Text("MILANO")
+            }
+            .font(Theme.mono(11, .bold)).tracking(1.5)
+            VStack(alignment: .leading, spacing: -12) {
+                Text("VINYL").font(Theme.display(120))
+                Text("HUSTLER").font(Theme.display(94))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            .overlay(alignment: .top) { Rectangle().frame(height: 5) }
+            .overlay(alignment: .bottom) { Rectangle().frame(height: 5) }
+            .padding(.vertical, 14)
+            HStack {
+                Text("DIG. GRADE. FLIP.")
+                Spacer()
+                Text("SIDE A · 33⅓")
+            }
+            .font(Theme.mono(11, .bold)).tracking(1.5)
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.5)
+        .foregroundStyle(Color.black)
+        .padding(20)
+        .background(Theme.accent)
+    }
+}
