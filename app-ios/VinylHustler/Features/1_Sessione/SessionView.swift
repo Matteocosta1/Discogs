@@ -25,6 +25,7 @@ struct SessionView: View {
     @State private var aiReady = true
     @State private var listings: [Listing] = []        // l'inventario Discogs, come in Magazzino
     @State private var loadingInventory = false
+    @State private var info: InfoTopic?
 
     private var media: Grade { Grade(rawValue: mediaRaw) ?? .m }
     private var sleeve: Grade { Grade(rawValue: sleeveRaw) ?? media }
@@ -37,14 +38,10 @@ struct SessionView: View {
         return name.isEmpty ? placeKind : "\(placeKind) \(name)"
     }
     private var today: [Disc] { discs.filter { Calendar.current.isDateInToday($0.createdAt) && $0.status != .tolto } }
-    /// Quelli che aspettano una decisione (i "Dopo" e quelli già online stanno in Revisione).
-    private var waiting: [Disc] {
-        today.filter { !$0.parked && ![DiscStatus.inVendita, .bozza].contains($0.status) }
-    }
 
-    /// Gli ultimi annunci su Discogs (i più recenti per primi).
-    private var recentListings: [Listing] {
-        Array(listings.sorted { ($0.posted ?? "") > ($1.posted ?? "") }.prefix(10))
+    /// I dischi che aspettano qualcosa in Revisione (da decidere, o col prezzo ma non ancora pubblicati).
+    private var inReview: Int {
+        discs.filter { [DiscStatus.daConfermare, .daControllare, .bloccato, .pronto].contains($0.status) }.count
     }
 
     private func loadInventory() async {
@@ -81,50 +78,31 @@ struct SessionView: View {
                             .foregroundStyle(Theme.glow)
                     }
                 } header: {
-                    HUDLabel(number: "01", title: "Posizione (privata)")
+                    InfoHeader(title: "Posizione") { info = .posizione }
                 }
 
                 Section {
                     gradeRow("Vinile", selection: $mediaRaw)
                     gradeRow("Copertina", selection: $sleeveRaw)
                 } header: {
-                    HUDLabel(number: "02", title: "Condizione")
-                } footer: {
-                    Text("Vale per tutti i dischi che fotografi da qui in poi.\nCambi blocco di dischi? Cambia la condizione.")
+                    InfoHeader(title: "Condizione") { info = .condizione }
                 }
 
                 Section {
                     cameraButton
                     if !aiReady { AISignInRow { aiReady = true } }
                 } header: {
-                    HUDLabel(number: "03", title: "Fotocamera")
-                } footer: {
-                    Text("Foto → inquadra copertina, retro o etichetta.\nVideo → passa i dischi uno dopo l'altro.")
+                    InfoHeader(title: "Fotocamera") { info = .fotocamera }
                 }
 
                 Section {
                     HStack {
                         stat("\(today.count)", "fotografati")
-                        stat(listings.isEmpty && loadingInventory ? "…" : "\(listings.count)", "su Discogs")
-                        stat("\(seller.working)", "in corso")
-                    }
-                    // i nuovi scatti stanno sopra…
-                    ForEach(waiting) { disc in
-                        DiscRow(disc: disc)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-                            .listRowBackground(Color.clear)
-                    }
-                    // …e sotto l'inventario che c'è già su Discogs, lo stesso del Magazzino
-                    ForEach(recentListings) { l in
-                        ListingRow(listing: l, disc: discs.first { $0.externalID == l.externalId },
-                                   selecting: false, isSelected: false, currency: seller.currency)
+                        stat(listings.isEmpty && loadingInventory ? "…" : "\(listings.count)", "Discogs")
+                        stat("\(inReview)", "in revisione")
                     }
                 } header: {
                     HUDLabel(number: "04", title: "Oggi")
-                } footer: {
-                    if !listings.isEmpty {
-                        Text("Sopra: i dischi appena fotografati.\nSotto: gli ultimi \(recentListings.count) già su Discogs.\nTutto l'inventario è in Magazzino.")
-                    }
                 }
             }
             .themedBackground()
@@ -159,6 +137,7 @@ struct SessionView: View {
                 Button("Aggiungi") { addKind() }
                 Button("Annulla", role: .cancel) {}
             }
+            .sheet(item: $info) { InfoSheet(topic: $0) }
             .fullScreenCover(isPresented: $camera) {
                 OcchioView(place: place, media: media, sleeve: sleeve) { camera = false; Task { await loadInventory() } }
                     .environment(seller)
@@ -167,31 +146,24 @@ struct SessionView: View {
         }
     }
 
-    /// Il tasto che apre la fotocamera: grande, chiaro, impossibile non vederlo.
+    /// Il tasto che apre la fotocamera: solo il simbolo, grande e al centro. Le spiegazioni stanno nella (i).
     private var cameraButton: some View {
         Button { camera = true } label: {
-            HStack(spacing: 16) {
-                ZStack {
-                    Circle().fill(Color.black).frame(width: 60, height: 60)
-                        .overlay(Circle().stroke(Theme.accent, lineWidth: 2))
-                        .shadow(color: Theme.glow.opacity(breathe ? 0.75 : 0.25), radius: breathe ? 16 : 6)
-                    Circle().stroke(Theme.glow.opacity(breathe ? 0 : 0.5), lineWidth: 1)
-                        .frame(width: 60, height: 60)
-                        .scaleEffect(breathe ? 1.35 : 1)
-                    Image(systemName: "camera.fill").font(.system(size: 22, weight: .semibold)).foregroundStyle(Theme.glow)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Apri la fotocamera").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
-                    Text("Foto: 1 disco\nVideo: più dischi, max 20 secondi")
-                        .font(.system(size: 14)).foregroundStyle(Theme.muted)
-                }
-                Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.muted)
+            ZStack {
+                Circle().fill(Color.black).frame(width: 84, height: 84)
+                    .overlay(Circle().stroke(Theme.accent, lineWidth: 2))
+                    .shadow(color: Theme.glow.opacity(breathe ? 0.75 : 0.25), radius: breathe ? 18 : 6)
+                Circle().stroke(Theme.glow.opacity(breathe ? 0 : 0.5), lineWidth: 1)
+                    .frame(width: 84, height: 84)
+                    .scaleEffect(breathe ? 1.35 : 1)
+                Image(systemName: "camera.fill").font(.system(size: 30, weight: .semibold)).foregroundStyle(Theme.glow)
             }
-            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Apri la fotocamera")
         .onAppear {
             withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false)) { breathe = true }
         }

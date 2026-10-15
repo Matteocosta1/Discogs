@@ -9,20 +9,21 @@ struct WarehouseView: View {
     @Query private var discs: [Disc]
     @State private var listings: [Listing] = []
     @State private var search = ""
-    @State private var filter = Filter.all
+    @State private var filter = Filter.online
     @State private var loading = false
     @State private var confirmDeleteAll = false
     @State private var selecting = false
     @State private var selected: Set<Int> = []
     @State private var toDelete: [Int] = []          // bozze in attesa di conferma
     @State private var message: String?
+    @Environment(\.openURL) private var openURL
 
-    enum Filter: String, CaseIterable { case all = "Tutti", online = "Online", drafts = "Bozze" }
+    enum Filter: String, CaseIterable { case online = "Online", drafts = "Bozze" }
 
     private var shown: [Listing] {
         let q = search.lowercased()
         return listings.filter { l in
-            let inFilter = filter == .all || (filter == .online ? l.status == "For Sale" : l.status == "Draft")
+            let inFilter = filter == .online ? l.status == "For Sale" : l.status == "Draft"
             return inFilter && (q.isEmpty || (l.release.description ?? "").lowercased().contains(q))
         }
     }
@@ -68,7 +69,7 @@ struct WarehouseView: View {
                 ForEach(shown) { l in row(l) }
             } footer: {
                 if !selecting && draftCount > 0 {
-                    Text("Per eliminare una bozza scorrila verso sinistra, oppure tocca Seleziona e scegline tante.")
+                    Text("Tocca un disco per aprirlo su Discogs.\nPer eliminare una bozza scorrila verso sinistra, oppure tocca Seleziona e scegline tante.")
                 }
             }
         }
@@ -162,7 +163,11 @@ struct WarehouseView: View {
                           currency: seller.currency)
         .contentShape(Rectangle())
         .onTapGesture {
-            guard selecting, draft else { return }
+            guard selecting else {                       // fuori da Seleziona: apre l'annuncio su Discogs
+                openURL(URL(string: "https://www.discogs.com/sell/item/\(l.id)")!)
+                return
+            }
+            guard draft else { return }
             if isSelected { selected.remove(l.id) } else { selected.insert(l.id) }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
@@ -249,6 +254,9 @@ struct ListingRow: View {
             if let p = listing.price?.value {
                 Text(p, format: .currency(code: listing.price?.currency ?? currency))
                     .font(.system(size: 15, weight: .semibold))
+            }
+            if !selecting {
+                Image(systemName: "arrow.up.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.muted)
             }
         }
     }
