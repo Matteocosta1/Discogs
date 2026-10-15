@@ -71,7 +71,7 @@ struct WarehouseView: View {
     private func stat(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading) {
             Text(value).font(Theme.display(34)).foregroundStyle(Theme.text)
-            Text(label.uppercased()).font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
+            Text(label).font(.system(size: 13)).foregroundStyle(Theme.muted)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 

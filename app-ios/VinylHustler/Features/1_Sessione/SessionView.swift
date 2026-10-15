@@ -44,10 +44,10 @@ struct SessionView: View {
                                 newKind = ""
                                 addingKind = true
                             } label: {
-                                Image(systemName: "plus").font(.system(size: 14, weight: .bold))
-                                    .frame(width: 40, height: 33)
-                                    .foregroundStyle(Theme.muted)
-                                    .overlay(Rectangle().stroke(Theme.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                                Image(systemName: "plus").font(.system(size: 15, weight: .semibold))
+                                    .frame(width: 40, height: 34)
+                                    .foregroundStyle(Theme.accent)
+                                    .background(Theme.panelHigh, in: Capsule())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Aggiungi un contenitore")
@@ -55,14 +55,15 @@ struct SessionView: View {
                         .padding(.vertical, 2)
                     }
                     HStack(spacing: 10) {
-                        Text(placeKind.uppercased()).font(Theme.mono(13, .bold)).foregroundStyle(Theme.accent)
-                        TextField("numero o nome", text: $placeName).font(Theme.mono(14))
+                        Image(systemName: "archivebox.fill").foregroundStyle(Theme.accent)
+                        Text(placeKind).font(.system(size: 17, weight: .semibold))
+                        TextField("numero o nome", text: $placeName).font(.system(size: 17))
+                            .foregroundStyle(Theme.glow)
                     }
                 } header: {
                     HUDLabel(number: "01", title: "Dove li metti")
                 } footer: {
                     Text("Ogni disco che fotografi si porta dietro questo posto: lo ritrovi sulla scheda del disco, in Magazzino, negli Ordini (\"preleva da…\") e sull'annuncio Discogs, nel campo privato che vedi solo tu.")
-                        .font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 }
 
                 Section {
@@ -72,7 +73,6 @@ struct SessionView: View {
                     HUDLabel(number: "02", title: "Grado")
                 } footer: {
                     Text("Vale per tutti i vinili della sessione. Cambialo quando passi a un blocco di dischi diverso.")
-                        .font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 }
 
                 Section {
@@ -82,7 +82,6 @@ struct SessionView: View {
                     HUDLabel(number: "03", title: "Scatti")
                 } footer: {
                     Text("Una foto basta: copertina, retro o centrino. Col video passi più dischi davanti al telefono e li riconosce tutti.")
-                        .font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 }
 
                 Section {
@@ -101,7 +100,6 @@ struct SessionView: View {
                 } footer: {
                     if waiting.isEmpty && !today.isEmpty {
                         Text("Tutto deciso. Quelli messi su \"Dopo\" li trovi in Revisione.")
-                            .font(Theme.mono(11)).foregroundStyle(Theme.muted)
                     }
                 }
             }
@@ -132,19 +130,20 @@ struct SessionView: View {
         Button { camera = true } label: {
             HStack(spacing: 16) {
                 ZStack {
-                    Circle().stroke(Theme.accent, lineWidth: 3).frame(width: 66, height: 66)
-                    Circle().fill(Theme.accent).frame(width: 54, height: 54)
-                    Image(systemName: "camera.fill").font(.system(size: 22, weight: .bold)).foregroundStyle(Color.black)
+                    Circle().fill(Color.black).frame(width: 60, height: 60)
+                        .overlay(Circle().stroke(Theme.accent, lineWidth: 2))
+                        .shadow(color: Theme.glow.opacity(0.5), radius: 8)
+                    Image(systemName: "camera.fill").font(.system(size: 22, weight: .semibold)).foregroundStyle(Theme.glow)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("APRI LA FOTOCAMERA").font(Theme.display(24)).foregroundStyle(Theme.text)
-                    Text("SCATTO = UN DISCO · REC = TANTI DISCHI")
-                        .font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Apri la fotocamera").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
+                    Text("Scatto = un disco · REC = tanti dischi")
+                        .font(.system(size: 14)).foregroundStyle(Theme.muted)
                 }
                 Spacer()
-                Image(systemName: "chevron.right").foregroundStyle(Theme.accent)
+                Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.muted)
             }
-            .padding(.vertical, 10)
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -152,8 +151,8 @@ struct SessionView: View {
 
     private func stat(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(Theme.display(26)).foregroundStyle(Theme.text)
-            Text(label.uppercased()).font(Theme.mono(9, .semibold)).tracking(1).foregroundStyle(Theme.muted)
+            Text(value).font(.system(size: 28, weight: .bold)).foregroundStyle(value == "0" ? Theme.text : Theme.glow)
+            Text(label).font(.system(size: 13)).foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -161,10 +160,10 @@ struct SessionView: View {
     /// Il tipo di contenitore come pastiglia: verde se scelto. Tenendolo premuto si toglie.
     private func kindChip(_ kind: String) -> some View {
         Button { placeKind = kind } label: {
-            Text(kind.uppercased()).font(Theme.mono(12, .bold)).tracking(1)
-                .padding(.horizontal, 12).padding(.vertical, 8)
+            Text(kind).font(.system(size: 15, weight: .semibold))
+                .padding(.horizontal, 14).padding(.vertical, 8)
                 .foregroundStyle(kind == placeKind ? Color.black : Theme.text)
-                .background(kind == placeKind ? Theme.accent : Theme.panelHigh)
+                .background(kind == placeKind ? Theme.accent : Theme.panelHigh, in: Capsule())
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -188,8 +187,9 @@ struct SessionView: View {
     /// Una riga del grado: cosa si sta gradando, scritto chiaro, e i sei gradi.
     private func gradeRow(_ title: String, symbol: String, selection: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(title.uppercased(), systemImage: symbol)
-                .font(Theme.mono(12, .bold)).tracking(1.2).foregroundStyle(Theme.text)
+            Label(title, systemImage: symbol)
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+                .tint(Theme.accent)
             Picker(title, selection: selection) {
                 ForEach(Grade.allCases) { Text($0.rawValue).tag($0.rawValue) }
             }
@@ -209,8 +209,8 @@ struct AISignInRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("ACCEDI PER IL RICONOSCIMENTO AI · SENZA, LEGGE SOLO BARCODE E SCRITTE")
-                .font(Theme.mono(10, .semibold)).tracking(1).foregroundStyle(Theme.warn)
+            Text("Accedi per il riconoscimento AI. Senza, legge solo barcode e scritte.")
+                .font(.system(size: 14)).foregroundStyle(Theme.muted)
             SignInWithAppleButton(.signIn) { request in
                 nonce = UUID().uuidString
                 request.requestedScopes = [.fullName, .email]

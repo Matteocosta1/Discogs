@@ -1,56 +1,59 @@
 import SwiftUI
 import UIKit
 
-/// Look "Discogs × tecnologico": nero da sala d'ascolto, tipografia condensata, dati in monospace,
-/// angoli vivi e un solo colore di segnale. Tutti i colori e i caratteri stanno qui:
+/// Family feeling Discosizer: nero puro, schede grigie arrotondate come iOS, carattere di sistema,
+/// e il verde Discosizer in quattro gradazioni. Tutti i colori e i caratteri stanno qui:
 /// per cambiare il look dell'app si tocca solo questo file.
 enum Theme {
-    // MARK: Colori
-    static let bg = Color(hex: 0x0A0A0B)          // fondo
-    static let panel = Color(hex: 0x141416)       // schede
-    static let panelHigh = Color(hex: 0x1D1D20)   // campi e righe in evidenza
-    static let line = Color.white.opacity(0.10)   // filetti
+    // MARK: Colori (presi dall'app Discosizer)
+    static let bg = Color.black                   // fondo
+    static let panel = Color(hex: 0x1C1C1E)       // schede
+    static let panelHigh = Color(hex: 0x262629)   // pastiglie, tasti secondari
+    static let field = Color(hex: 0x141414)       // campi di testo
+    static let line = Color.white.opacity(0.08)   // separatori
     static let text = Color.white
-    static let muted = Color.white.opacity(0.55)
-    static let accent = Color(hex: 0xC8F03C)      // verde segnale: azioni e stati "ok"
-    static let military = Color(hex: 0x4B5D33)    // King Rusto Green: gradi e dettagli
-    static let warn = Color(hex: 0xFF6A3D)        // da controllare / errori
+    static let muted = Color(hex: 0x8E8E93)       // testo secondario
+    // La scala di verdi
+    static let glow = Color(hex: 0x39FF14)        // verdino chiaro: logo, luce, riconosciuto
+    static let accent = Color(hex: 0x0AED0C)      // verde Discosizer: azioni
+    static let money = Color(hex: 0x30D158)       // valori positivi, online
+    static let military = Color(hex: 0x1F3C28)    // verde scuro: fondo delle pastiglie
+    // Rosso
+    static let warn = Color(hex: 0xFF453A)
+    static let warnSoft = Color(hex: 0x452323)
 
-    // MARK: Caratteri
-    /// Titoli: condensato e nerissimo, come le testate.
-    static func display(_ size: CGFloat, _ weight: Font.Weight = .black) -> Font {
-        .system(size: size, weight: weight).width(.condensed)
+    static let radius: CGFloat = 16
+
+    // MARK: Caratteri: San Francisco, come Discosizer
+    /// Titoli e cifre grandi.
+    static func display(_ size: CGFloat, _ weight: Font.Weight = .bold) -> Font {
+        .system(size: size, weight: weight)
     }
 
-    /// Dati, etichette, numeri di catalogo: monospace.
-    static func mono(_ size: CGFloat, _ weight: Font.Weight = .medium) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
+    /// Testo, etichette, numeri (il nome è rimasto da quando era monospace).
+    static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight)
     }
 
     /// Barre di navigazione e delle schede (UIKit), da chiamare una volta all'avvio.
     static func configureUIKit() {
         let nav = UINavigationBarAppearance()
         nav.configureWithOpaqueBackground()
-        nav.backgroundColor = UIColor(bg)
+        nav.backgroundColor = .black
         nav.shadowColor = .clear
-        nav.largeTitleTextAttributes = [
-            .font: UIFont.systemFont(ofSize: 40, weight: .black, width: .condensed),
-            .foregroundColor: UIColor.white,
-        ]
-        nav.titleTextAttributes = [
-            .font: UIFont.monospacedSystemFont(ofSize: 13, weight: .semibold),
-            .foregroundColor: UIColor.white,
-        ]
+        nav.largeTitleTextAttributes = [.foregroundColor: UIColor.white]
+        nav.titleTextAttributes = [.foregroundColor: UIColor.white]
         UINavigationBar.appearance().standardAppearance = nav
         UINavigationBar.appearance().scrollEdgeAppearance = nav
         UINavigationBar.appearance().compactAppearance = nav
 
         let tab = UITabBarAppearance()
         tab.configureWithOpaqueBackground()
-        tab.backgroundColor = UIColor(bg)
-        tab.shadowColor = UIColor(white: 1, alpha: 0.10)
+        tab.backgroundColor = .black
+        tab.shadowColor = UIColor(white: 1, alpha: 0.08)
         UITabBar.appearance().standardAppearance = tab
         UITabBar.appearance().scrollEdgeAppearance = tab
+        UISegmentedControl.appearance().selectedSegmentTintColor = UIColor(white: 0.36, alpha: 1)
     }
 }
 
@@ -64,19 +67,15 @@ extension Color {
 
 // MARK: - Componenti
 
-/// Etichetta tecnica in stile HUD: "01 / SESSIONE".
+/// Intestazione di sezione, come in Discosizer: maiuscolo, grigio, semplice. (Il numero non si mostra più.)
 struct HUDLabel: View {
-    let number: String
+    var number: String = ""
     let title: String
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(number).foregroundStyle(Theme.accent)
-            Text("/").foregroundStyle(Theme.muted)
-            Text(title.uppercased()).foregroundStyle(Theme.muted)
-        }
-        .font(Theme.mono(11, .semibold))
-        .tracking(1.5)
+        Text(title.uppercased())
+            .font(.system(size: 13))
+            .foregroundStyle(Theme.muted)
     }
 }
 
@@ -113,7 +112,7 @@ struct VinylMark: View {
                     .padding(size * 0.027 * CGFloat(i))
             }
             Circle().fill(Theme.accent).frame(width: size * 0.34, height: size * 0.34)
-            Text("DS")
+            Text("VH")
                 .font(.system(size: size * 0.07, weight: .black, design: .monospaced))
                 .foregroundStyle(Color.black)
                 .offset(y: -size * 0.09)
@@ -122,7 +121,8 @@ struct VinylMark: View {
     }
 }
 
-/// Pulsante dell'app: pieno (verde segnale) o a filo. I pulsanti "distruttivi" diventano arancio.
+/// Pulsante dell'app, come il tasto Staff di Discosizer: verde pieno con testo nero,
+/// oppure grigio (secondario). I distruttivi diventano rossi.
 struct SignalButtonStyle: ButtonStyle {
     var filled = true
     @Environment(\.isEnabled) private var isEnabled
@@ -130,17 +130,15 @@ struct SignalButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         let destructive = configuration.role == .destructive
         return configuration.label
-            .font(Theme.mono(13, .bold))
-            .textCase(.uppercase)
-            .tracking(1)
+            .font(.system(size: 16, weight: .semibold))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .padding(.vertical, 13)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity)
             .foregroundStyle(filled ? Color.black : (destructive ? Theme.warn : Theme.text))
-            .background(filled ? (destructive ? Theme.warn : Theme.accent) : Color.clear)
-            .overlay(Rectangle().stroke(filled ? Color.clear : Theme.line, lineWidth: 1))
+            .background(filled ? (destructive ? Theme.warn : Theme.accent) : Theme.panelHigh,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.35)
     }
 }
@@ -151,61 +149,52 @@ struct StatusTag: View {
 
     var body: some View {
         Text(label)
-            .font(Theme.mono(10, .bold))
-            .tracking(1)
-            .padding(.horizontal, 7)
+            .font(.system(size: 12, weight: .semibold))
+            .padding(.horizontal, 10)
             .padding(.vertical, 4)
-            .foregroundStyle(foreground)
-            .background(background)
+            .foregroundStyle(colors.fg)
+            .background(colors.bg, in: Capsule())
     }
 
     private var label: String {
         switch status {
-        case .inLavorazione: "IN RICONOSCIMENTO"
-        case .daConfermare: "RICONOSCIUTO"
-        case .pronto: "PRONTO"
-        case .inVendita: "ONLINE"
-        case .bozza: "BOZZA"
-        case .daControllare: "NON RICONOSCIUTO"
-        case .bloccato: "BLOCCATO"
-        case .tolto: "TOLTO"
+        case .inLavorazione: "Sto guardando…"
+        case .daConfermare: "Riconosciuto"
+        case .pronto: "Pronto"
+        case .inVendita: "Online"
+        case .bozza: "Bozza"
+        case .daControllare: "Non riconosciuto"
+        case .bloccato: "Bloccato"
+        case .tolto: "Tolto"
         }
     }
 
-    private var background: Color {
+    /// Le pastiglie di Discosizer: fondo scuro della stessa tinta del testo.
+    private var colors: (fg: Color, bg: Color) {
         switch status {
-        case .inVendita, .pronto: Theme.accent
-        case .daConfermare: Theme.military
-        case .daControllare, .bloccato: Theme.warn
-        default: Theme.panelHigh
-        }
-    }
-
-    private var foreground: Color {
-        switch status {
-        case .inVendita, .pronto, .daControllare, .bloccato: Color.black
-        default: Theme.text
+        case .inVendita, .pronto: (Theme.money, Theme.military)
+        case .daConfermare: (Theme.glow, Theme.glow.opacity(0.14))
+        case .daControllare, .bloccato: (Theme.warn, Theme.warnSoft)
+        default: (Theme.muted, Theme.panelHigh)
         }
     }
 }
 
-/// Campo di testo dell'app: fondo scuro, filetto, monospace.
+/// Campo di testo dell'app, come Email/Password di Discosizer.
 struct FieldStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .font(Theme.mono(13))
-            .padding(12)
-            .background(Theme.panelHigh)
-            .overlay(Rectangle().stroke(Theme.line, lineWidth: 1))
+            .font(.system(size: 17))
+            .padding(16)
+            .background(Theme.field, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
 extension View {
-    /// Scheda con angoli vivi e filetto (stile Discogs, ma al buio).
+    /// Scheda grigia arrotondata, come le liste di Discosizer.
     func panel(padding: CGFloat = 14) -> some View {
         self.padding(padding)
-            .background(Theme.panel)
-            .overlay(Rectangle().stroke(Theme.line, lineWidth: 1))
+            .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
     }
 
     func fieldStyle() -> some View { modifier(FieldStyle()) }
@@ -216,36 +205,25 @@ extension View {
     }
 }
 
-/// Il logo "cartellino" (direzione B): fondo verde, due barre, VINYL / HUSTLER.
+/// Il marchio, in famiglia con quello di Discosizer: scritta verde che si accende nel buio.
 struct HustlerTag: View {
+    var size: CGFloat = 64
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("CAT. NO. VH—001")
-                Spacer()
-                Text("MILANO")
+        VStack(spacing: size * 0.12) {
+            VStack(spacing: -size * 0.18) {
+                Text("VINYL").font(.system(size: size, weight: .black).width(.compressed))
+                Text("HUSTLER").font(.system(size: size, weight: .black).width(.compressed))
             }
-            .font(Theme.mono(11, .bold)).tracking(1.5)
-            VStack(alignment: .leading, spacing: -12) {
-                Text("VINYL").font(Theme.display(120))
-                Text("HUSTLER").font(Theme.display(94))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 6)
-            .overlay(alignment: .top) { Rectangle().frame(height: 5) }
-            .overlay(alignment: .bottom) { Rectangle().frame(height: 5) }
-            .padding(.vertical, 14)
-            HStack {
-                Text("DIG. GRADE. FLIP.")
-                Spacer()
-                Text("SIDE A · 33⅓")
-            }
-            .font(Theme.mono(11, .bold)).tracking(1.5)
+            .foregroundStyle(Theme.glow)
+            .shadow(color: Theme.glow.opacity(0.55), radius: size * 0.25)
+            .shadow(color: Theme.accent.opacity(0.35), radius: size * 0.7)
+            Text("A DISCOSIZER PROJECT")
+                .font(.system(size: size * 0.17, weight: .semibold))
+                .tracking(size * 0.04)
+                .foregroundStyle(Theme.muted)
         }
         .lineLimit(1)
         .minimumScaleFactor(0.5)
-        .foregroundStyle(Color.black)
-        .padding(20)
-        .background(Theme.accent)
     }
 }

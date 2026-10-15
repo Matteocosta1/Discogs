@@ -69,19 +69,16 @@ struct LoginView: View {
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
+            // il bagliore verde dietro al marchio, come nella schermata d'accesso di Discosizer
+            RadialGradient(colors: [Theme.accent.opacity(0.16), .clear], center: .init(x: 0.5, y: 0.36),
+                           startRadius: 10, endRadius: 280)
+                .ignoresSafeArea()
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        HUDLabel(number: "00", title: "Accesso")
-                        Spacer()
-                        Text("v0.1").font(Theme.mono(11)).foregroundStyle(Theme.muted)
-                    }
-                    HustlerTag()
-                        .padding(.top, 40)
-                    Text("Fotografa. Riconosci. Vendi su Discogs.")
-                        .font(Theme.mono(13)).foregroundStyle(Theme.muted).padding(.top, 16)
+                VStack(spacing: 0) {
+                    HustlerTag(size: 76)
+                        .padding(.top, 150)
 
-                    VStack(spacing: 10) {
+                    VStack(spacing: 12) {
                         if hasMacToken {
                             Button("Usa il token del Mac") {
                                 Task { await seller.connect(.personalToken(AppConfig.discogsPersonalToken)) }
@@ -101,7 +98,7 @@ struct LoginView: View {
                         Button(showManual ? "Nascondi token personale" : "Ho un token personale") {
                             withAnimation(.snappy) { showManual.toggle() }
                         }
-                        .font(Theme.mono(12)).foregroundStyle(Theme.muted).padding(.top, 4)
+                        .font(.system(size: 15)).foregroundStyle(Theme.muted).padding(.top, 8)
 
                         if showManual {
                             HStack(spacing: 8) {
@@ -123,9 +120,9 @@ struct LoginView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    .padding(.top, 28)
+                    .padding(.top, 40)
                 }
-                .padding(24)
+                .padding(20)
             }
         }
     }

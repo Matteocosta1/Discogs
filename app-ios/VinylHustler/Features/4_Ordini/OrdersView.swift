@@ -44,8 +44,8 @@ struct OrdersView: View {
             ForEach(o.items, id: \.id) { item in
                 Text(item.release.description ?? "Release \(item.release.id)").font(Theme.display(18, .bold))
                 if let box = discs.first(where: { $0.listingID == item.id })?.box, !box.isEmpty {
-                    Text("PRELEVA DA \(box)").font(Theme.mono(11, .bold)).foregroundStyle(Color.black)
-                        .padding(.horizontal, 6).padding(.vertical, 3).background(Theme.accent)
+                    Text("Preleva da \(box)").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.black)
+                        .padding(.horizontal, 10).padding(.vertical, 4).background(Theme.accent, in: Capsule())
                 }
             }
             Text("Acquirente: \(o.buyer.username)").font(.caption)

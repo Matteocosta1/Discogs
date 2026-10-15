@@ -50,8 +50,8 @@ struct ReviewView: View {
                         if visible(tab).isEmpty {
                             VStack(spacing: 18) {
                                 VinylMark(size: 110)
-                                Text(tab == .sale ? "NESSUN DISCO IN VENDITA" : "TUTTO IN ORDINE")
-                                    .font(Theme.mono(12, .semibold)).tracking(1.5).foregroundStyle(Theme.muted)
+                                Text(tab == .sale ? "Nessun disco in vendita" : "Tutto in ordine")
+                                    .font(.system(size: 15)).foregroundStyle(Theme.muted)
                             }
                             .padding(.top, 60)
                         }
@@ -86,19 +86,19 @@ struct DiscCard: View {
                 .overlay(alignment: .topLeading) { StatusTag(status: disc.status).padding(10) }
             VStack(alignment: .leading, spacing: 12) {
                 Text(disc.releaseTitle.isEmpty ? "Nessun disco proposto" : disc.releaseTitle)
-                    .font(Theme.display(24, .heavy)).foregroundStyle(Theme.text)
+                    .font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
                 HStack(alignment: .lastTextBaseline) {
-                    Text(disc.gradeText.uppercased()).font(Theme.mono(10, .bold)).tracking(1)
-                        .padding(.horizontal, 6).padding(.vertical, 4)
-                        .background(Theme.military).foregroundStyle(Theme.text)
-                    Text(disc.lot.uppercased()).font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                    Text(disc.gradeText).font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(Theme.military, in: Capsule()).foregroundStyle(Theme.money)
+                    Text(disc.lot).font(.system(size: 13)).foregroundStyle(Theme.muted)
                     Spacer()
                 }
                 if !disc.priceCalculation.isEmpty {
                     DisclosureGroup {
                         Text(disc.priceCalculation).font(Theme.mono(11)).foregroundStyle(Theme.muted)
                     } label: {
-                        Text("COME È STATO CALCOLATO").font(Theme.mono(11, .semibold)).foregroundStyle(Theme.muted)
+                        Text("Come è stato calcolato").font(.system(size: 14)).foregroundStyle(Theme.muted)
                     }
                 }
                 DiscActions(disc: disc)
@@ -108,7 +108,7 @@ struct DiscCard: View {
             .padding(14)
         }
         .background(Theme.panel)
-        .overlay(Rectangle().stroke(Theme.line, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
         .sheet(item: $zoom) { z in
             Image(uiImage: z.image).resizable().scaledToFit().padding()
         }
@@ -160,8 +160,8 @@ struct DiscCard: View {
                 Link("Annuncio", destination: URL(string: "https://www.discogs.com/sell/item/\(lid)")!)
             }
         }
-        .font(Theme.mono(11, .semibold))
-        .tint(Theme.muted)
+        .font(.system(size: 14))
+        .tint(Theme.accent)
     }
 }
 

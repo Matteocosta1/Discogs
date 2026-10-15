@@ -15,17 +15,18 @@ struct DiscRow: View {
                 VStack(alignment: .leading, spacing: 5) {
                     StatusTag(status: disc.status)
                     Text(disc.releaseTitle.isEmpty ? "Disco senza nome" : disc.releaseTitle)
-                        .font(Theme.display(19, .heavy)).foregroundStyle(Theme.text).lineLimit(3)
-                    Text("\(disc.gradeText) · \(disc.box)".uppercased())
-                        .font(Theme.mono(9, .semibold)).tracking(0.8).foregroundStyle(Theme.muted).lineLimit(1)
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(3)
+                    Text("\(disc.gradeText) · \(disc.box)")
+                        .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
             DiscActions(disc: disc, onRetake: onRetake)
         }
-        .padding(12)
-        .background(Theme.panel)
-        .overlay(Rectangle().stroke(disc.status == .daConfermare ? Theme.accent.opacity(0.6) : Theme.line, lineWidth: 1))
+        .padding(14)
+        .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+            .stroke(disc.status == .daConfermare ? Theme.glow.opacity(0.45) : .clear, lineWidth: 1))
     }
 
     /// Copertina Discogs (pulita); la foto del venditore solo se Discogs non ne ha.
@@ -40,8 +41,9 @@ struct DiscRow: View {
                 Theme.panelHigh
             }
         }
-        .frame(width: 76, height: 76)
-        .clipped()
+        .frame(width: 72, height: 72)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
     }
 }
 
@@ -65,11 +67,11 @@ struct DiscActions: View {
             case .inLavorazione:
                 HStack(spacing: 10) {
                     ProgressView().tint(Theme.accent)
-                    Text("STO GUARDANDO…").font(Theme.mono(12, .bold)).tracking(1.5).foregroundStyle(Theme.accent)
+                    Text("Sto guardando…").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.glow)
                 }
             case .daConfermare:
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("È QUESTO?").font(Theme.mono(11, .bold)).tracking(1.5).foregroundStyle(Theme.muted)
+                    Text("È questo?").font(.system(size: 15)).foregroundStyle(Theme.muted)
                     HStack(spacing: 8) {
                         Button("Sì, è questo") { run { await seller.accept(disc) } }
                             .buttonStyle(SignalButtonStyle())
@@ -82,9 +84,10 @@ struct DiscActions: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if let p = disc.price {
                         HStack(alignment: .lastTextBaseline) {
-                            Text("PREZZO").font(Theme.mono(11, .bold)).tracking(1.5).foregroundStyle(Theme.muted)
+                            Text("Prezzo").font(.system(size: 15)).foregroundStyle(Theme.muted)
                             Spacer()
-                            Text(p, format: .currency(code: seller.currency)).font(Theme.display(26)).foregroundStyle(Theme.accent)
+                            Text(p, format: .currency(code: seller.currency)).font(.system(size: 28, weight: .bold))
+                                .foregroundStyle(Theme.glow)
                         }
                     }
                     HStack(spacing: 8) {
@@ -118,11 +121,13 @@ struct DiscActions: View {
                 }
             case .inVendita, .bozza:
                 HStack {
-                    Label(disc.status == .inVendita ? "ONLINE SU DISCOGS" : "IN BOZZA SU DISCOGS", systemImage: "checkmark")
-                        .font(Theme.mono(11, .bold)).tracking(1).foregroundStyle(Theme.accent)
+                    Label(disc.status == .inVendita ? "Online su Discogs" : "In bozza su Discogs", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.money)
                     Spacer()
                     if let p = disc.price {
-                        Text(p, format: .currency(code: seller.currency)).font(Theme.mono(13, .bold)).foregroundStyle(Theme.text)
+                        Text(p, format: .currency(code: seller.currency)).font(.system(size: 15, weight: .semibold))
+                            .padding(.horizontal, 12).padding(.vertical, 5)
+                            .foregroundStyle(Theme.money).background(Theme.military, in: Capsule())
                     }
                 }
             case .tolto:
@@ -154,9 +159,7 @@ struct DiscActions: View {
     }
 
     private var reason: some View {
-        Text(disc.reason).font(Theme.mono(11, .semibold)).foregroundStyle(Theme.warn)
-            .padding(.leading, 10)
-            .overlay(alignment: .leading) { Rectangle().fill(Theme.warn).frame(width: 3) }
+        Text(disc.reason).font(.system(size: 14)).foregroundStyle(Theme.warn)
     }
 
     private func run(_ job: @escaping () async -> Void) {
@@ -181,14 +184,15 @@ struct AlternativesSheet: View {
             List {
                 let others = disc.candidates.filter { $0.id != disc.releaseID }
                 if others.isEmpty {
-                    Text("Nessun'altra release trovata.").font(Theme.mono(12)).foregroundStyle(Theme.muted)
+                    Text("Nessun'altra release trovata.").font(.system(size: 15)).foregroundStyle(Theme.muted)
                 }
                 ForEach(others) { c in
                     Button { done(.candidate(c)) } label: {
                         HStack(spacing: 12) {
                             AsyncImage(url: c.coverURL.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                                .frame(width: 56, height: 56).clipped()
-                            Text(c.title).font(Theme.mono(12)).foregroundStyle(Theme.text).lineLimit(3)
+                                .frame(width: 56, height: 56)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            Text(c.title).font(.system(size: 15)).foregroundStyle(Theme.text).lineLimit(3)
                             Spacer()
                             Image(systemName: "chevron.right").foregroundStyle(Theme.muted)
                         }
@@ -200,7 +204,8 @@ struct AlternativesSheet: View {
                     Button(onRetake == nil ? "Nessuno: lo tolgo" : "Nessuno: rifaccio la foto", role: .destructive) { done(.retake) }
                 }
                 .listRowBackground(Theme.panel)
-                .font(Theme.mono(13, .semibold))
+                .font(.system(size: 16))
+                .tint(Theme.accent)
             }
             .scrollContentBackground(.hidden)
             .background(Theme.bg)
