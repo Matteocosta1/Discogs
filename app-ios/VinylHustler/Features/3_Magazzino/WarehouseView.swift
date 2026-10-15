@@ -71,7 +71,7 @@ struct WarehouseView: View {
                         stat(String(draftCount), "Bozze")
                     }
                     .buttonStyle(.plain)
-                    stat(total, "Euro").layoutPriority(1)
+                    stat(total, "Euro")
                 }
             }
             Section {
