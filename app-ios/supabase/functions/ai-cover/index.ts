@@ -2,16 +2,28 @@
 // Un solo compito, come gli occhi di JARVIS:
 //   task "scan": l'app manda una foto o i fotogrammi di un video; Claude dice TUTTI i dischi che vede.
 //
+// Quale modello (secret AI_MODE, oppure la costante DEFAULT_MODE qui sotto):
+//   "sonnet"  solo Sonnet 5.5 (com'era)
+//   "haiku"   solo Haiku 5.5 (20 volte più economico)
+//   "hybrid"  Haiku per primo; se non trova nessun disco, Sonnet
+//   "compare" PROVA: chiama Sonnet e Haiku insieme, all'app risponde Sonnet, i due risultati finiscono
+//             nella tabella ai_compare per confrontarli. Costa la somma dei due: solo per il test.
+// Tornare indietro = rimettere "sonnet" (o cancellare il secret).
+//
 // Pubblicazione:  supabase functions deploy ai-cover
 // Secret:         supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
 // (SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY ci sono già: li mette Supabase.)
 
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
-const MODEL = Deno.env.get("AI_MODEL_SCAN") ?? "claude-sonnet-5-5";
+const DEFAULT_MODE = "compare";
+const MODE = Deno.env.get("AI_MODE") ?? DEFAULT_MODE;
+const SONNET = Deno.env.get("AI_MODEL_SONNET") ?? "claude-sonnet-5-5";
+const HAIKU = Deno.env.get("AI_MODEL_HAIKU") ?? "claude-haiku-5-5";
 // Prezzi in dollari per milione di token (input, output); per prudenza 1 $ = 1 €.
 const PRICES: Record<string, [number, number]> = {
   "claude-haiku-4-5": [1, 5],
+  "claude-haiku-5-5": [0.1, 0.5],
   "claude-sonnet-5-5": [2, 10],
   "claude-opus-5-5": [4, 20],
 };
@@ -89,38 +101,67 @@ Deno.serve(async (req) => {
   });
   content.push({ type: "text", text: SCAN_PROMPT.replace("{n}", String(photos.length)) });
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": Deno.env.get("ANTHROPIC_API_KEY")!,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 4000,
-      messages: [{ role: "user", content }],
-      output_config: { format: { type: "json_schema", schema: SCAN_SCHEMA }, effort: "low" },
-    }),
-  });
-  if (!res.ok) return json({ error: `Anthropic ${res.status}: ${await res.text()}` }, 502);
-  const msg = await res.json();
-
-  // 4. Costo, registro e risposta
-  const [pin, pout] = PRICES[MODEL] ?? [5, 25];
-  const cost = (msg.usage.input_tokens * pin + msg.usage.output_tokens * pout) / 1e6;
-  await admin.from("ai_calls").insert({
-    user_id: user.id, task: "scan", model: MODEL, input_tokens: msg.usage.input_tokens,
-    output_tokens: msg.usage.output_tokens, cost_eur: cost,
-  });
-  await admin.rpc("add_ai_usage", { p_user: user.id, p_cost: cost });
-  const text = (msg.content ?? []).find((b: { type: string }) => b.type === "text")?.text ?? "{}";
-  let records: Record<string, unknown>[] = [];
-  try {
-    records = msg.stop_reason === "end_turn" ? (JSON.parse(text).records ?? []) : [];
-  } catch {
-    records = [];
+  // Una chiamata a un modello: risultato, costo, tempo. Registra costo e uso del mese.
+  type Scan = { records: Record<string, unknown>[]; cost: number; ms: number; model: string; error?: string };
+  async function scan(model: string): Promise<Scan> {
+    const t0 = Date.now();
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY")!,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 4000,
+        messages: [{ role: "user", content }],
+        output_config: { format: { type: "json_schema", schema: SCAN_SCHEMA }, effort: "low" },
+      }),
+    });
+    if (!res.ok) return { records: [], cost: 0, ms: Date.now() - t0, model, error: `Anthropic ${res.status}: ${await res.text()}` };
+    const msg = await res.json();
+    const [pin, pout] = PRICES[model] ?? [5, 25];
+    const cost = (msg.usage.input_tokens * pin + msg.usage.output_tokens * pout) / 1e6;
+    await admin.from("ai_calls").insert({
+      user_id: user!.id, task: "scan", model, input_tokens: msg.usage.input_tokens,
+      output_tokens: msg.usage.output_tokens, cost_eur: cost,
+    });
+    await admin.rpc("add_ai_usage", { p_user: user!.id, p_cost: cost });
+    const text = (msg.content ?? []).find((b: { type: string }) => b.type === "text")?.text ?? "{}";
+    let records: Record<string, unknown>[] = [];
+    try {
+      records = msg.stop_reason === "end_turn" ? (JSON.parse(text).records ?? []) : [];
+    } catch {
+      records = [];
+    }
+    return { records, cost, ms: Date.now() - t0, model };
   }
+
+  let chosen: Scan;
+  if (MODE === "compare") {
+    const [s, h] = await Promise.all([scan(SONNET), scan(HAIKU)]);
+    const brief = (x: Scan) => ({ model: x.model, error: x.error ?? null,
+      records: x.records.map((r) => ({ artist: r.artist, title: r.title, label: r.label, catno: r.catno, barcode: r.barcode })) });
+    await admin.from("ai_compare").insert({
+      user_id: user.id, photos: photos.length, sonnet: brief(s), haiku: brief(h),
+      sonnet_cost_usd: s.cost, haiku_cost_usd: h.cost, sonnet_ms: s.ms, haiku_ms: h.ms,
+    });
+    chosen = s.error ? h : s;
+  } else if (MODE === "haiku") {
+    chosen = await scan(HAIKU);
+  } else if (MODE === "hybrid") {
+    chosen = await scan(HAIKU);
+    if (chosen.error || chosen.records.length === 0) {
+      const s = await scan(SONNET);
+      chosen = { ...s, cost: s.cost + chosen.cost };
+    }
+  } else {
+    chosen = await scan(SONNET);
+  }
+  if (chosen.error && chosen.records.length === 0) return json({ error: chosen.error }, 502);
+  const records = chosen.records;
+  const cost = chosen.cost;
   const clean = (v: unknown) => String(v ?? "").trim();
   return json({
     records: records.map((r) => ({
