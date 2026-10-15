@@ -9,28 +9,21 @@ import UIKit
 @Observable
 final class Seller {
     let client: DiscogsClient
-    let store: CoverStore
     var username = ""
     var currency = "EUR"
     private(set) var credentials: DiscogsCredentials? = CredentialStore.load()
     var isLoggedIn: Bool { credentials != nil }
-    var mode: RecognitionMode = UserDefaults.standard.string(forKey: "mode").flatMap(RecognitionMode.init) ?? .superVeloce {
-        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "mode") }
-    }
     var rules: PriceRules = UserDefaults.standard.data(forKey: "rules").flatMap { try? JSONDecoder().decode(PriceRules.self, from: $0) } ?? PriceRules() {
         didSet { UserDefaults.standard.set(try? JSONEncoder().encode(rules), forKey: "rules") }
     }
     var working = 0                      // dischi in riconoscimento adesso
     var lastError: String?
-    /// Tempi: secondi a disco dell'ultimo lotto (per misurare la velocità, come lo script).
-    var secondsPerDisc: [Double] = []
 
     private let queue = SerialQueue()
 
     init() {
         let client = DiscogsClient()
         self.client = client
-        store = CoverStore(client: client)
     }
 
     // MARK: - Account
@@ -58,78 +51,147 @@ final class Seller {
         username = ""
     }
 
-    // MARK: - 1. Sessione: foto -> riconoscimento -> prezzo
+    // MARK: - 1. Sessione: scatto o video -> riconoscimento -> sì / no -> vendita
 
-    /// Salva le foto, crea il disco e lo mette in coda (un disco alla volta: limite Discogs).
-    func addDisc(photos: [(kind: PhotoKind, image: UIImage)], lot: String, media: Grade, sleeve: Grade,
-                 ear: BranoSentito? = nil, context: ModelContext) {
-        var files: [String] = []
-        var kinds: [String] = []
-        for photo in photos {
-            let name = "\(UUID().uuidString).jpg"
-            guard let data = photo.image.jpegData(compressionQuality: 0.85) else { continue }
-            try? data.write(to: AppFolders.photos.appendingPathComponent(name))
-            files.append(name)
-            kinds.append(photo.kind.rawValue)
-        }
-        let disc = Disc(lot: lot, photoFiles: files, media: media, sleeve: sleeve)
-        disc.photoKinds = kinds
-        disc.box = lot                      // dove sta fisicamente: lo mostrano Magazzino e Ordini
-        if let ear {
-            disc.earArtist = ear.artista
-            disc.earTitle = ear.titolo
-            disc.earAlbum = ear.album
-        }
+    /// Uno scatto o i fotogrammi di un video. Il disco compare subito ("sto guardando…"); se nelle foto
+    /// ci sono più dischi, ne nascono altri. Restituisce il disco appena creato.
+    @discardableResult
+    func shoot(_ images: [UIImage], video: Bool, place: String, media: Grade, sleeve: Grade,
+               context: ModelContext) -> Disc {
+        let files = save(images, kind: video ? .fotogramma : .foto)
+        let disc = Disc(lot: place, photoFiles: files.map(\.name), media: media, sleeve: sleeve)
+        disc.photoKinds = files.map(\.kind)
+        disc.box = place
         context.insert(disc)
         try? context.save()
         working += 1
-        Task { await queue.run { await self.process(disc, context: context) } }
+        Task { await queue.run { await self.recognize(disc, images: images, video: video, context: context) } }
+        return disc
+    }
+
+    /// "Altra foto": aggiunge uno scatto a un disco non riconosciuto e riprova.
+    func addPhoto(_ image: UIImage, to disc: Disc, context: ModelContext) {
+        let files = save([image], kind: .foto)
+        disc.photoFiles += files.map(\.name)
+        disc.photoKinds += files.map(\.kind)
+        disc.status = .inLavorazione
+        disc.reason = ""
+        working += 1
+        let images = photos(of: disc)
+        Task { await queue.run { await self.recognize(disc, images: images, video: false, context: context) } }
+    }
+
+    private func save(_ images: [UIImage], kind: PhotoKind) -> [(name: String, kind: String)] {
+        images.compactMap { image in
+            let name = "\(UUID().uuidString).jpg"
+            guard let data = image.jpegData(compressionQuality: 0.85),
+                  (try? data.write(to: AppFolders.photos.appendingPathComponent(name))) != nil else { return nil }
+            return (name, kind.rawValue)
+        }
     }
 
     func photos(of disc: Disc) -> [UIImage] {
         disc.photoFiles.compactMap { UIImage(contentsOfFile: AppFolders.photos.appendingPathComponent($0).path) }
     }
 
-    private func process(_ disc: Disc, context: ModelContext) async {
-        let started = Date()
+    private func recognize(_ disc: Disc, images: [UIImage], video: Bool, context: ModelContext) async {
         defer {
             working -= 1
-            secondsPerDisc.append(Date().timeIntervalSince(started))
             try? context.save()
         }
-        let engine = RecognitionEngine(client: client, store: store, mode: mode,
-                                       ai: mode.usesAI && Backend.shared.isConfigured ? AIService() : nil)
-        let result = await engine.recognize(photos: photos(of: disc), ear: disc.ear)
-        disc.details = result.details.joined(separator: "; ")
-        disc.method = result.method
-        disc.aiCost += result.aiCost
-        disc.candidates = result.candidates
-        if let release = result.release {
-            disc.releaseID = release.id
-            disc.releaseTitle = release.description
-            disc.coverFile = await store.mainCover(of: release.id)?.lastPathComponent
-        }
-        switch result.outcome {
-        case .blocked:
-            disc.status = .bloccato
-            disc.reason = result.reason
-        case .toCheck:
+        let signedIn = await Backend.shared.accessToken() != nil
+        let recognizer = Recognizer(client: client, ai: signedIn ? AIService() : nil)
+        let outcome = await recognizer.scan(images, video: video)
+        let share = outcome.found.isEmpty ? outcome.aiCost : outcome.aiCost / Double(outcome.found.count)
+        disc.aiCost += share
+        guard let first = outcome.found.first else {
             disc.status = .daControllare
-            disc.reason = result.reason
-        case .found:
-            await price(disc, verifiedByCode: result.byCode)
+            disc.reason = outcome.note
+            Voice.shared.say(found: [])
+            return
+        }
+        // Il primo disco va in quello già creato; gli altri (video con più dischi) diventano dischi nuovi,
+        // con le foto in cui si vedono.
+        var discs: [Disc] = []
+        for (n, found) in outcome.found.enumerated() {
+            let target: Disc
+            if n == 0 {
+                target = disc
+            } else {
+                target = Disc(lot: disc.lot, photoFiles: found.images.compactMap { disc.photoFiles[safe: $0] },
+                              media: disc.media, sleeve: disc.sleeve)
+                target.photoKinds = found.images.compactMap { disc.photoKinds[safe: $0] }
+                target.box = disc.box
+                target.aiCost = share
+                context.insert(target)
+            }
+            propose(found, to: target)
+            discs.append(target)
+        }
+        if outcome.found.count > 1 {                // il primo tiene solo le sue foto
+            disc.photoFiles = first.images.compactMap { disc.photoFiles[safe: $0] }
+            disc.photoKinds = first.images.compactMap { disc.photoKinds[safe: $0] }
+        }
+        Voice.shared.say(found: discs)
+    }
+
+    private func propose(_ found: Recognizer.Found, to disc: Disc) {
+        disc.method = found.method
+        disc.details = found.read
+        disc.candidates = found.candidates
+        if let best = found.candidates.first {
+            disc.releaseID = best.id
+            disc.releaseTitle = best.title
+            disc.status = .daConfermare
+            disc.reason = ""
+        } else {
+            disc.status = .daControllare
+            disc.reason = found.read.isEmpty ? "Non trovato su Discogs" : "Letto \"\(found.read)\", ma non trovato su Discogs"
         }
     }
 
-    /// Prezzo con la regola di sempre. Un disco riconosciuto SENZA codice che vale molto (collezionistico
-    /// o sopra la soglia di controllo) non va in vendita senza un'occhiata.
-    func price(_ disc: Disc, verifiedByCode: Bool) async {
+    /// SÌ, È QUESTO: si legge la release (si può vendere?) e si calcola il prezzo. Non pubblica: decide il venditore.
+    func accept(_ disc: Disc) async {
+        guard let rid = disc.releaseID else { return }
+        guard let release = try? await client.release(rid, currency: currency) else {
+            lastError = "Discogs non risponde: riprova tra un attimo"
+            return
+        }
+        disc.releaseTitle = release.description
+        if release.blockedFromSale == true {
+            disc.status = .bloccato
+            disc.reason = "Discogs non permette di vendere questa release"
+            return
+        }
+        await price(disc)
+    }
+
+    /// NO, È QUEST'ALTRO: una delle alternative proposte.
+    func pick(_ disc: Disc, candidate: Candidate) async {
+        disc.releaseID = candidate.id
+        disc.releaseTitle = candidate.title
+        disc.method = "scelto"
+        await accept(disc)
+    }
+
+    /// Numero della release scritto a mano.
+    func assign(_ disc: Disc, releaseID: Int) async {
+        disc.releaseID = releaseID
+        disc.method = "manuale"
+        if !disc.candidates.contains(where: { $0.id == releaseID }) {
+            disc.candidates.insert(Candidate(id: releaseID, title: "Release \(releaseID)"), at: 0)
+        }
+        await accept(disc)
+    }
+
+    /// Prezzo con la regola di sempre.
+    func price(_ disc: Disc) async {
         guard let rid = disc.releaseID else { return }
         do {
             let suggestions = try await client.priceSuggestions(rid)
             guard let suggested = suggestions[disc.media.discogs]?.value else {
                 disc.status = .daControllare
-                disc.reason = "Nessun prezzo suggerito da Discogs per \(disc.media.rawValue)"
+                disc.reason = "Discogs non suggerisce un prezzo per il grado \(disc.media.rawValue)"
                 return
             }
             let release = try await client.release(rid, currency: currency)
@@ -139,55 +201,41 @@ final class Seller {
                                     lowestCurrency: stats.lowestPrice?.currency ?? currency, formats: release.formatsText)
             let (p, calc) = PriceEngine.compute(suggested: suggested, market: market, grade: disc.media,
                                                 currency: currency, rules: rules)
-            let priceValue = NSDecimalNumber(decimal: p).doubleValue
-            disc.price = priceValue
+            disc.price = NSDecimalNumber(decimal: p).doubleValue
             disc.priceCalculation = calc
-            let collector = PriceEngine.collectorScore(market, suggested: suggested, rules: rules)
-            let risky = collector.score >= rules.collectorScore || priceValue > rules.reviewAbove
-            if risky && !verifiedByCode {
-                disc.status = .daControllare
-                disc.reason = "Disco di valore riconosciuto senza codice: \(collector.reasons.joined(separator: ", "))"
-            } else {
-                disc.status = .pronto
-                disc.reason = ""
-            }
+            disc.status = .pronto
+            disc.reason = ""
         } catch {
             disc.status = .daControllare
             disc.reason = "Prezzo non calcolato: \(error.localizedDescription)"
         }
     }
 
-    // MARK: - 2. Revisione: i tasti della scheda
-
-    /// CONFERMA: un click e il disco va in vendita (release proposta, prezzo, pubblicazione).
-    func confirm(_ disc: Disc, release releaseID: Int? = nil) async {
-        guard let rid = releaseID ?? disc.releaseID else { return }
-        if rid != disc.releaseID {
-            guard let release = try? await client.release(rid) else {
-                lastError = "Release \(rid) non letta da Discogs: riprova"
-                return
-            }
-            disc.releaseID = rid
-            disc.releaseTitle = release.description
-            disc.coverFile = await store.mainCover(of: rid)?.lastPathComponent
-        }
-        disc.method = "manuale"
-        await price(disc, verifiedByCode: true)        // ha deciso una persona: niente controlli automatici
-        if disc.status == .pronto { await publish(disc) }
+    /// IN VENDITA / BOZZA: l'annuncio va su Discogs (in bozza resta invisibile ai compratori).
+    func sell(_ disc: Disc, draft: Bool = false) async {
+        await publish(disc, status: draft ? "Draft" : "For Sale")
     }
 
-    /// È QUESTO: sceglie una delle alternative proposte (e pubblica, come Conferma).
-    func choose(_ disc: Disc, candidate: Candidate) async { await confirm(disc, release: candidate.id) }
+    /// DOPO: resta pronto in Revisione, sparisce dalla sessione.
+    func park(_ disc: Disc) { disc.parked = true }
 
-    /// ALTRA RELEASE: numero della release scritto a mano.
-    func assign(_ disc: Disc, releaseID: Int) async { await confirm(disc, release: releaseID) }
+    /// RIFAI: il disco sparisce (foto comprese), come se non fosse mai stato fotografato.
+    /// Resta solo come "tolto" nel database: cancellarlo mentre è sullo schermo farebbe chiudere l'app.
+    func discard(_ disc: Disc) {
+        for f in disc.photoFiles { try? FileManager.default.removeItem(at: AppFolders.photos.appendingPathComponent(f)) }
+        disc.photoFiles = []
+        disc.photoKinds = []
+        disc.status = .tolto
+        disc.reason = "Rifatto"
+    }
 
-    func publish(_ disc: Disc) async {
+    func publish(_ disc: Disc, status: String = "For Sale") async {
         guard let rid = disc.releaseID, let price = disc.price, disc.listingID == nil else { return }
         do {
             disc.listingID = try await client.createListing(releaseID: rid, condition: disc.media, sleeve: disc.sleeve,
-                                                            price: price, externalID: disc.externalID)
-            disc.status = .inVendita
+                                                            price: price, externalID: disc.externalID,
+                                                            location: disc.box, status: status)
+            disc.status = status == "Draft" ? .bozza : .inVendita
         } catch DiscogsError.uncertain(let m) {
             lastError = "Esito incerto per \(disc.releaseTitle): \(m). Premi Verifica prima di riprovare."
         } catch {

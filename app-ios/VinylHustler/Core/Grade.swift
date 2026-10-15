@@ -18,31 +18,3 @@ enum Grade: String, CaseIterable, Codable, Identifiable {
         }
     }
 }
-
-/// Modalità di riconoscimento (come le opzioni di vendi.py).
-enum RecognitionMode: String, CaseIterable, Codable, Identifiable {
-    /// --super-veloce: niente AI, decide Vision sulle copertine. Gratis, tutto sul telefono.
-    case superVeloce
-    /// --veloce: come super veloce, ma nei casi dubbi la copertina la guarda l'AI (server).
-    case veloce
-    /// completa: più immagini e candidati, AI che legge la foto se il testo non basta.
-    case completa
-
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .superVeloce: "Super veloce"
-        case .veloce: "Veloce"
-        case .completa: "Completa"
-        }
-    }
-    var imagesPerRelease: Int { self == .completa ? 4 : 1 }
-    var maxCandidates: Int {
-        switch self {
-        case .superVeloce: 5
-        case .veloce: 3
-        case .completa: 6
-        }
-    }
-    var usesAI: Bool { self != .superVeloce }
-}

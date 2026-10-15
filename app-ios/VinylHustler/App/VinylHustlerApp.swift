@@ -29,7 +29,8 @@ struct VinylHustlerApp: App {
 /// Le 5 sezioni: Sessione, Revisione, Magazzino, Ordini, Console.
 struct RootView: View {
     @Environment(Seller.self) private var seller
-    @Query(filter: #Predicate<Disc> { $0.statusRaw == "daControllare" }) private var toCheck: [Disc]
+    @Query(filter: #Predicate<Disc> { $0.statusRaw == "daControllare" || $0.statusRaw == "daConfermare" })
+    private var toCheck: [Disc]
     @State private var tab = 0
 
     var body: some View {

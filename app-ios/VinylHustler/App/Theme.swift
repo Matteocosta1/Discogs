@@ -162,10 +162,11 @@ struct StatusTag: View {
     private var label: String {
         switch status {
         case .inLavorazione: "IN RICONOSCIMENTO"
+        case .daConfermare: "RICONOSCIUTO"
         case .pronto: "PRONTO"
         case .inVendita: "ONLINE"
         case .bozza: "BOZZA"
-        case .daControllare: "DA CONTROLLARE"
+        case .daControllare: "NON RICONOSCIUTO"
         case .bloccato: "BLOCCATO"
         case .tolto: "TOLTO"
         }
@@ -174,6 +175,7 @@ struct StatusTag: View {
     private var background: Color {
         switch status {
         case .inVendita, .pronto: Theme.accent
+        case .daConfermare: Theme.military
         case .daControllare, .bloccato: Theme.warn
         default: Theme.panelHigh
         }

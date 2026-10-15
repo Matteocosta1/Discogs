@@ -20,11 +20,8 @@ final class PriceEngineTests: XCTestCase {
     func testCaldaMolteCopie() { XCTAssertEqual(price(20, m(300, 60, 9, 25)), 37.5) }
     func testLentaSottoSuggerito() { XCTAssertEqual(price(15, m(2, 40, 7, 9)), 15) }
 
-    func testCatalogo() {
-        XCTAssertEqual(Evidence.normalizeCatno("SHVL 804"), "SHVL804")
-        XCTAssertTrue(Evidence.isStrongCatno("SHVL804"))
-        XCTAssertFalse(Evidence.isStrongCatno("1984"))
-        XCTAssertTrue(Evidence.isTrackLine("A1 Dance Of The Medusa"))
-        XCTAssertNotNil(Evidence.catnoCandidates(["Sound Signature SS026"])["SS026"])
+    func testVoce() {
+        XCTAssertEqual(Voice.spoken("Miles Davis - Kind Of Blue (Columbia, US, 1959)"), "Kind Of Blue di Miles Davis")
+        XCTAssertEqual(Voice.spoken("Prince (2) - Purple Rain"), "Purple Rain di Prince")
     }
 }

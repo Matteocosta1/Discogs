@@ -139,10 +139,11 @@ final class DiscogsClient: @unchecked Sendable {
     // MARK: - Annunci
 
     func createListing(releaseID: Int, condition: Grade, sleeve: Grade, price: Double,
-                       externalID: String, status: String = "For Sale") async throws -> Int {
+                       externalID: String, location: String = "", status: String = "For Sale") async throws -> Int {
+        // location: campo privato dell'annuncio (lo vede solo il venditore): dove sta il disco ("Scatola 12").
         let res: CreatedListing = try await request("POST", "/marketplace/listings", body: [
             "release_id": releaseID, "condition": condition.discogs, "sleeve_condition": sleeve.discogs,
-            "price": price, "status": status, "external_id": externalID,
+            "price": price, "status": status, "external_id": externalID, "location": location,
         ])
         return res.listingId
     }

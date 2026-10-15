@@ -1,8 +1,8 @@
 import SwiftData
 import SwiftUI
 
-/// 02 / REVISIONE — il pannello dello script: due schede, In vendita e Da controllare.
-/// Su ogni disco da controllare: Conferma (un click = in vendita), È questo, Altra release, Togli.
+/// 02 / REVISIONE — tutti i dischi in due schede: Da decidere (sì / no, non riconosciuti, bloccati)
+/// e In vendita (pronti, online, bozze). Gli stessi tasti della Sessione.
 struct ReviewView: View {
     @Environment(Seller.self) private var seller
     @Query(sort: \Disc.createdAt, order: .reverse) private var discs: [Disc]
@@ -10,14 +10,14 @@ struct ReviewView: View {
     @State private var search = ""
     @State private var lot = ""
 
-    enum Tab: String, CaseIterable { case sale = "In vendita", check = "Da controllare" }
+    enum Tab: String, CaseIterable { case sale = "In vendita", check = "Da decidere" }
 
     private var lots: [String] { Array(Set(discs.map(\.lot))).sorted() }
 
     private func visible(_ tab: Tab) -> [Disc] {
         discs.filter { d in
             let saleStates: [DiscStatus] = [.pronto, .inVendita, .bozza]
-            let checkStates: [DiscStatus] = [.daControllare, .bloccato]
+            let checkStates: [DiscStatus] = [.daConfermare, .daControllare, .bloccato]
             let inTab = tab == .sale ? saleStates.contains(d.status) : checkStates.contains(d.status)
             let inLot = lot.isEmpty || d.lot == lot
             let q = search.lowercased()
@@ -78,9 +78,6 @@ struct ReviewView: View {
 struct DiscCard: View {
     @Environment(Seller.self) private var seller
     @Bindable var disc: Disc
-    @State private var busy = false
-    @State private var askRelease = false
-    @State private var releaseText = ""
     @State private var zoom: ZoomImage?
 
     var body: some View {
@@ -88,11 +85,6 @@ struct DiscCard: View {
             pictures
                 .overlay(alignment: .topLeading) { StatusTag(status: disc.status).padding(10) }
             VStack(alignment: .leading, spacing: 12) {
-                if disc.status == .daControllare || disc.status == .bloccato {
-                    Text(disc.reason).font(Theme.mono(12, .semibold)).foregroundStyle(Theme.warn)
-                        .padding(.leading, 10)
-                        .overlay(alignment: .leading) { Rectangle().fill(Theme.warn).frame(width: 3) }
-                }
                 Text(disc.releaseTitle.isEmpty ? "Nessun disco proposto" : disc.releaseTitle)
                     .font(Theme.display(24, .heavy)).foregroundStyle(Theme.text)
                 HStack(alignment: .lastTextBaseline) {
@@ -101,10 +93,6 @@ struct DiscCard: View {
                         .background(Theme.military).foregroundStyle(Theme.text)
                     Text(disc.lot.uppercased()).font(Theme.mono(10)).foregroundStyle(Theme.muted)
                     Spacer()
-                    if let p = disc.price {
-                        Text(p, format: .currency(code: seller.currency))
-                            .font(Theme.display(30)).foregroundStyle(Theme.accent)
-                    }
                 }
                 if !disc.priceCalculation.isEmpty {
                     DisclosureGroup {
@@ -113,23 +101,14 @@ struct DiscCard: View {
                         Text("COME È STATO CALCOLATO").font(Theme.mono(11, .semibold)).foregroundStyle(Theme.muted)
                     }
                 }
-                if disc.status == .daControllare { candidates }
-                actions
+                DiscActions(disc: disc)
+                if disc.status == .bozza { draftToSale }
                 links
             }
             .padding(14)
         }
         .background(Theme.panel)
         .overlay(Rectangle().stroke(Theme.line, lineWidth: 1))
-        .disabled(busy)
-        .overlay { if busy { ProgressView() } }
-        .alert("Numero della release Discogs", isPresented: $askRelease) {
-            TextField("discogs.com/release/NUMERO", text: $releaseText).keyboardType(.numberPad)
-            Button("Conferma") {
-                if let id = Int(releaseText.filter(\.isNumber)) { run { await seller.assign(disc, releaseID: id) } }
-            }
-            Button("Annulla", role: .cancel) {}
-        }
         .sheet(item: $zoom) { z in
             Image(uiImage: z.image).resizable().scaledToFit().padding()
         }
@@ -140,7 +119,10 @@ struct DiscCard: View {
         let cover = disc.coverFile.flatMap { UIImage(contentsOfFile: AppFolders.covers.appendingPathComponent($0).path) }
         let main = cover ?? own.first
         return ZStack(alignment: .bottomTrailing) {
-            if let main {
+            if cover == nil, let url = disc.coverURL {
+                AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                    .frame(maxWidth: .infinity).aspectRatio(1, contentMode: .fit).clipped()
+            } else if let main {
                 Image(uiImage: main).resizable().scaledToFill()
                     .frame(maxWidth: .infinity).aspectRatio(1, contentMode: .fit).clipped()
                     .onTapGesture { zoom = ZoomImage(image: main) }
@@ -148,7 +130,7 @@ struct DiscCard: View {
                 Rectangle().fill(.quaternary).aspectRatio(1, contentMode: .fit)
             }
             HStack(spacing: 4) {
-                ForEach(Array((cover == nil ? Array(own.dropFirst()) : []).enumerated()), id: \.offset) { _, img in
+                ForEach(Array((cover == nil && disc.coverURL == nil ? Array(own.dropFirst()) : []).enumerated()), id: \.offset) { _, img in
                     Image(uiImage: img).resizable().scaledToFill().frame(width: 44, height: 44).clipped()
                         .border(.background, width: 2).onTapGesture { zoom = ZoomImage(image: img) }
                 }
@@ -157,52 +139,16 @@ struct DiscCard: View {
         }
     }
 
-    @ViewBuilder private var candidates: some View {
-        let others = disc.candidates.filter { $0.id != disc.releaseID }
-        if !others.isEmpty {
-            DisclosureGroup("ALTRE RELEASE POSSIBILI · \(others.count)") {
-                ForEach(others) { c in
-                    HStack {
-                        AsyncImage(url: c.coverURL.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.gray.opacity(0.2) }
-                            .frame(width: 44, height: 44).clipped()
-                        Text(c.title).font(Theme.mono(11)).foregroundStyle(Theme.text).lineLimit(2)
-                        Spacer()
-                        Link("vedi", destination: URL(string: "https://www.discogs.com/release/\(c.id)")!).font(.caption)
-                        Button("È questo") { run { await seller.choose(disc, candidate: c) } }
-                            .buttonStyle(SignalButtonStyle(filled: false)).frame(width: 100)
-                    }
-                }
+    /// Una bozza su Discogs: un tocco e torna in vendita.
+    private var draftToSale: some View {
+        Button("Metti in vendita") {
+            Task {
+                guard let lid = disc.listingID else { return }
+                do { try await seller.draftToSale(listingID: lid); disc.status = .inVendita }
+                catch { seller.lastError = error.localizedDescription }
             }
         }
-    }
-
-    @ViewBuilder private var actions: some View {
-        HStack {
-            switch disc.status {
-            case .daControllare:
-                if disc.releaseID != nil {
-                    Button("Conferma") { run { await seller.confirm(disc) } }.buttonStyle(SignalButtonStyle())
-                }
-                Button("Altra release") { askRelease = true }.buttonStyle(SignalButtonStyle(filled: false))
-                Button("Togli", role: .destructive) { run { await seller.remove(disc) } }.buttonStyle(SignalButtonStyle(filled: false))
-            case .pronto:
-                Button("Pubblica") { run { await seller.publish(disc) } }.buttonStyle(SignalButtonStyle())
-                Button("Togli", role: .destructive) { run { await seller.remove(disc) } }.buttonStyle(SignalButtonStyle(filled: false))
-            case .bozza:
-                Button("Conferma") {
-                    run {
-                        if let lid = disc.listingID {
-                            do { try await seller.draftToSale(listingID: lid); disc.status = .inVendita }
-                            catch { seller.lastError = error.localizedDescription }
-                        }
-                    }
-                }.buttonStyle(SignalButtonStyle())
-            case .inVendita:
-                Button("Togli da Discogs", role: .destructive) { run { await seller.remove(disc) } }.buttonStyle(SignalButtonStyle(filled: false))
-            default:
-                EmptyView()
-            }
-        }
+        .buttonStyle(SignalButtonStyle())
     }
 
     private var links: some View {
@@ -216,11 +162,6 @@ struct DiscCard: View {
         }
         .font(Theme.mono(11, .semibold))
         .tint(Theme.muted)
-    }
-
-    private func run(_ job: @escaping () async -> Void) {
-        busy = true
-        Task { await job(); busy = false }
     }
 }
 

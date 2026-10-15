@@ -1,43 +1,36 @@
+import AuthenticationServices
 import SwiftData
 import SwiftUI
 
-/// 01 / SESSIONE — si sceglie il grado una volta per tutta la sessione, poi si fotografa ogni disco:
-/// fino a sei foto (copertine, centrini, solco, matrice), nessuna obbligatoria.
-/// Il riconoscimento parte da solo in sottofondo: intanto si fotografa il disco successivo.
+/// 01 / SESSIONE — dove li metti, il grado, poi la fotocamera.
+/// Nella fotocamera: uno scatto o un video, e i dischi vengono riconosciuti subito.
+/// Sotto, in "Oggi", i dischi riconosciuti aspettano la tua decisione: sì / no, e poi se venderli.
 struct SessionView: View {
     @Environment(Seller.self) private var seller
     @Environment(\.modelContext) private var context
+    @Query(sort: \Disc.createdAt, order: .reverse) private var discs: [Disc]
     @AppStorage("placeKind") private var placeKind = "Scatola"
     @AppStorage("placeName") private var placeName = "1"
     @AppStorage("placeKindsV2") private var kindsRaw = "Scatola|Archivio|Scaffale"
-    @AppStorage("recentPlaces") private var recentRaw = ""
-    @State private var addingKind = false
-    @State private var newKind = ""
     @AppStorage("media") private var mediaRaw = Grade.m.rawValue
     @AppStorage("sleeve") private var sleeveRaw = Grade.m.rawValue
-    @State private var shots: [PhotoKind: UIImage] = [:]
-    @State private var shooting: PhotoKind?          // foto aperta nella fotocamera
-    @State private var pendingNext: PhotoKind?       // scatto guidato: la prossima da aprire
-    @State private var guided = false
-    @State private var countToday = 0
-    @State private var showOcchio = false
-    @State private var showOrecchio = false
-    @State private var sentito: BranoSentito?
-    @State private var avviso: String?
+    @State private var addingKind = false
+    @State private var newKind = ""
+    @State private var camera = false
+    @State private var aiReady = true
 
     private var media: Grade { Grade(rawValue: mediaRaw) ?? .m }
     private var sleeve: Grade { Grade(rawValue: sleeveRaw) ?? media }
-    private var nextEmpty: PhotoKind? { PhotoKind.slots.first { shots[$0] == nil } }
     private var kinds: [String] { kindsRaw.split(separator: "|").map(String.init) }
-    /// Solo i recenti di contenitori che esistono ancora (niente "Cassa 1" se la Cassa è stata tolta).
-    private var recent: [String] {
-        recentRaw.split(separator: "|").map(String.init)
-            .filter { item in kinds.contains { item == $0 || item.hasPrefix($0 + " ") } }
-    }
-    /// Dove finiscono i dischi: "Scatola 12", "Archivio B", ...
+    /// Dove finiscono i dischi: "Scatola 12", "Casa 2", ...
     private var place: String {
         let name = placeName.trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? placeKind : "\(placeKind) \(name)"
+    }
+    private var today: [Disc] { discs.filter { Calendar.current.isDateInToday($0.createdAt) && $0.status != .tolto } }
+    /// Quelli che aspettano una decisione (i "Dopo" e quelli già online stanno in Revisione).
+    private var waiting: [Disc] {
+        today.filter { !$0.parked && ![DiscStatus.inVendita, .bozza].contains($0.status) }
     }
 
     var body: some View {
@@ -65,28 +58,10 @@ struct SessionView: View {
                         Text(placeKind.uppercased()).font(Theme.mono(13, .bold)).foregroundStyle(Theme.accent)
                         TextField("numero o nome", text: $placeName).font(Theme.mono(14))
                     }
-                    if !recent.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("USATI DI RECENTE").font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(recent, id: \.self) { item in
-                                        Button { pick(item) } label: {
-                                            Text(item).font(Theme.mono(12))
-                                                .padding(.horizontal, 10).padding(.vertical, 6)
-                                                .background(item == place ? Theme.military : Theme.panelHigh)
-                                                .foregroundStyle(Theme.text)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                            }
-                        }
-                    }
                 } header: {
                     HUDLabel(number: "01", title: "Dove li metti")
                 } footer: {
-                    Text("Scegli il contenitore o creane uno tuo con +, poi scrivi quale. Si salva su ogni disco: lo ritrovi in Magazzino e negli Ordini quando devi spedire.")
+                    Text("Ogni disco che fotografi si porta dietro questo posto: lo ritrovi sulla scheda del disco, in Magazzino, negli Ordini (\"preleva da…\") e sull'annuncio Discogs, nel campo privato che vedi solo tu.")
                         .font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 }
 
@@ -101,94 +76,86 @@ struct SessionView: View {
                 }
 
                 Section {
-                    occhio
-                    orecchio
-                    if let sentito {
-                        HStack(spacing: 10) {
-                            Image(systemName: "ear").foregroundStyle(Color.black)
-                            Text(sentito.riga).font(Theme.mono(11, .semibold)).foregroundStyle(Color.black).lineLimit(2)
-                            Spacer()
-                            Button { self.sentito = nil } label: { Image(systemName: "xmark").foregroundStyle(Color.black) }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Togli il brano sentito")
-                        }
-                        .padding(10)
-                        .background(Theme.accent)
-                    }
-                    shutter
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                        ForEach(PhotoKind.slots) { kind in slot(kind) }
-                    }
-                    .padding(.vertical, 6)
-                    Button("Riconosci il disco · \(shots.count) foto\(sentito == nil ? "" : " + orecchio")") { submit() }
-                        .buttonStyle(SignalButtonStyle())
-                        .disabled(shots.isEmpty && sentito == nil)
-                    if !shots.isEmpty {
-                        Button("Ricomincia questo disco", role: .destructive) { shots = [:] }
-                            .font(Theme.mono(12))
-                    }
+                    cameraButton
+                    if !aiReady { AISignInRow { aiReady = true } }
                 } header: {
                     HUDLabel(number: "03", title: "Scatti")
                 } footer: {
-                    Text("Nessuna foto è obbligatoria: più ne fai, più il riconoscimento è preciso. Tocca un riquadro per rifare quella foto, tienilo premuto per toglierla.")
+                    Text("Una foto basta: copertina, retro o centrino. Col video passi più dischi davanti al telefono e li riconosce tutti.")
                         .font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 }
 
                 Section {
-                    LabeledContent("Dischi fotografati", value: "\(countToday)")
-                    LabeledContent("In riconoscimento", value: "\(seller.working)")
-                    LabeledContent("Modalità", value: seller.mode.label)
-                    if !seller.secondsPerDisc.isEmpty {
-                        let avg = seller.secondsPerDisc.reduce(0, +) / Double(seller.secondsPerDisc.count)
-                        LabeledContent("Media", value: String(format: "%.0f s a disco", avg))
+                    HStack {
+                        stat("\(today.count)", "fotografati")
+                        stat("\(today.filter { [DiscStatus.inVendita, .bozza].contains($0.status) }.count)", "su Discogs")
+                        stat("\(seller.working)", "in corso")
+                    }
+                    ForEach(waiting) { disc in
+                        DiscRow(disc: disc)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                            .listRowBackground(Color.clear)
                     }
                 } header: {
                     HUDLabel(number: "04", title: "Oggi")
+                } footer: {
+                    if waiting.isEmpty && !today.isEmpty {
+                        Text("Tutto deciso. Quelli messi su \"Dopo\" li trovi in Revisione.")
+                            .font(Theme.mono(11)).foregroundStyle(Theme.muted)
+                    }
                 }
-                .font(Theme.mono(13))
             }
             .themedBackground()
             .navigationTitle("Sessione")
             .onAppear {                                  // contenitore scelto che non esiste più: si torna al primo
                 if !kinds.contains(placeKind) { placeKind = kinds.first ?? "Scatola" }
             }
-            .fullScreenCover(isPresented: $showOrecchio) {
-                OrecchioView { brano in
-                    showOrecchio = false
-                    if let brano { sentito = brano }
-                }
+            .task {
+                let token = await Backend.shared.accessToken()
+                aiReady = !Backend.shared.isConfigured || token != nil
             }
-            .fullScreenCover(isPresented: $showOcchio) {
-                OcchioView { dati in
-                    showOcchio = false
-                    riceviOcchio(dati)
-                }
-            }
-            .alert(avviso ?? "", isPresented: Binding(get: { avviso != nil }, set: { if !$0 { avviso = nil } })) {}
             .alert("Nuovo contenitore", isPresented: $addingKind) {
-                TextField("es. Cassetta, Mobile, Stand…", text: $newKind)
+                TextField("es. Casa, Cassetta, Mobile…", text: $newKind)
                 Button("Aggiungi") { addKind() }
                 Button("Annulla", role: .cancel) {}
             }
-            .fullScreenCover(item: $shooting, onDismiss: {
-                if let next = pendingNext {            // scatto guidato: subito la foto successiva
-                    pendingNext = nil
-                    shooting = next
-                }
-            }) { kind in
-                CameraPicker { image in
-                    if let image {
-                        shots[kind] = image
-                        pendingNext = guided ? PhotoKind.slots.first { shots[$0] == nil } : nil
-                    } else {
-                        guided = false                 // annullato: lo scatto guidato si ferma qui
-                        pendingNext = nil
-                    }
-                    shooting = nil
-                }
-                .ignoresSafeArea()
+            .fullScreenCover(isPresented: $camera) {
+                OcchioView(place: place, media: media, sleeve: sleeve) { camera = false }
+                    .environment(seller)
+                    .modelContext(context)
             }
         }
+    }
+
+    /// Il tasto che apre la fotocamera: grande, chiaro, impossibile non vederlo.
+    private var cameraButton: some View {
+        Button { camera = true } label: {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle().stroke(Theme.accent, lineWidth: 3).frame(width: 66, height: 66)
+                    Circle().fill(Theme.accent).frame(width: 54, height: 54)
+                    Image(systemName: "camera.fill").font(.system(size: 22, weight: .bold)).foregroundStyle(Color.black)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("APRI LA FOTOCAMERA").font(Theme.display(24)).foregroundStyle(Theme.text)
+                    Text("SCATTO = UN DISCO · REC = TANTI DISCHI")
+                        .font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(Theme.accent)
+            }
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func stat(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(Theme.display(26)).foregroundStyle(Theme.text)
+            Text(label.uppercased()).font(Theme.mono(9, .semibold)).tracking(1).foregroundStyle(Theme.muted)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Il tipo di contenitore come pastiglia: verde se scelto. Tenendolo premuto si toglie.
@@ -205,7 +172,6 @@ struct SessionView: View {
                 Button("Togli \(kind)", systemImage: "trash", role: .destructive) {
                     kindsRaw = kinds.filter { $0 != kind }.joined(separator: "|")
                     if placeKind == kind { placeKind = kinds.first ?? "Scatola" }
-                    recentRaw = recent.joined(separator: "|")
                 }
             }
         }
@@ -216,16 +182,7 @@ struct SessionView: View {
         guard !name.isEmpty else { return }
         if !kinds.contains(name) { kindsRaw = (kinds + [name]).joined(separator: "|") }
         placeKind = name
-    }
-
-    /// Riprende una collocazione recente ("Scatola 12" -> tipo "Scatola", nome "12").
-    private func pick(_ item: String) {
-        if let kind = kinds.sorted(by: { $0.count > $1.count }).first(where: { item == $0 || item.hasPrefix($0 + " ") }) {
-            placeKind = kind
-            placeName = String(item.dropFirst(kind.count)).trimmingCharacters(in: .whitespaces)
-        } else {
-            placeName = item
-        }
+        placeName = ""
     }
 
     /// Una riga del grado: cosa si sta gradando, scritto chiaro, e i sei gradi.
@@ -241,173 +198,36 @@ struct SessionView: View {
         }
         .padding(.vertical, 4)
     }
-
-    /// Il riquadro di una foto: vuoto con l'icona, oppure con lo scatto e la targhetta verde.
-    private func slot(_ kind: PhotoKind) -> some View {
-        let image = shots[kind]
-        return Button {
-            guided = false
-            shooting = kind
-        } label: {
-            Rectangle()
-                .fill(Theme.panelHigh)
-                .frame(height: 118)
-                .overlay {
-                    if let image {
-                        Image(uiImage: image).resizable().scaledToFill()
-                    } else {
-                        Image(systemName: kind.symbol)
-                            .font(.system(size: 26, weight: .semibold))
-                            .foregroundStyle(Theme.muted)
-                            .padding(.bottom, 26)
-                    }
-                }
-                .clipped()
-                .overlay(alignment: .bottomLeading) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(kind.number) · \(kind.title.uppercased())").font(Theme.mono(10, .bold))
-                        Text(kind.hint).font(Theme.mono(9)).lineLimit(1)
-                    }
-                    .foregroundStyle(image == nil ? Theme.text : Color.black)
-                    .padding(6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(image == nil ? Color.clear : Theme.accent)
-                }
-                .overlay(Rectangle().stroke(image == nil ? Theme.line : Theme.accent, lineWidth: image == nil ? 1 : 2))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            if image != nil {
-                Button("Togli questa foto", systemImage: "trash", role: .destructive) { shots[kind] = nil }
-            }
-        }
-    }
-
-    /// OCCHIO: la modalità occhi di JARVIS. Una foto va nel primo riquadro libero;
-    /// un giro (4 fotogrammi) parte subito come disco da riconoscere.
-    private var occhio: some View {
-        Button { showOcchio = true } label: {
-            HStack(spacing: 16) {
-                ZStack {
-                    Circle().stroke(Theme.accent.opacity(0.5), lineWidth: 1).frame(width: 64, height: 64)
-                    Circle().stroke(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [10, 6])).frame(width: 52, height: 52)
-                    Image(systemName: "eye").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.accent)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("OCCHIO").font(Theme.display(24)).foregroundStyle(Theme.text)
-                    Text("FOTO DAL VIVO · REC = GIRA IL DISCO 5 SECONDI")
-                        .font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
-                }
-                Spacer()
-            }
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// ORECCHIO: come in JARVIS, riconosce il brano che suona. Diventa l'indizio del prossimo disco.
-    private var orecchio: some View {
-        Button { showOrecchio = true } label: {
-            HStack(spacing: 16) {
-                ZStack {
-                    Circle().stroke(Theme.accent.opacity(0.5), lineWidth: 1).frame(width: 64, height: 64)
-                    Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1).frame(width: 46, height: 46)
-                    Image(systemName: "ear").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.accent)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("ORECCHIO").font(Theme.display(24)).foregroundStyle(Theme.text)
-                    Text("FAI SUONARE IL DISCO · RICONOSCE IL BRANO")
-                        .font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
-                }
-                Spacer()
-            }
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func riceviOcchio(_ dati: [Data]) {
-        let immagini = dati.compactMap { UIImage(data: $0) }
-        guard !immagini.isEmpty else { return }
-        if immagini.count == 1 {
-            let kind = nextEmpty ?? .copertinaFronte
-            shots[kind] = immagini[0]
-        } else {
-            // il giro: il disco è già tutto lì, parte subito il riconoscimento
-            let fotogrammi = immagini.map { (kind: PhotoKind.giro, image: $0) }
-            seller.addDisc(photos: fotogrammi, lot: place, media: media, sleeve: sleeve, ear: sentito, context: context)
-            sentito = nil
-            recentRaw = ([place] + recent.filter { $0 != place }).prefix(8).joined(separator: "|")
-            countToday += 1
-            avviso = "Giro acquisito: \(immagini.count) fotogrammi in riconoscimento. Lo trovi in Revisione."
-        }
-    }
-
-    /// Scatto guidato: apre la fotocamera sulla prima foto mancante e passa da sola alle successive.
-    /// Annullando la fotocamera ci si ferma (le foto che mancano restano facoltative).
-    private var shutter: some View {
-        Button {
-            guard let first = nextEmpty else { return }
-            guided = true
-            shooting = first
-        } label: {
-            HStack(spacing: 16) {
-                ZStack {
-                    Circle().stroke(Theme.accent, lineWidth: 3).frame(width: 64, height: 64)
-                    Circle().fill(Theme.accent).frame(width: 52, height: 52)
-                    Image(systemName: "camera.fill").font(.system(size: 20, weight: .bold)).foregroundStyle(Color.black)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("SCATTO GUIDATO").font(Theme.display(24)).foregroundStyle(Theme.text)
-                    Text(nextEmpty.map { "PROSSIMA: \($0.title.uppercased())" } ?? "TUTTE LE FOTO FATTE")
-                        .font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
-                }
-                Spacer()
-            }
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(nextEmpty == nil)
-    }
-
-    private func submit() {
-        let ordered = PhotoKind.slots.compactMap { kind in shots[kind].map { (kind: kind, image: $0) } }
-        seller.addDisc(photos: ordered, lot: place, media: media, sleeve: sleeve, ear: sentito, context: context)
-        recentRaw = ([place] + recent.filter { $0 != place }).prefix(8).joined(separator: "|")
-        shots = [:]
-        sentito = nil
-        countToday += 1
-    }
 }
 
-/// Fotocamera di sistema. (Più avanti: fotocamera guidata con cornice e lettura del barcode dal vivo
-/// con VisionKit DataScannerViewController.)
-struct CameraPicker: UIViewControllerRepresentable {
-    var onFinish: (UIImage?) -> Void
+/// Accesso con Apple: serve per il riconoscimento AI (la chiave sta sul server, non nel telefono).
+/// Al primo accesso Apple dà anche il nome: lo usa la voce ("Ciao Marco…").
+struct AISignInRow: View {
+    var done: () -> Void
+    @AppStorage("userName") private var userName = ""
+    @State private var nonce = ""
 
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
-        picker.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .photoLibrary
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
-    func makeCoordinator() -> Coordinator { Coordinator(onFinish: onFinish) }
-
-    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-        let onFinish: (UIImage?) -> Void
-        init(onFinish: @escaping (UIImage?) -> Void) { self.onFinish = onFinish }
-
-        func imagePickerController(_ picker: UIImagePickerController,
-                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            onFinish(info[.originalImage] as? UIImage)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("ACCEDI PER IL RICONOSCIMENTO AI · SENZA, LEGGE SOLO BARCODE E SCRITTE")
+                .font(Theme.mono(10, .semibold)).tracking(1).foregroundStyle(Theme.warn)
+            SignInWithAppleButton(.signIn) { request in
+                nonce = UUID().uuidString
+                request.requestedScopes = [.fullName, .email]
+                request.nonce = Backend.sha256(nonce)
+            } onCompletion: { result in
+                guard case .success(let auth) = result,
+                      let cred = auth.credential as? ASAuthorizationAppleIDCredential,
+                      let tokenData = cred.identityToken, let token = String(data: tokenData, encoding: .utf8) else { return }
+                if userName.isEmpty, let given = cred.fullName?.givenName, !given.isEmpty { userName = given }
+                Task {
+                    try? await Backend.shared.signInWithApple(idToken: token, nonce: nonce)
+                    if await Backend.shared.accessToken() != nil { done() }
+                }
+            }
+            .signInWithAppleButtonStyle(.white)
+            .frame(height: 44)
         }
-
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { onFinish(nil) }
+        .padding(.vertical, 4)
     }
 }

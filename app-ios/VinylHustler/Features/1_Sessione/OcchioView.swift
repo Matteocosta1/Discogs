@@ -1,134 +1,201 @@
 import AVFoundation
 import ImageIO
+import SwiftData
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// OCCHIO — la modalità "occhi" di JARVIS portata in Vinyl Hustler.
-/// Fotocamera dal vivo con mirino da HUD:
-///   · tasto occhio: una foto (va nel primo riquadro libero della sessione);
-///   · tasto REC (giro): 5 secondi mentre si gira il disco davanti al telefono — copertina, retro,
-///     centrini, matrice — e 4 fotogrammi ben distanziati che partono subito per il riconoscimento.
-/// Le foto escono già ridotte (lato 1280 px, 1024 nel giro) e raddrizzate.
+/// OCCHIO — la fotocamera di Vinyl Hustler, come gli occhi di JARVIS.
+///   · tocchi lo scatto: una foto, e il disco viene riconosciuto subito (e te lo dice a voce);
+///   · tocchi REC: un video vero (fino a 20 secondi). Passi i dischi davanti al telefono, tocchi di nuovo
+///     per fermare: li riconosce tutti, uno per uno.
+/// Sotto il mirino compaiono i dischi riconosciuti: sì, è questo / no, e poi se metterlo in vendita.
 struct OcchioView: View {
-    /// Le foto scattate: una, oppure i fotogrammi del giro. Vuoto = chiuso senza scattare.
-    let fine: ([Data]) -> Void
+    let place: String
+    let media: Grade
+    let sleeve: Grade
+    let close: () -> Void
 
-    static let durataGiro = 5.0
-    static let fotogrammiGiro = 4
+    static let maxVideo = 20.0
 
+    @Environment(Seller.self) private var seller
+    @Environment(\.modelContext) private var context
+    @Query(sort: \Disc.createdAt, order: .reverse) private var all: [Disc]
+    @AppStorage("voice") private var voice = true
     @State private var motore = MotoreOcchio()
+    @State private var openedAt = Date()
     @State private var stato = "AGGANCIO OTTICO"
     @State private var lampo = false
-    @State private var scattando = false
-    @State private var chiuso = false
     @State private var agganciato = false
     @State private var registrando = false
-    @State private var mancano = 5
+    @State private var inizioVideo = Date()
+    @State private var preparo = false
+    @State private var attachTo: Disc?              // "Altra foto": il prossimo scatto va a questo disco
 
     private let tinta = Theme.accent
 
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            AnteprimaOcchio(sessione: motore.sessione)
-                .ignoresSafeArea()
-                .opacity(agganciato ? 1 : 0)
-                .animation(.easeOut(duration: 0.4), value: agganciato)
-            MirinoOcchio(agganciato: agganciato, scattando: scattando || registrando, tinta: tinta)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-            if registrando {
-                VStack {
-                    HStack(spacing: 8) {
-                        Circle().fill(Color.red).frame(width: 10, height: 10).shadow(color: .red, radius: 6)
-                        Text("REC · \(mancano)")
-                            .font(Theme.mono(14, .bold)).tracking(3).foregroundStyle(.white)
-                            .contentTransition(.numericText(countsDown: true))
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 7)
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Capsule())
-                    .padding(.top, 70)
-                    Spacer()
-                }
-                .allowsHitTesting(false)
-            }
-            Color.white.opacity(lampo ? 0.85 : 0).ignoresSafeArea().allowsHitTesting(false)
+    /// I dischi fotografati da quando hai aperto la fotocamera (il più recente prima).
+    private var seen: [Disc] {
+        all.filter { $0.createdAt >= openedAt && $0.status != .tolto && !$0.parked }
+    }
 
-            VStack(spacing: 14) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("VINYL HUSTLER").font(Theme.mono(15, .bold)).tracking(4)
-                        Text(registrando ? "OCCHIO · GIRO" : "OCCHIO").font(Theme.mono(9)).tracking(2).opacity(0.7)
-                    }
-                    .foregroundStyle(tinta)
-                    .shadow(color: tinta.opacity(0.6), radius: 6)
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                Color.black
+                AnteprimaOcchio(sessione: motore.sessione)
+                    .opacity(agganciato ? 1 : 0)
+                    .animation(.easeOut(duration: 0.4), value: agganciato)
+                MirinoOcchio(agganciato: agganciato, scattando: registrando, tinta: tinta)
+                    .allowsHitTesting(false)
+                Color.white.opacity(lampo ? 0.85 : 0).allowsHitTesting(false)
+                VStack(spacing: 10) {
+                    topBar
                     Spacer()
-                    Button { chiudi([]) } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(tinta)
-                            .frame(width: 44, height: 44)
-                            .background(Color.black.opacity(0.4))
-                            .clipShape(Circle())
-                            .overlay(Circle().stroke(tinta.opacity(0.5), lineWidth: 1))
-                    }
-                    .accessibilityLabel("Chiudi")
-                }
-                Spacer()
-                Text(stato)
-                    .font(Theme.mono(12, .semibold)).tracking(3)
-                    .foregroundStyle(tinta)
-                    .padding(.horizontal, 14).padding(.vertical, 7)
-                    .background(Color.black.opacity(0.45))
-                    .clipShape(Capsule())
-                    .contentTransition(.opacity)
-                HStack(spacing: 40) {
-                    Button { scatta() } label: {
-                        ZStack {
-                            Circle().stroke(tinta, lineWidth: 3).frame(width: 74, height: 74)
-                            Circle().fill(tinta.opacity(scattando ? 0.9 : 0.25)).frame(width: 60, height: 60)
-                            Image(systemName: "eye").font(.system(size: 22, weight: .semibold)).foregroundStyle(.white)
+                    if registrando { recBadge }
+                    if let attachTo {
+                        HStack(spacing: 8) {
+                            Image(systemName: "plus.viewfinder")
+                            Text("PROSSIMA FOTO → \(attachTo.releaseTitle.isEmpty ? "DISCO NON RICONOSCIUTO" : attachTo.releaseTitle.uppercased())")
+                                .lineLimit(1)
+                            Button { self.attachTo = nil } label: { Image(systemName: "xmark") }
                         }
-                        .contentShape(Circle())
-                        .shadow(color: tinta.opacity(0.7), radius: 10)
+                        .font(Theme.mono(11, .bold))
+                        .foregroundStyle(Color.black)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(tinta)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!agganciato || scattando || registrando)
-                    .accessibilityLabel("Scatta una foto")
-                    Button { Task { await giro() } } label: {
-                        ZStack {
-                            Circle().stroke(Color.red.opacity(0.85), lineWidth: 2).frame(width: 60, height: 60)
-                            Text("REC").font(Theme.mono(13, .bold)).foregroundStyle(.white)
-                        }
-                        .frame(width: 74, height: 74)
-                        .contentShape(Circle())          // tutto il cerchio è toccabile, non solo il bordo
-                        .shadow(color: .red.opacity(0.5), radius: 8)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!agganciato || scattando || registrando)
-                    .accessibilityLabel("Giro di cinque secondi")
+                    Text(stato)
+                        .font(Theme.mono(11, .semibold)).tracking(2.5)
+                        .foregroundStyle(tinta)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Color.black.opacity(0.5))
+                        .clipShape(Capsule())
+                    controls
                 }
-                Text("OCCHIO = UNA FOTO · REC = GIRA IL DISCO PER 5 SECONDI")
-                    .font(Theme.mono(9, .semibold)).tracking(1.2)
-                    .foregroundStyle(.white.opacity(0.7))
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .frame(maxHeight: .infinity)
+            results
         }
+        .background(Color.black.ignoresSafeArea())
         .statusBarHidden()
         .task { await prepara() }
         .onDisappear { motore.ferma() }
     }
 
+    // MARK: Pezzi
+
+    private var topBar: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("VINYL HUSTLER").font(Theme.mono(14, .bold)).tracking(4)
+                Text("\(place) · \(media == sleeve ? media.rawValue : "\(media.rawValue)/\(sleeve.rawValue)")".uppercased())
+                    .font(Theme.mono(9, .semibold)).tracking(1.5).opacity(0.8)
+            }
+            .foregroundStyle(tinta)
+            .shadow(color: tinta.opacity(0.6), radius: 6)
+            Spacer()
+            roundButton(voice ? "speaker.wave.2.fill" : "speaker.slash.fill", label: voice ? "Voce attiva" : "Voce spenta") {
+                voice.toggle()
+            }
+            roundButton("xmark", label: "Chiudi") {
+                if registrando { motore.fermaVideo() }
+                close()
+            }
+        }
+    }
+
+    private func roundButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tinta)
+                .frame(width: 42, height: 42)
+                .background(Color.black.opacity(0.45))
+                .clipShape(Circle())
+                .overlay(Circle().stroke(tinta.opacity(0.5), lineWidth: 1))
+        }
+        .accessibilityLabel(label)
+    }
+
+    private var recBadge: some View {
+        TimelineView(.periodic(from: inizioVideo, by: 0.5)) { ctx in
+            let s = Int(ctx.date.timeIntervalSince(inizioVideo))
+            HStack(spacing: 8) {
+                Circle().fill(Color.red).frame(width: 10, height: 10).shadow(color: .red, radius: 6)
+                Text(String(format: "REC %02d:%02d", s / 60, s % 60))
+                    .font(Theme.mono(14, .bold)).tracking(2).foregroundStyle(.white)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 7)
+            .background(Color.black.opacity(0.55))
+            .clipShape(Capsule())
+        }
+    }
+
+    /// Scatto al centro (grande), REC a destra. Tocchi REC una volta per partire, una volta per fermare.
+    private var controls: some View {
+        HStack {
+            Color.clear.frame(width: 70, height: 70)
+            Spacer()
+            Button { scatta() } label: {
+                ZStack {
+                    Circle().stroke(tinta, lineWidth: 4).frame(width: 82, height: 82)
+                    Circle().fill(tinta).frame(width: 66, height: 66)
+                    Image(systemName: "camera.fill").font(.system(size: 22, weight: .bold)).foregroundStyle(Color.black)
+                }
+                .contentShape(Circle())
+                .shadow(color: tinta.opacity(0.6), radius: 10)
+            }
+            .buttonStyle(.plain)
+            .disabled(!agganciato || registrando || preparo)
+            .opacity(registrando ? 0.3 : 1)
+            .accessibilityLabel("Scatta una foto")
+            Spacer()
+            Button { registrando ? motore.fermaVideo() : registra() } label: {
+                ZStack {
+                    Circle().stroke(Color.white.opacity(0.9), lineWidth: 3).frame(width: 62, height: 62)
+                    if registrando {
+                        RoundedRectangle(cornerRadius: 5).fill(Color.red).frame(width: 24, height: 24)
+                    } else {
+                        Circle().fill(Color.red).frame(width: 48, height: 48)
+                        Text("REC").font(Theme.mono(11, .bold)).foregroundStyle(.white)
+                    }
+                }
+                .frame(width: 70, height: 70)
+                .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!agganciato || preparo || attachTo != nil)
+            .accessibilityLabel(registrando ? "Ferma il video" : "Registra un video")
+        }
+    }
+
+    /// I dischi riconosciuti, sotto la fotocamera: sì / no, poi vendita.
+    @ViewBuilder private var results: some View {
+        if !seen.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 10) {
+                    ForEach(seen) { disc in
+                        DiscRow(disc: disc, onRetake: { attachTo = disc })
+                            .frame(width: 320)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+            .frame(height: 210)
+            .background(Theme.bg)
+        }
+    }
+
     // MARK: Lavoro
 
     private func prepara() async {
+        openedAt = Date()
         guard await AVCaptureDevice.requestAccess(for: .video) else {
             stato = "ACCESSO NEGATO · IMPOSTAZIONI › FOTOCAMERA"
-            try? await Task.sleep(for: .seconds(2.5))
-            chiudi([])
             return
         }
         let pronto = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
@@ -136,71 +203,78 @@ struct OcchioView: View {
         }
         guard pronto else {
             stato = "FOTOCAMERA NON DISPONIBILE"
-            try? await Task.sleep(for: .seconds(2))
-            chiudi([])
             return
         }
         agganciato = true
-        stato = "INQUADRI IL DISCO"
+        stato = "INQUADRA UN DISCO"
     }
 
     private func scatta() {
-        guard agganciato, !scattando, !chiuso else { return }
-        scattando = true
-        stato = "ACQUISIZIONE"
+        guard agganciato, !registrando else { return }
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
         withAnimation(.easeOut(duration: 0.06)) { lampo = true }
         withAnimation(.easeIn(duration: 0.45).delay(0.06)) { lampo = false }
-        motore.scatta(veloce: false) { dati in
-            let jpeg = dati.flatMap { OcchioView.riduci($0) }
-            Task { @MainActor in chiudi(jpeg.map { [$0] } ?? []) }
-        }
-    }
-
-    /// Il giro: 5 secondi, 4 fotogrammi distribuiti nel tempo, poi si chiude da solo.
-    private func giro() async {
-        guard agganciato, !scattando, !registrando, !chiuso else { return }
-        registrando = true
-        stato = "GIRI IL DISCO DAVANTI AL TELEFONO"
-        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-        let inizio = Date()
-        let passo = OcchioView.durataGiro / Double(OcchioView.fotogrammiGiro)
-        var fotogrammi: [Data] = []
-        let conto = Task { @MainActor in
-            for s in stride(from: Int(OcchioView.durataGiro), through: 1, by: -1) {
-                withAnimation { mancano = s }
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
-        for k in 0..<OcchioView.fotogrammiGiro {
-            let quando = passo * (Double(k) + 0.4)               // 0,5 · 1,75 · 3 · 4,25 secondi
-            let attesa = quando - Date().timeIntervalSince(inizio)
-            if attesa > 0 { try? await Task.sleep(for: .seconds(attesa)) }
-            guard !chiuso else { conto.cancel(); return }
-            let dati = await withCheckedContinuation { (c: CheckedContinuation<Data?, Never>) in
-                motore.scatta(veloce: true) { d in c.resume(returning: d) }
-            }
-            if let dati, let jpeg = OcchioView.riduci(dati, lato: 1024) { fotogrammi.append(jpeg) }
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        }
-        let resto = OcchioView.durataGiro - Date().timeIntervalSince(inizio)
-        if resto > 0 { try? await Task.sleep(for: .seconds(resto)) }
-        conto.cancel()
-        guard !chiuso else { return }
-        registrando = false
         stato = "ANALISI"
-        chiudi(fotogrammi)
+        motore.scatta { dati in
+            let image = dati.flatMap { OcchioView.riduci($0) }.flatMap(UIImage.init(data:))
+            Task { @MainActor in
+                guard let image else { stato = "SCATTO NON RIUSCITO · RIPROVA"; return }
+                if let target = attachTo {
+                    seller.addPhoto(image, to: target, context: context)
+                    attachTo = nil
+                } else {
+                    seller.shoot([image], video: false, place: place, media: media, sleeve: sleeve, context: context)
+                }
+                stato = "INQUADRA UN DISCO"
+            }
+        }
     }
 
-    private func chiudi(_ dati: [Data]) {
-        guard !chiuso else { return }
-        chiuso = true
-        motore.ferma()
-        fine(dati)
+    private func registra() {
+        guard agganciato, !registrando else { return }
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        inizioVideo = Date()
+        registrando = true
+        stato = "PASSA I DISCHI DAVANTI · TOCCA PER FERMARE"
+        motore.registra(max: OcchioView.maxVideo) { url in
+            Task { @MainActor in
+                registrando = false
+                UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+                guard let url else { stato = "VIDEO NON RIUSCITO · RIPROVA"; return }
+                preparo = true
+                stato = "ANALISI DEL VIDEO"
+                let frames = await OcchioView.fotogrammi(url)
+                preparo = false
+                if !frames.isEmpty {
+                    seller.shoot(frames, video: true, place: place, media: media, sleeve: sleeve, context: context)
+                }
+                stato = "INQUADRA UN DISCO"
+            }
+        }
     }
 
-    /// Lato massimo 1280 px (1024 nel giro), JPEG al 70%, raddrizzata secondo l'orientamento del telefono.
-    nonisolated static func riduci(_ dati: Data, lato: Int = 1280) -> Data? {
+    /// Fotogrammi distribuiti su tutto il video (8; 3 se il video è cortissimo).
+    static func fotogrammi(_ url: URL, quanti: Int = 8) async -> [UIImage] {
+        defer { try? FileManager.default.removeItem(at: url) }
+        let asset = AVURLAsset(url: url)
+        guard let durata = try? await asset.load(.duration), durata.seconds > 0 else { return [] }
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 1280, height: 1280)
+        let tolleranza = CMTime(seconds: 0.15, preferredTimescale: 600)
+        gen.requestedTimeToleranceBefore = tolleranza
+        gen.requestedTimeToleranceAfter = tolleranza
+        let n = durata.seconds < 2 ? 3 : quanti
+        var out: [UIImage] = []
+        for k in 0..<n {
+            let t = CMTime(seconds: durata.seconds * (Double(k) + 0.5) / Double(n), preferredTimescale: 600)
+            if let frame = try? await gen.image(at: t) { out.append(UIImage(cgImage: frame.image)) }
+        }
+        return out
+    }
+
+    /// Lato massimo 1600 px, JPEG all'80%, raddrizzata secondo l'orientamento del telefono.
+    nonisolated static func riduci(_ dati: Data, lato: Int = 1600) -> Data? {
         guard let sorgente = CGImageSourceCreateWithData(dati as CFData, nil) else { return nil }
         let opzioni: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -210,7 +284,7 @@ struct OcchioView: View {
         guard let piccola = CGImageSourceCreateThumbnailAtIndex(sorgente, 0, opzioni as CFDictionary) else { return nil }
         let uscita = NSMutableData()
         guard let destinazione = CGImageDestinationCreateWithData(uscita as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destinazione, piccola, [kCGImageDestinationLossyCompressionQuality: 0.7] as CFDictionary)
+        CGImageDestinationAddImage(destinazione, piccola, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
         guard CGImageDestinationFinalize(destinazione) else { return nil }
         return uscita as Data
     }
@@ -294,34 +368,36 @@ struct AnteprimaOcchio: UIViewRepresentable {
     func updateUIView(_ v: Vista, context: Context) {}
 }
 
-// MARK: - Motore della fotocamera (lavora su una coda sua, fuori dal thread principale)
+// MARK: - Motore della fotocamera: foto e video veri (lavora su una coda sua, fuori dal thread principale)
 
-final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
+final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate, @unchecked Sendable {
     let sessione = AVCaptureSession()
-    private let uscita = AVCapturePhotoOutput()
+    private let foto = AVCapturePhotoOutput()
+    private let video = AVCaptureMovieFileOutput()
     private let coda = DispatchQueue(label: "it.vinylhustler.app.occhio")
     private var configurata = false
-    private var consegna: (@Sendable (Data?) -> Void)?
+    private var consegnaFoto: (@Sendable (Data?) -> Void)?
+    private var consegnaVideo: (@Sendable (URL?) -> Void)?
 
     func avvia(pronto: @escaping @Sendable (Bool) -> Void) {
         coda.async {
             if !self.configurata {
                 self.sessione.beginConfiguration()
-                self.sessione.sessionPreset = .photo
+                self.sessione.sessionPreset = .high          // foto e video insieme
                 guard let cam = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
                       let ingresso = try? AVCaptureDeviceInput(device: cam),
-                      self.sessione.canAddInput(ingresso) else {
+                      self.sessione.canAddInput(ingresso),
+                      self.sessione.canAddOutput(self.foto) else {
                     self.sessione.commitConfiguration()
                     pronto(false)
                     return
                 }
                 self.sessione.addInput(ingresso)
-                guard self.sessione.canAddOutput(self.uscita) else {
-                    self.sessione.commitConfiguration()
-                    pronto(false)
-                    return
+                self.sessione.addOutput(self.foto)
+                if self.sessione.canAddOutput(self.video) { self.sessione.addOutput(self.video) }
+                for output in [self.foto, self.video] as [AVCaptureOutput] {   // verticale, come tieni il telefono
+                    if let c = output.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
                 }
-                self.sessione.addOutput(self.uscita)
                 self.sessione.commitConfiguration()
                 if cam.isFocusModeSupported(.continuousAutoFocus), (try? cam.lockForConfiguration()) != nil {
                     cam.focusMode = .continuousAutoFocus
@@ -335,26 +411,55 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Se
     }
 
     func ferma() {
-        coda.async { if self.sessione.isRunning { self.sessione.stopRunning() } }
+        coda.async {
+            if self.video.isRecording { self.video.stopRecording() }
+            if self.sessione.isRunning { self.sessione.stopRunning() }
+        }
     }
 
-    /// veloce: per i fotogrammi del giro, scatto immediato senza elaborazioni pesanti.
-    func scatta(veloce: Bool, _ fine: @escaping @Sendable (Data?) -> Void) {
+    func scatta(_ fine: @escaping @Sendable (Data?) -> Void) {
         coda.async {
-            guard self.sessione.isRunning, self.consegna == nil else { fine(nil); return }
-            self.consegna = fine
+            guard self.sessione.isRunning, self.consegnaFoto == nil else { fine(nil); return }
+            self.consegnaFoto = fine
             let impostazioni = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
-            if veloce { impostazioni.photoQualityPrioritization = .speed }
-            self.uscita.capturePhoto(with: impostazioni, delegate: self)
+            self.foto.capturePhoto(with: impostazioni, delegate: self)
         }
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: (any Error)?) {
         let dati = error == nil ? photo.fileDataRepresentation() : nil
         coda.async {
-            let f = self.consegna
-            self.consegna = nil
+            let f = self.consegnaFoto
+            self.consegnaFoto = nil
             f?(dati)
+        }
+    }
+
+    /// Video vero, senza audio. Si ferma con fermaVideo() o da solo dopo `max` secondi.
+    func registra(max: Double, _ fine: @escaping @Sendable (URL?) -> Void) {
+        coda.async {
+            guard self.sessione.isRunning, !self.video.isRecording,
+                  self.sessione.outputs.contains(self.video) else { fine(nil); return }
+            self.consegnaVideo = fine
+            self.video.maxRecordedDuration = CMTime(seconds: max, preferredTimescale: 600)
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mov")
+            self.video.startRecording(to: url, recordingDelegate: self)
+        }
+    }
+
+    func fermaVideo() {
+        coda.async { if self.video.isRecording { self.video.stopRecording() } }
+    }
+
+    func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo url: URL,
+                    from connections: [AVCaptureConnection], error: (any Error)?) {
+        // Arrivato al tempo massimo l'errore c'è, ma il file è buono.
+        let finito = (error as NSError?)?.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool
+        let ok = error == nil || finito == true
+        coda.async {
+            let f = self.consegnaVideo
+            self.consegnaVideo = nil
+            f?(ok ? url : nil)
         }
     }
 }

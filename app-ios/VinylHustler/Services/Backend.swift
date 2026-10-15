@@ -1,10 +1,11 @@
 import AuthenticationServices
+import CryptoKit
 import Foundation
 import Supabase
 
 /// Collegamento a Supabase: login dell'utente dell'app (Sign in with Apple) e funzioni sul server.
 /// La chiave di Anthropic NON è mai nell'app: la usa solo la funzione `ai-cover` sul server.
-/// Senza Supabase configurato l'app funziona lo stesso in modalità Super veloce (niente AI).
+/// Senza accesso l'app funziona lo stesso: barcode e scritte lette sul telefono (niente AI).
 final class Backend: @unchecked Sendable {
     static let shared = Backend()
     let client: SupabaseClient?
@@ -29,29 +30,32 @@ final class Backend: @unchecked Sendable {
         try await client.auth.signInWithIdToken(credentials: OpenIDConnectCredentials(provider: .apple, idToken: idToken, nonce: nonce))
     }
 
+    /// SHA-256 esadecimale del nonce (Apple vuole quello cifrato, Supabase quello in chiaro).
+    static func sha256(_ s: String) -> String {
+        SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
     func signOut() async {
         try? await client?.auth.signOut()
     }
 }
 
-/// Risposta dell'AI al confronto delle copertine (stesso schema di AI_COVER_SCHEMA).
-struct AICoverChoice: Codable {
-    var releaseId: Int
-    var confidence: String      // high / medium / low
-    var reason: String
-    var cost: Double?           // euro, calcolati dal server
-}
-
-/// Cosa l'AI legge sulla foto (stesso schema di AI_READ_SCHEMA).
-struct AIRead: Codable {
+/// Un disco visto dall'AI nelle foto (schema SCAN della funzione ai-cover).
+struct AIRecord: Codable {
     var artist: String
     var title: String
     var label: String
     var catno: String
     var barcode: String
-    var compilation: Bool
-    var recognizedArtist: String
-    var recognizedTitle: String
+    var year: String
+    var images: [Int]           // in quali foto si vede (numerate da 1)
+
+    /// "Miles Davis - Kind Of Blue"
+    var line: String { [artist, title].filter { !$0.isEmpty }.joined(separator: " - ") }
+}
+
+struct AIScan: Codable {
+    var records: [AIRecord]
     var cost: Double?
 }
 
@@ -69,18 +73,9 @@ enum AIError: LocalizedError {
 
 /// Chiamate alla funzione `ai-cover` su Supabase.
 struct AIService {
-    struct CandidateImages: Encodable {
-        var releaseId: Int
-        var title: String
-        var images: [String]            // JPEG in base64, lato lungo 768 px
-    }
-
-    func matchCovers(photos: [Data], candidates: [CandidateImages]) async throws -> AICoverChoice {
-        try await call(["task": "match", "photos": photos.map { $0.base64EncodedString() }, "candidates": candidates])
-    }
-
-    func read(photos: [Data]) async throws -> AIRead {
-        try await call(["task": "read", "photos": photos.map { $0.base64EncodedString() }])
+    /// Tutti i dischi che si vedono nelle foto (o nei fotogrammi di un video).
+    func scan(photos: [Data]) async throws -> AIScan {
+        try await call(["task": "scan", "photos": photos.map { $0.base64EncodedString() }])
     }
 
     private func call<T: Decodable>(_ payload: [String: any Encodable]) async throws -> T {
