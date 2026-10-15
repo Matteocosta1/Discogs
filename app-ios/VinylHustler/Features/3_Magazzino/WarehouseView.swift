@@ -35,11 +35,8 @@ struct WarehouseView: View {
     }
 
     private var forSaleCount: Int { listings.filter { $0.status == "For Sale" }.count }
-    /// Le stesse bozze della Revisione: quelle su Discogs più i dischi dell'app non ancora caricati.
-    private var draftCount: Int {
-        listings.filter { $0.status == "Draft" }.count
-            + discs.filter { [DiscStatus.daConfermare, .daControllare, .bloccato, .pronto].contains($0.status) }.count
-    }
+    /// Le stesse della pagina Bozze: le bozze su Discogs.
+    private var draftCount: Int { listings.filter { $0.status == "Draft" }.count }
     /// Quanti dei dischi da eliminare sono in vendita (non bozze): per loro la conferma è più netta.
     private var onlineToDelete: Int {
         listings.filter { toDelete.contains($0.id) && $0.status == "For Sale" }.count
@@ -67,7 +64,7 @@ struct WarehouseView: View {
             Section {
                 HStack {
                     stat(String(forSaleCount), "Online")
-                    Button { selectedTab = 1 } label: {        // porta alla pagina Bozze
+                    Button { selectedTab = 2 } label: {        // porta alla pagina Bozze
                         stat(String(draftCount), "Bozze")
                     }
                     .buttonStyle(.plain)

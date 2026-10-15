@@ -119,6 +119,7 @@ enum InfoTopic: String, Identifiable {
                     "• «Bozza»: è lui, ma non lo metti ancora online. Lo salva come bozza su Discogs e lo ritrovi nella pagina Bozze.",
                     "• «Versioni»: non è quella giusta? Ti fa vedere le altre edizioni trovate e scegli tu.",
                     "• «Elimina» (rosso, in fondo): lo togli.",
+                    "Se chiudi la fotocamera senza decidere, il disco ti aspetta nella pagina Revisione.",
                     "Poi decidi subito: Vendi (va online) oppure Bozza (sta su Discogs ma nascosto, lo pubblichi quando vuoi).",
                 ]),
                 ("Consigli", [

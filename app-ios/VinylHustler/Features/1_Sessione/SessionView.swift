@@ -4,7 +4,7 @@ import SwiftUI
 
 /// 01 / SESSIONE — posizione, condizione, poi la fotocamera.
 /// Nella fotocamera: uno scatto o un video, e i dischi vengono riconosciuti subito.
-/// Sotto, in "Oggi", i dischi riconosciuti aspettano la tua decisione: sì / no, e poi se venderli.
+/// I dischi riconosciuti vanno in Revisione.
 struct SessionView: View {
     @Environment(Seller.self) private var seller
     @Environment(\.modelContext) private var context
@@ -23,9 +23,8 @@ struct SessionView: View {
     @State private var camera = false
     @State private var breathe = false
     @State private var aiReady = true
-    @State private var listings: [Listing] = []        // l'inventario Discogs, come in Magazzino
-    @State private var loadingInventory = false
     @State private var info: InfoTopic?
+    @State private var showConsole = false
 
     private var media: Grade { Grade(rawValue: mediaRaw) ?? .m }
     private var sleeve: Grade { Grade(rawValue: sleeveRaw) ?? media }
@@ -37,18 +36,7 @@ struct SessionView: View {
         let name = placeName.trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? placeKind : "\(placeKind) \(name)"
     }
-    private var today: [Disc] { discs.filter { Calendar.current.isDateInToday($0.createdAt) && $0.status != .tolto } }
 
-    /// I dischi che aspettano qualcosa in Revisione (da decidere, o col prezzo ma non ancora pubblicati).
-    private var inReview: Int {
-        discs.filter { [DiscStatus.daConfermare, .daControllare, .bloccato, .pronto].contains($0.status) }.count
-    }
-
-    private func loadInventory() async {
-        loadingInventory = true
-        defer { loadingInventory = false }
-        if let l = try? await seller.syncInventory(discs: discs) { listings = l }
-    }
 
     var body: some View {
         NavigationStack {
@@ -95,15 +83,17 @@ struct SessionView: View {
                     InfoHeader(title: "Fotocamera") { info = .fotocamera }
                 }
 
-                Section {
-                    stat("\(today.count)", "fotografati")      // solo il numero della sessione: i totali stanno nel Magazzino
-                } header: {
-                    HUDLabel(number: "04", title: "Oggi")
-                }
             }
             .themedBackground()
             .navigationTitle("Foto")
-            .refreshable { await Task { await loadInventory() }.value }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {      // la Console sta qui: nella barra in basso c'è posto per 5
+                    Button { showConsole = true } label: { Image(systemName: "gearshape") }
+                        .tint(Theme.accent)
+                        .accessibilityLabel("Console")
+                }
+            }
+            .sheet(isPresented: $showConsole) { ConsoleView().environment(seller) }
             .onAppear {                                  // contenitore scelto che non esiste più: si torna al primo
                 if !oldKindsRaw.isEmpty {
                     let extra = oldKindsRaw.split(separator: "|").map(String.init).filter { !Self.fixedKinds.contains($0) && !custom.contains($0) }
@@ -115,7 +105,6 @@ struct SessionView: View {
             .task {
                 let token = await Backend.shared.accessToken()
                 aiReady = !Backend.shared.isConfigured || token != nil
-                if listings.isEmpty { await Task { await loadInventory() }.value }
             }
             .confirmationDialog("Eliminare il contenitore \"\(removing ?? "")\"? I dischi già fotografati tengono il loro posto.",
                                 isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
@@ -135,7 +124,7 @@ struct SessionView: View {
             }
             .sheet(item: $info) { InfoSheet(topic: $0) }
             .fullScreenCover(isPresented: $camera) {
-                OcchioView(place: place, media: media, sleeve: sleeve) { camera = false; Task { await loadInventory() } }
+                OcchioView(place: place, media: media, sleeve: sleeve) { camera = false }
                     .environment(seller)
                     .modelContext(context)
             }
@@ -163,16 +152,6 @@ struct SessionView: View {
         .onAppear {
             withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false)) { breathe = true }
         }
-    }
-
-    private func stat(_ value: String, _ label: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(.system(size: 28, weight: .bold)).foregroundStyle(value == "0" ? Theme.text : Theme.glow)
-                .contentTransition(.numericText())
-                .animation(.snappy, value: value)
-            Text(label).font(.system(size: 13)).foregroundStyle(Theme.muted)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Il tipo di contenitore come pastiglia: verde se scelto. Tenendolo premuto si toglie.

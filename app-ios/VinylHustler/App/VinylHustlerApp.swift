@@ -26,7 +26,7 @@ struct VinylHustlerApp: App {
     }
 }
 
-/// Le 5 sezioni: Sessione, Revisione, Magazzino, Ordini, Console.
+/// Le 5 sezioni: Foto, Revisione, Bozze, Magazzino, Ordini. La Console si apre dall'ingranaggio in Foto.
 struct RootView: View {
     @Environment(Seller.self) private var seller
     @Query(filter: #Predicate<Disc> { $0.statusRaw == "daControllare" || $0.statusRaw == "daConfermare" })
@@ -52,6 +52,7 @@ struct RootView: View {
             withAnimation(.easeOut(duration: 0.5)) { splash = false }
         }
         .onChange(of: tab) { _, _ in Suoni.tocco() }
+        .onAppear { if !(0...4).contains(tab) { tab = 0 } }
         .alert(seller.lastError ?? "", isPresented: Binding(get: { seller.lastError != nil },
                                                             set: { if !$0 { seller.lastError = nil } })) {}
     }
@@ -59,11 +60,11 @@ struct RootView: View {
     private var tabs: some View {
         TabView(selection: $tab) {
             SessionView().tabItem { Label("Foto", systemImage: "camera.fill") }.tag(0)
-            ReviewView().tabItem { Label("Bozze", systemImage: "tray.full") }.tag(1)
+            ReviewView().tabItem { Label("Revisione", systemImage: "checkmark.seal") }.tag(1)
                 .badge(toCheck.count)
-            WarehouseView().tabItem { Label("Magazzino", systemImage: "square.stack.3d.up") }.tag(2)
-            OrdersView().tabItem { Label("Ordini", systemImage: "shippingbox") }.tag(3)
-            ConsoleView().tabItem { Label("Console", systemImage: "slider.horizontal.3") }.tag(4)
+            DraftsView().tabItem { Label("Bozze", systemImage: "tray.full") }.tag(2)
+            WarehouseView().tabItem { Label("Magazzino", systemImage: "square.stack.3d.up") }.tag(3)
+            OrdersView().tabItem { Label("Ordini", systemImage: "shippingbox") }.tag(4)
         }
     }
 }
