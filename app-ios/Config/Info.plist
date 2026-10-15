@@ -6,6 +6,8 @@
 	<string>$(DISCOGS_CONSUMER_KEY)</string>
 	<key>DISCOGS_CONSUMER_SECRET</key>
 	<string>$(DISCOGS_CONSUMER_SECRET)</string>
+	<key>DISCOGS_PERSONAL_TOKEN</key>
+	<string>$(DISCOGS_PERSONAL_TOKEN)</string>
 	<key>SUPABASE_URL</key>
 	<string>$(SUPABASE_URL)</string>
 	<key>SUPABASE_ANON_KEY</key>

@@ -7,4 +7,8 @@ DISCOGS_CONSUMER_SECRET =
 SUPABASE_URL =
 SUPABASE_ANON_KEY =
 
+// Solo uso interno: token personale Discogs letto all'avvio (tasto "Usa il token del Mac").
+// Mai riempirlo in una versione da distribuire.
+DISCOGS_PERSONAL_TOKEN =
+
 #include? "../Secrets.xcconfig"

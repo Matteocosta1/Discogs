@@ -85,8 +85,21 @@ struct LoginView: View {
             .buttonStyle(.borderedProminent)
             Divider()
             Text("Uso interno: token personale").font(.caption).foregroundStyle(.secondary)
-            SecureField("Token da discogs.com/settings/developers", text: $token)
-                .textFieldStyle(.roundedBorder)
+            if !AppConfig.discogsPersonalToken.isEmpty {
+                Button("Usa il token del Mac") {
+                    Task { await seller.connect(.personalToken(AppConfig.discogsPersonalToken)) }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            HStack {
+                SecureField("Token da discogs.com/settings/developers", text: $token)
+                    .textFieldStyle(.roundedBorder)
+                PasteButton(payloadType: String.self) { strings in
+                    let pasted = strings.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    Task { @MainActor in token = pasted }
+                }
+                .labelStyle(.iconOnly)
+            }
             Button("Usa il token") { Task { await seller.connect(.personalToken(token.trimmingCharacters(in: .whitespaces))) } }
                 .disabled(token.count < 10)
             if let error { Text(error).foregroundStyle(Theme.warn).font(.footnote) }
