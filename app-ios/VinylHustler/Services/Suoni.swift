@@ -6,6 +6,7 @@ import UIKit
 ///   «avvio»         l'app si accende / la fotocamera aggancia
 ///   «scheda»        parte il riconoscimento ("sto guardando…")
 ///   «schedapronta»  disco riconosciuto
+///   «apertura»      apertura dell'app (mp3 scelto da Alessandro)
 /// L'errore (non riconosciuto) è un doppio segnale basso generato al volo.
 /// Si spengono in Console › Suoni dell'interfaccia.
 @MainActor
@@ -14,6 +15,11 @@ enum Suoni {
 
     static func tocco() { riproduci("tick", volume: 0.55) }
     static func avvio() { riproduci("avvio", volume: 0.7) }
+    /// All'apertura dell'app (file «apertura»; se manca, il suono d'avvio di JARVIS).
+    static func apertura() {
+        guard attivi else { return }
+        if let p = lettore("apertura", volume: 0.8) { tieni(p); p.play() } else { avvio() }
+    }
 
     /// Parte il riconoscimento.
     static func guardo() {
@@ -49,7 +55,8 @@ enum Suoni {
     private static var cacheErrore: Data?
 
     private static func lettore(_ nome: String, volume: Float) -> AVAudioPlayer? {
-        guard let url = Bundle.main.url(forResource: nome, withExtension: "m4a"),
+        guard let url = ["m4a", "mp3", "wav", "caf"].lazy
+                .compactMap({ Bundle.main.url(forResource: nome, withExtension: $0) }).first,
               let p = try? AVAudioPlayer(contentsOf: url) else { return nil }
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
         p.volume = volume

@@ -47,7 +47,7 @@ struct RootView: View {
         }
         .task {
             // all'apertura il marchio si accende come un neon, col suono d'avvio di JARVIS, poi sfuma
-            Suoni.avvio()
+            Suoni.apertura()
             try? await Task.sleep(for: .milliseconds(1700))
             withAnimation(.easeOut(duration: 0.5)) { splash = false }
         }
