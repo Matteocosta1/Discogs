@@ -39,7 +39,7 @@ struct DraftsView: View {
                 .padding()
             }
             .background(Theme.bg)
-            .navigationTitle("Bozze")
+            .navigationTitle("Revisione")
             .searchable(text: $search, prompt: "Titolo, artista, scatola…")
             .overlay { if loading && drafts.isEmpty { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
             .refreshable { await Task { await loadDrafts() }.value }
