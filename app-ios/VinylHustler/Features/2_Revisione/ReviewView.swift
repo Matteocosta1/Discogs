@@ -1,52 +1,63 @@
 import SwiftData
 import SwiftUI
 
-/// 02 / REVISIONE — una sola lista: i dischi da sistemare (da confermare, non riconosciuti, bloccati)
-/// e quelli confermati col prezzo ma non ancora pubblicati. In vendita e bozze stanno nel Magazzino.
+/// 02 / REVISIONE — tutti i dischi in due schede: Da decidere (sì / no, non riconosciuti, bloccati)
+/// e In vendita (pronti, online, bozze). Gli stessi tasti della Sessione.
 struct ReviewView: View {
     @Environment(Seller.self) private var seller
     @Query(sort: \Disc.createdAt, order: .reverse) private var discs: [Disc]
+    @State private var tab = Tab.check
     @State private var search = ""
     @State private var lot = ""
 
+    enum Tab: String, CaseIterable { case sale = "In vendita", check = "Da decidere" }
+
     private var lots: [String] { Array(Set(discs.map(\.lot))).sorted() }
 
-    private var visible: [Disc] {
-        let states: [DiscStatus] = [.daConfermare, .daControllare, .bloccato, .pronto]
-        let q = search.lowercased()
-        return discs.filter { d in
-            states.contains(d.status)
-                && (lot.isEmpty || d.lot == lot)
-                && (q.isEmpty || "\(d.releaseTitle) \(d.lot) \(d.reason)".lowercased().contains(q))
+    private func visible(_ tab: Tab) -> [Disc] {
+        discs.filter { d in
+            let saleStates: [DiscStatus] = [.pronto, .inVendita, .bozza]
+            let checkStates: [DiscStatus] = [.daConfermare, .daControllare, .bloccato]
+            let inTab = tab == .sale ? saleStates.contains(d.status) : checkStates.contains(d.status)
+            let inLot = lot.isEmpty || d.lot == lot
+            let q = search.lowercased()
+            let match = q.isEmpty || "\(d.releaseTitle) \(d.lot) \(d.reason)".lowercased().contains(q)
+            return inTab && inLot && match
         }
     }
-    private var ready: [Disc] { visible.filter { $0.status == .pronto } }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 16) {
-                    if !ready.isEmpty {
-                        Button {
-                            Task { await seller.publishReady(ready) }
-                        } label: {
-                            Text("Pubblica \(ready.count)")
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                        }
-                        .buttonStyle(SignalButtonStyle())
-                    }
-                    ForEach(visible) { disc in
-                        DiscCard(disc: disc)
-                    }
-                    if visible.isEmpty {
-                        VStack(spacing: 18) {
-                            VinylMark(size: 110)
-                            Text("Tutto in ordine").font(.system(size: 15)).foregroundStyle(Theme.muted)
-                        }
-                        .padding(.top, 60)
-                    }
+            VStack(spacing: 0) {
+                Picker("", selection: $tab) {
+                    ForEach(Tab.allCases, id: \.self) { t in Text("\(t.rawValue) \(visible(t).count)").tag(t) }
                 }
-                .padding()
+                .pickerStyle(.segmented).padding()
+                ScrollView {
+                    LazyVStack(spacing: 16) {
+                        if tab == .sale, visible(.sale).contains(where: { $0.status == .pronto }) {
+                            Button {
+                                Task { await seller.publishReady(visible(.sale)) }
+                            } label: {
+                                Text("Pubblica pronti · \(visible(.sale).filter { $0.status == .pronto }.count)")
+                                    .frame(maxWidth: .infinity, minHeight: 44)
+                            }
+                            .buttonStyle(SignalButtonStyle())
+                        }
+                        ForEach(visible(tab)) { disc in
+                            DiscCard(disc: disc)
+                        }
+                        if visible(tab).isEmpty {
+                            VStack(spacing: 18) {
+                                VinylMark(size: 110)
+                                Text(tab == .sale ? "Nessun disco in vendita" : "Tutto in ordine")
+                                    .font(.system(size: 15)).foregroundStyle(Theme.muted)
+                            }
+                            .padding(.top, 60)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
             }
             .background(Theme.bg)
             .navigationTitle("Revisione")
