@@ -61,11 +61,11 @@ struct ReviewView: View {
             }
             .background(Theme.bg)
             .navigationTitle("Revisione")
-            .searchable(text: $search, prompt: "Titolo, artista, lotto…")
+            .searchable(text: $search, prompt: "Titolo, artista, scatola…")
             .toolbar {
                 Menu {
-                    Picker("Lotto", selection: $lot) {
-                        Text("Tutti i lotti").tag("")
+                    Picker("Dove", selection: $lot) {
+                        Text("Ovunque").tag("")
                         ForEach(lots, id: \.self) { Text($0).tag($0) }
                     }
                 } label: { Image(systemName: "line.3.horizontal.decrease.circle") }

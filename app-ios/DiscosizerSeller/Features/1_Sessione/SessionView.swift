@@ -7,7 +7,12 @@ import SwiftUI
 struct SessionView: View {
     @Environment(Seller.self) private var seller
     @Environment(\.modelContext) private var context
-    @AppStorage("lot") private var lot = "Lotto 01"
+    @AppStorage("placeKind") private var placeKind = "Scatola"
+    @AppStorage("placeName") private var placeName = "1"
+    @AppStorage("placeKinds") private var kindsRaw = "Scatola|Archivio|Cassa|Scaffale"
+    @AppStorage("recentPlaces") private var recentRaw = ""
+    @State private var addingKind = false
+    @State private var newKind = ""
     @AppStorage("media") private var mediaRaw = Grade.m.rawValue
     @AppStorage("sleeve") private var sleeveRaw = Grade.m.rawValue
     @State private var shots: [PhotoKind: UIImage] = [:]
@@ -19,14 +24,61 @@ struct SessionView: View {
     private var media: Grade { Grade(rawValue: mediaRaw) ?? .m }
     private var sleeve: Grade { Grade(rawValue: sleeveRaw) ?? media }
     private var nextEmpty: PhotoKind? { PhotoKind.allCases.first { shots[$0] == nil } }
+    private var kinds: [String] { kindsRaw.split(separator: "|").map(String.init) }
+    private var recent: [String] { recentRaw.split(separator: "|").map(String.init) }
+    /// Dove finiscono i dischi: "Scatola 12", "Archivio B", ...
+    private var place: String {
+        let name = placeName.trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? placeKind : "\(placeKind) \(name)"
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Nome del lotto", text: $lot).font(Theme.mono(14))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(kinds, id: \.self) { kind in kindChip(kind) }
+                            Button {
+                                newKind = ""
+                                addingKind = true
+                            } label: {
+                                Label("Altro", systemImage: "plus").font(Theme.mono(12, .bold))
+                                    .padding(.horizontal, 12).padding(.vertical, 8)
+                                    .foregroundStyle(Theme.muted)
+                                    .overlay(Rectangle().stroke(Theme.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    HStack(spacing: 10) {
+                        Text(placeKind.uppercased()).font(Theme.mono(13, .bold)).foregroundStyle(Theme.accent)
+                        TextField("numero o nome", text: $placeName).font(Theme.mono(14))
+                    }
+                    if !recent.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("USATI DI RECENTE").font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(recent, id: \.self) { item in
+                                        Button { pick(item) } label: {
+                                            Text(item).font(Theme.mono(12))
+                                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                                .background(item == place ? Theme.military : Theme.panelHigh)
+                                                .foregroundStyle(Theme.text)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 } header: {
-                    HUDLabel(number: "01", title: "Lotto")
+                    HUDLabel(number: "01", title: "Dove li metti")
+                } footer: {
+                    Text("Scegli o inventa il contenitore (scatola, archivio, cassa…) e scrivi quale. Si salva su ogni disco: lo ritrovi in Magazzino e negli Ordini quando devi spedire.")
+                        .font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 }
 
                 Section {
@@ -74,6 +126,11 @@ struct SessionView: View {
             }
             .themedBackground()
             .navigationTitle("Sessione")
+            .alert("Nuovo contenitore", isPresented: $addingKind) {
+                TextField("es. Cassetta, Mobile, Stand…", text: $newKind)
+                Button("Aggiungi") { addKind() }
+                Button("Annulla", role: .cancel) {}
+            }
             .fullScreenCover(item: $shooting, onDismiss: {
                 if let next = pendingNext {            // scatto guidato: subito la foto successiva
                     pendingNext = nil
@@ -92,6 +149,42 @@ struct SessionView: View {
                 }
                 .ignoresSafeArea()
             }
+        }
+    }
+
+    /// Il tipo di contenitore come pastiglia: verde se scelto. Tenendolo premuto si toglie.
+    private func kindChip(_ kind: String) -> some View {
+        Button { placeKind = kind } label: {
+            Text(kind.uppercased()).font(Theme.mono(12, .bold)).tracking(1)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .foregroundStyle(kind == placeKind ? Color.black : Theme.text)
+                .background(kind == placeKind ? Theme.accent : Theme.panelHigh)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if kinds.count > 1 {
+                Button("Togli \(kind)", systemImage: "trash", role: .destructive) {
+                    kindsRaw = kinds.filter { $0 != kind }.joined(separator: "|")
+                    if placeKind == kind { placeKind = kinds.first ?? "Scatola" }
+                }
+            }
+        }
+    }
+
+    private func addKind() {
+        let name = newKind.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "|", with: " ")
+        guard !name.isEmpty else { return }
+        if !kinds.contains(name) { kindsRaw = (kinds + [name]).joined(separator: "|") }
+        placeKind = name
+    }
+
+    /// Riprende una collocazione recente ("Scatola 12" -> tipo "Scatola", nome "12").
+    private func pick(_ item: String) {
+        if let kind = kinds.sorted(by: { $0.count > $1.count }).first(where: { item == $0 || item.hasPrefix($0 + " ") }) {
+            placeKind = kind
+            placeName = String(item.dropFirst(kind.count)).trimmingCharacters(in: .whitespaces)
+        } else {
+            placeName = item
         }
     }
 
@@ -181,7 +274,8 @@ struct SessionView: View {
 
     private func submit() {
         let ordered = PhotoKind.allCases.compactMap { kind in shots[kind].map { (kind: kind, image: $0) } }
-        seller.addDisc(photos: ordered, lot: lot, media: media, sleeve: sleeve, context: context)
+        seller.addDisc(photos: ordered, lot: place, media: media, sleeve: sleeve, context: context)
+        recentRaw = ([place] + recent.filter { $0 != place }).prefix(8).joined(separator: "|")
         shots = [:]
         countToday += 1
     }

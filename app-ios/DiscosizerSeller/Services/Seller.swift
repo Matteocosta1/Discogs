@@ -73,6 +73,7 @@ final class Seller {
         }
         let disc = Disc(lot: lot, photoFiles: files, media: media, sleeve: sleeve)
         disc.photoKinds = kinds
+        disc.box = lot                      // dove sta fisicamente: lo mostrano Magazzino e Ordini
         context.insert(disc)
         try? context.save()
         working += 1
