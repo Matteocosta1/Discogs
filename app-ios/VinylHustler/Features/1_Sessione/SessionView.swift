@@ -106,7 +106,7 @@ struct SessionView: View {
                 }
             }
             .themedBackground()
-            .navigationTitle("Sessione")
+            .navigationTitle("Foto")
             .refreshable { await Task { await loadInventory() }.value }
             .onAppear {                                  // contenitore scelto che non esiste più: si torna al primo
                 if !oldKindsRaw.isEmpty {
