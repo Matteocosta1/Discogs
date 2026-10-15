@@ -9,7 +9,7 @@ struct SessionView: View {
     @Environment(\.modelContext) private var context
     @AppStorage("placeKind") private var placeKind = "Scatola"
     @AppStorage("placeName") private var placeName = "1"
-    @AppStorage("placeKinds") private var kindsRaw = "Scatola|Archivio|Cassa|Scaffale"
+    @AppStorage("placeKindsV2") private var kindsRaw = "Scatola|Archivio|Scaffale"
     @AppStorage("recentPlaces") private var recentRaw = ""
     @State private var addingKind = false
     @State private var newKind = ""
@@ -43,12 +43,13 @@ struct SessionView: View {
                                 newKind = ""
                                 addingKind = true
                             } label: {
-                                Label("Altro", systemImage: "plus").font(Theme.mono(12, .bold))
-                                    .padding(.horizontal, 12).padding(.vertical, 8)
+                                Image(systemName: "plus").font(.system(size: 14, weight: .bold))
+                                    .frame(width: 40, height: 33)
                                     .foregroundStyle(Theme.muted)
                                     .overlay(Rectangle().stroke(Theme.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Aggiungi un contenitore")
                         }
                         .padding(.vertical, 2)
                     }
@@ -77,7 +78,7 @@ struct SessionView: View {
                 } header: {
                     HUDLabel(number: "01", title: "Dove li metti")
                 } footer: {
-                    Text("Scegli o inventa il contenitore (scatola, archivio, cassa…) e scrivi quale. Si salva su ogni disco: lo ritrovi in Magazzino e negli Ordini quando devi spedire.")
+                    Text("Scegli il contenitore o creane uno tuo con +, poi scrivi quale. Si salva su ogni disco: lo ritrovi in Magazzino e negli Ordini quando devi spedire.")
                         .font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 }
 
@@ -92,11 +93,11 @@ struct SessionView: View {
                 }
 
                 Section {
+                    shutter
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                         ForEach(PhotoKind.allCases) { kind in slot(kind) }
                     }
                     .padding(.vertical, 6)
-                    shutter
                     Button("Riconosci il disco · \(shots.count) foto") { submit() }
                         .buttonStyle(SignalButtonStyle())
                         .disabled(shots.isEmpty)
