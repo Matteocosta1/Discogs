@@ -139,7 +139,16 @@ struct SignalButtonStyle: ButtonStyle {
             .foregroundStyle(filled ? Color.black : (destructive ? Theme.warn : Theme.text))
             .background(filled ? (destructive ? Theme.warn : Theme.accent) : Theme.panelHigh,
                         in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.35)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.35)
+            .animation(.snappy(duration: 0.15), value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                guard pressed else { return }
+                Task { @MainActor in
+                    Suoni.tocco()
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
+            }
     }
 }
 

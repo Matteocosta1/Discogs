@@ -17,6 +17,7 @@ struct SessionView: View {
     @State private var addingKind = false
     @State private var newKind = ""
     @State private var camera = false
+    @State private var breathe = false
     @State private var aiReady = true
 
     private var media: Grade { Grade(rawValue: mediaRaw) ?? .m }
@@ -132,7 +133,10 @@ struct SessionView: View {
                 ZStack {
                     Circle().fill(Color.black).frame(width: 60, height: 60)
                         .overlay(Circle().stroke(Theme.accent, lineWidth: 2))
-                        .shadow(color: Theme.glow.opacity(0.5), radius: 8)
+                        .shadow(color: Theme.glow.opacity(breathe ? 0.75 : 0.25), radius: breathe ? 16 : 6)
+                    Circle().stroke(Theme.glow.opacity(breathe ? 0 : 0.5), lineWidth: 1)
+                        .frame(width: 60, height: 60)
+                        .scaleEffect(breathe ? 1.35 : 1)
                     Image(systemName: "camera.fill").font(.system(size: 22, weight: .semibold)).foregroundStyle(Theme.glow)
                 }
                 VStack(alignment: .leading, spacing: 3) {
@@ -147,11 +151,16 @@ struct SessionView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false)) { breathe = true }
+        }
     }
 
     private func stat(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value).font(.system(size: 28, weight: .bold)).foregroundStyle(value == "0" ? Theme.text : Theme.glow)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: value)
             Text(label).font(.system(size: 13)).foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

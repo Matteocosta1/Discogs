@@ -7,6 +7,7 @@ struct DiscRow: View {
     @Environment(Seller.self) private var seller
     @Bindable var disc: Disc
     var onRetake: (() -> Void)? = nil
+    @State private var flash = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -26,7 +27,19 @@ struct DiscRow: View {
         .padding(14)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
-            .stroke(disc.status == .daConfermare ? Theme.glow.opacity(0.45) : .clear, lineWidth: 1))
+            .stroke(flash ? Theme.glow : (disc.status == .daConfermare ? Theme.glow.opacity(0.45) : .clear),
+                    lineWidth: flash ? 2.5 : 1))
+        .shadow(color: Theme.glow.opacity(flash ? 0.55 : 0), radius: flash ? 18 : 0)
+        .animation(.spring(duration: 0.4, bounce: 0.2), value: disc.statusRaw)
+        .onChange(of: disc.statusRaw) { _, new in
+            // riconosciuto o prezzo pronto: la scheda si accende un attimo, come un'icona di JARVIS
+            guard new == DiscStatus.daConfermare.rawValue || new == DiscStatus.pronto.rawValue else { return }
+            flash = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(60))
+                withAnimation(.easeOut(duration: 0.9)) { flash = false }
+            }
+        }
     }
 
     /// Copertina Discogs (pulita); la foto del venditore solo se Discogs non ne ha.
@@ -42,6 +55,7 @@ struct DiscRow: View {
             }
         }
         .frame(width: 72, height: 72)
+        .overlay { if disc.status == .inLavorazione { ScanSweep() } }
         .clipShape(Circle())
         .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
     }
@@ -88,6 +102,8 @@ struct DiscActions: View {
                             Spacer()
                             Text(p, format: .currency(code: seller.currency)).font(.system(size: 28, weight: .bold))
                                 .foregroundStyle(Theme.glow)
+                                .contentTransition(.numericText(value: p))
+                                .transition(.scale(scale: 0.6).combined(with: .opacity))
                         }
                     }
                     HStack(spacing: 8) {
@@ -213,5 +229,29 @@ struct AlternativesSheet: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+/// La riga di scansione che passa sulla copertina mentre l'app sta guardando il disco.
+struct ScanSweep: View {
+    var body: some View {
+        TimelineView(.animation) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let p = (sin(t * 3) + 1) / 2                     // su e giù, morbido
+            GeometryReader { geo in
+                let y = geo.size.height * p
+                ZStack(alignment: .top) {
+                    Theme.glow.opacity(0.10)
+                    LinearGradient(colors: [Theme.glow.opacity(0), Theme.glow.opacity(0.35)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 22)
+                        .offset(y: y - 22)
+                    Rectangle().fill(Theme.glow).frame(height: 2)
+                        .shadow(color: Theme.glow, radius: 4)
+                        .offset(y: y - 1)
+                }
+            }
+        }
+        .allowsHitTesting(false)
     }
 }

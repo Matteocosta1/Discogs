@@ -180,8 +180,11 @@ struct OcchioView: View {
                     ForEach(seen) { disc in
                         DiscRow(disc: disc, onRetake: { attachTo = disc })
                             .frame(width: 320)
+                            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
+                                                    removal: .opacity))
                     }
                 }
+                .animation(.spring(duration: 0.45, bounce: 0.25), value: seen.map(\.id))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             }
@@ -206,11 +209,13 @@ struct OcchioView: View {
             return
         }
         agganciato = true
+        Suoni.avvio()
         stato = "INQUADRA UN DISCO"
     }
 
     private func scatta() {
         guard agganciato, !registrando else { return }
+        Suoni.tocco()
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
         withAnimation(.easeOut(duration: 0.06)) { lampo = true }
         withAnimation(.easeIn(duration: 0.45).delay(0.06)) { lampo = false }
@@ -232,6 +237,7 @@ struct OcchioView: View {
 
     private func registra() {
         guard agganciato, !registrando else { return }
+        Suoni.tocco()
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
         inizioVideo = Date()
         registrando = true

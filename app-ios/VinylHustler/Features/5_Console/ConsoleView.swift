@@ -10,6 +10,7 @@ struct ConsoleView: View {
     @AppStorage("voice") private var voice = true
     @AppStorage("userName") private var userName = ""
     @AppStorage("voiceID") private var voiceID = Voice.systemChoice
+    @AppStorage("suoni") private var suoni = true
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -42,6 +43,7 @@ struct ConsoleView: View {
                 }
                 Section {
                     Toggle("Ti dice il disco a voce", isOn: $voice)
+                    Toggle("Suoni dell'interfaccia (JARVIS)", isOn: $suoni)
                     HStack {
                         Text("Ti chiama")
                         TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)

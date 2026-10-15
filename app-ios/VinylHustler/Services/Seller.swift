@@ -99,6 +99,7 @@ final class Seller {
             working -= 1
             try? context.save()
         }
+        Suoni.guardo()
         let signedIn = await Backend.shared.accessToken() != nil
         let recognizer = Recognizer(client: client, ai: signedIn ? AIService() : nil)
         let outcome = await recognizer.scan(images, video: video)
@@ -107,7 +108,8 @@ final class Seller {
         guard let first = outcome.found.first else {
             disc.status = .daControllare
             disc.reason = outcome.note
-            Voice.shared.say(found: [])
+            Suoni.errore()
+            announce([])
             return
         }
         // Il primo disco va in quello già creato; gli altri (video con più dischi) diventano dischi nuovi,
@@ -132,7 +134,16 @@ final class Seller {
             disc.photoFiles = first.images.compactMap { disc.photoFiles[safe: $0] }
             disc.photoKinds = first.images.compactMap { disc.photoKinds[safe: $0] }
         }
-        Voice.shared.say(found: discs)
+        if discs.contains(where: { $0.status == .daConfermare }) { Suoni.riconosciuto() } else { Suoni.errore() }
+        announce(discs)
+    }
+
+    /// La voce parte appena finito il suono di "riconosciuto", per non accavallarsi.
+    private func announce(_ discs: [Disc]) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            Voice.shared.say(found: discs)
+        }
     }
 
     private func propose(_ found: Recognizer.Found, to disc: Disc) {
