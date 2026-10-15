@@ -212,7 +212,7 @@ struct WarehouseView: View {
 }
 
 /// Una riga del magazzino: copertina tonda, titolo, Online/Bozza, posto, prezzo.
-private struct ListingRow: View {
+struct ListingRow: View {
     let listing: Listing
     let disc: Disc?
     let selecting: Bool
@@ -282,7 +282,7 @@ private struct ListingRow: View {
 }
 
 /// Posizione fisica del disco (scatola / numero), modificabile al volo.
-private struct BoxField: View {
+struct BoxField: View {
     @Bindable var disc: Disc
     var body: some View {
         TextField("posto", text: $disc.box).font(.system(size: 12)).foregroundStyle(Theme.muted).frame(width: 90)

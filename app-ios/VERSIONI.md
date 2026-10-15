@@ -24,3 +24,4 @@ tenendo tutte le altre.
 | Versione | Data | Chi | Cosa |
 |---|---|---|---|
 | V1 | 15 ott 2026, sera | Alessandro | Versione stabile: fotocamera, riconoscimento Haiku→Sonnet, voce Apple, suoni JARVIS e apertura, grafica Discosizer, cestino su ogni disco, Magazzino con bozze eliminabili, Ordini a schede. |
+| V2 | 15 ott 2026 | Alessandro | Sessione: titoli come su Discogs (Posizione (privata), Condizione, Fotocamera), via le icone di Vinile/Copertina, testi sotto più corti e a righe, tolto il testo sotto i contenitori; "Oggi" mostra anche gli ultimi 10 annunci già su Discogs (come il Magazzino), i nuovi scatti sopra. |

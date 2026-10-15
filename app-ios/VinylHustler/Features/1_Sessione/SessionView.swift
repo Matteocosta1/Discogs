@@ -2,7 +2,7 @@ import AuthenticationServices
 import SwiftData
 import SwiftUI
 
-/// 01 / SESSIONE — dove li metti, il grado, poi la fotocamera.
+/// 01 / SESSIONE — posizione, condizione, poi la fotocamera.
 /// Nella fotocamera: uno scatto o un video, e i dischi vengono riconosciuti subito.
 /// Sotto, in "Oggi", i dischi riconosciuti aspettano la tua decisione: sì / no, e poi se venderli.
 struct SessionView: View {
@@ -23,6 +23,8 @@ struct SessionView: View {
     @State private var camera = false
     @State private var breathe = false
     @State private var aiReady = true
+    @State private var listings: [Listing] = []        // l'inventario Discogs, come in Magazzino
+    @State private var loadingInventory = false
 
     private var media: Grade { Grade(rawValue: mediaRaw) ?? .m }
     private var sleeve: Grade { Grade(rawValue: sleeveRaw) ?? media }
@@ -38,6 +40,17 @@ struct SessionView: View {
     /// Quelli che aspettano una decisione (i "Dopo" e quelli già online stanno in Revisione).
     private var waiting: [Disc] {
         today.filter { !$0.parked && ![DiscStatus.inVendita, .bozza].contains($0.status) }
+    }
+
+    /// Gli ultimi annunci su Discogs (i più recenti per primi).
+    private var recentListings: [Listing] {
+        Array(listings.sorted { ($0.posted ?? "") > ($1.posted ?? "") }.prefix(10))
+    }
+
+    private func loadInventory() async {
+        loadingInventory = true
+        defer { loadingInventory = false }
+        if let l = try? await seller.syncInventory(discs: discs) { listings = l }
     }
 
     var body: some View {
@@ -68,50 +81,55 @@ struct SessionView: View {
                             .foregroundStyle(Theme.glow)
                     }
                 } header: {
-                    HUDLabel(number: "01", title: "Dove li metti")
-                } footer: {
-                    Text("Ogni disco che fotografi si porta dietro questo posto: lo ritrovi sulla scheda del disco, in Magazzino, negli Ordini (\"preleva da…\") e sull'annuncio Discogs, nel campo privato che vedi solo tu.")
+                    HUDLabel(number: "01", title: "Posizione (privata)")
                 }
 
                 Section {
-                    gradeRow("Vinile", symbol: "opticaldisc", selection: $mediaRaw)
-                    gradeRow("Copertina", symbol: "square", selection: $sleeveRaw)
+                    gradeRow("Vinile", selection: $mediaRaw)
+                    gradeRow("Copertina", selection: $sleeveRaw)
                 } header: {
-                    HUDLabel(number: "02", title: "Grado")
+                    HUDLabel(number: "02", title: "Condizione")
                 } footer: {
-                    Text("Vale per tutti gli scatti e i video che fai dopo. Cambialo quando passi a un blocco di dischi diverso.")
+                    Text("Vale per tutti i dischi che fotografi da qui in poi.\nCambi blocco di dischi? Cambia la condizione.")
                 }
 
                 Section {
                     cameraButton
                     if !aiReady { AISignInRow { aiReady = true } }
                 } header: {
-                    HUDLabel(number: "03", title: "Scatti")
+                    HUDLabel(number: "03", title: "Fotocamera")
                 } footer: {
-                    Text("Una foto basta: copertina, retro o centrino. Col video passi più dischi davanti al telefono e li riconosce tutti.")
+                    Text("Foto → inquadra copertina, retro o etichetta.\nVideo → passa i dischi uno dopo l'altro.")
                 }
 
                 Section {
                     HStack {
                         stat("\(today.count)", "fotografati")
-                        stat("\(today.filter { [DiscStatus.inVendita, .bozza].contains($0.status) }.count)", "su Discogs")
+                        stat(listings.isEmpty && loadingInventory ? "…" : "\(listings.count)", "su Discogs")
                         stat("\(seller.working)", "in corso")
                     }
+                    // i nuovi scatti stanno sopra…
                     ForEach(waiting) { disc in
                         DiscRow(disc: disc)
                             .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                             .listRowBackground(Color.clear)
                     }
+                    // …e sotto l'inventario che c'è già su Discogs, lo stesso del Magazzino
+                    ForEach(recentListings) { l in
+                        ListingRow(listing: l, disc: discs.first { $0.externalID == l.externalId },
+                                   selecting: false, isSelected: false, currency: seller.currency)
+                    }
                 } header: {
                     HUDLabel(number: "04", title: "Oggi")
                 } footer: {
-                    if waiting.isEmpty && !today.isEmpty {
-                        Text("Tutto deciso. Quelli messi su \"Dopo\" li trovi in Revisione.")
+                    if !listings.isEmpty {
+                        Text("Sopra: i dischi appena fotografati.\nSotto: gli ultimi \(recentListings.count) già su Discogs.\nTutto l'inventario è in Magazzino.")
                     }
                 }
             }
             .themedBackground()
             .navigationTitle("Sessione")
+            .refreshable { await Task { await loadInventory() }.value }
             .onAppear {                                  // contenitore scelto che non esiste più: si torna al primo
                 if !oldKindsRaw.isEmpty {
                     let extra = oldKindsRaw.split(separator: "|").map(String.init).filter { !Self.fixedKinds.contains($0) && !custom.contains($0) }
@@ -123,6 +141,7 @@ struct SessionView: View {
             .task {
                 let token = await Backend.shared.accessToken()
                 aiReady = !Backend.shared.isConfigured || token != nil
+                if listings.isEmpty { await Task { await loadInventory() }.value }
             }
             .confirmationDialog("Eliminare il contenitore \"\(removing ?? "")\"? I dischi già fotografati tengono il loro posto.",
                                 isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
@@ -141,7 +160,7 @@ struct SessionView: View {
                 Button("Annulla", role: .cancel) {}
             }
             .fullScreenCover(isPresented: $camera) {
-                OcchioView(place: place, media: media, sleeve: sleeve) { camera = false }
+                OcchioView(place: place, media: media, sleeve: sleeve) { camera = false; Task { await loadInventory() } }
                     .environment(seller)
                     .modelContext(context)
             }
@@ -163,7 +182,7 @@ struct SessionView: View {
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Apri la fotocamera").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
-                    Text("Scatto = 1 disco · REC = 20 secondi")
+                    Text("Foto: 1 disco\nVideo: più dischi, max 20 secondi")
                         .font(.system(size: 14)).foregroundStyle(Theme.muted)
                 }
                 Spacer()
@@ -215,12 +234,11 @@ struct SessionView: View {
         placeName = ""
     }
 
-    /// Una riga del grado: cosa si sta gradando, scritto chiaro, e i sei gradi.
-    private func gradeRow(_ title: String, symbol: String, selection: Binding<String>) -> some View {
+    /// Una riga della condizione (come su Discogs: supporto e copertina), senza icone.
+    private func gradeRow(_ title: String, selection: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: symbol)
+            Text(title)
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
-                .tint(Theme.accent)
             Picker(title, selection: selection) {
                 ForEach(Grade.allCases) { Text($0.rawValue).tag($0.rawValue) }
             }
@@ -237,6 +255,17 @@ struct AISignInRow: View {
     var done: () -> Void
     @AppStorage("userName") private var userName = ""
     @State private var nonce = ""
+
+    /// Gli ultimi annunci su Discogs (i più recenti per primi).
+    private var recentListings: [Listing] {
+        Array(listings.sorted { ($0.posted ?? "") > ($1.posted ?? "") }.prefix(10))
+    }
+
+    private func loadInventory() async {
+        loadingInventory = true
+        defer { loadingInventory = false }
+        if let l = try? await seller.syncInventory(discs: discs) { listings = l }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
