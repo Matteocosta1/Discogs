@@ -91,6 +91,7 @@ struct OcchioView: View {
                             Circle().fill(tinta.opacity(scattando ? 0.9 : 0.25)).frame(width: 60, height: 60)
                             Image(systemName: "eye").font(.system(size: 22, weight: .semibold)).foregroundStyle(.white)
                         }
+                        .contentShape(Circle())
                         .shadow(color: tinta.opacity(0.7), radius: 10)
                     }
                     .buttonStyle(.plain)
@@ -101,6 +102,8 @@ struct OcchioView: View {
                             Circle().stroke(Color.red.opacity(0.85), lineWidth: 2).frame(width: 60, height: 60)
                             Text("REC").font(Theme.mono(13, .bold)).foregroundStyle(.white)
                         }
+                        .frame(width: 74, height: 74)
+                        .contentShape(Circle())          // tutto il cerchio è toccabile, non solo il bordo
                         .shadow(color: .red.opacity(0.5), radius: 8)
                     }
                     .buttonStyle(.plain)
