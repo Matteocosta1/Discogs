@@ -20,10 +20,12 @@ struct SessionView: View {
     @State private var pendingNext: PhotoKind?       // scatto guidato: la prossima da aprire
     @State private var guided = false
     @State private var countToday = 0
+    @State private var showOcchio = false
+    @State private var avviso: String?
 
     private var media: Grade { Grade(rawValue: mediaRaw) ?? .m }
     private var sleeve: Grade { Grade(rawValue: sleeveRaw) ?? media }
-    private var nextEmpty: PhotoKind? { PhotoKind.allCases.first { shots[$0] == nil } }
+    private var nextEmpty: PhotoKind? { PhotoKind.slots.first { shots[$0] == nil } }
     private var kinds: [String] { kindsRaw.split(separator: "|").map(String.init) }
     /// Solo i recenti di contenitori che esistono ancora (niente "Cassa 1" se la Cassa è stata tolta).
     private var recent: [String] {
@@ -97,9 +99,10 @@ struct SessionView: View {
                 }
 
                 Section {
+                    occhio
                     shutter
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                        ForEach(PhotoKind.allCases) { kind in slot(kind) }
+                        ForEach(PhotoKind.slots) { kind in slot(kind) }
                     }
                     .padding(.vertical, 6)
                     Button("Riconosci il disco · \(shots.count) foto") { submit() }
@@ -134,6 +137,13 @@ struct SessionView: View {
             .onAppear {                                  // contenitore scelto che non esiste più: si torna al primo
                 if !kinds.contains(placeKind) { placeKind = kinds.first ?? "Scatola" }
             }
+            .fullScreenCover(isPresented: $showOcchio) {
+                OcchioView { dati in
+                    showOcchio = false
+                    riceviOcchio(dati)
+                }
+            }
+            .alert(avviso ?? "", isPresented: Binding(get: { avviso != nil }, set: { if !$0 { avviso = nil } })) {}
             .alert("Nuovo contenitore", isPresented: $addingKind) {
                 TextField("es. Cassetta, Mobile, Stand…", text: $newKind)
                 Button("Aggiungi") { addKind() }
@@ -148,7 +158,7 @@ struct SessionView: View {
                 CameraPicker { image in
                     if let image {
                         shots[kind] = image
-                        pendingNext = guided ? PhotoKind.allCases.first { shots[$0] == nil } : nil
+                        pendingNext = guided ? PhotoKind.slots.first { shots[$0] == nil } : nil
                     } else {
                         guided = false                 // annullato: lo scatto guidato si ferma qui
                         pendingNext = nil
@@ -253,6 +263,45 @@ struct SessionView: View {
         }
     }
 
+    /// OCCHIO: la modalità occhi di JARVIS. Una foto va nel primo riquadro libero;
+    /// un giro (4 fotogrammi) parte subito come disco da riconoscere.
+    private var occhio: some View {
+        Button { showOcchio = true } label: {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle().stroke(Theme.accent.opacity(0.5), lineWidth: 1).frame(width: 64, height: 64)
+                    Circle().stroke(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [10, 6])).frame(width: 52, height: 52)
+                    Image(systemName: "eye").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.accent)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("OCCHIO").font(Theme.display(24)).foregroundStyle(Theme.text)
+                    Text("FOTO DAL VIVO · REC = GIRA IL DISCO 5 SECONDI")
+                        .font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func riceviOcchio(_ dati: [Data]) {
+        let immagini = dati.compactMap { UIImage(data: $0) }
+        guard !immagini.isEmpty else { return }
+        if immagini.count == 1 {
+            let kind = nextEmpty ?? .copertinaFronte
+            shots[kind] = immagini[0]
+        } else {
+            // il giro: il disco è già tutto lì, parte subito il riconoscimento
+            let fotogrammi = immagini.map { (kind: PhotoKind.giro, image: $0) }
+            seller.addDisc(photos: fotogrammi, lot: place, media: media, sleeve: sleeve, context: context)
+            recentRaw = ([place] + recent.filter { $0 != place }).prefix(8).joined(separator: "|")
+            countToday += 1
+            avviso = "Giro acquisito: \(immagini.count) fotogrammi in riconoscimento. Lo trovi in Revisione."
+        }
+    }
+
     /// Scatto guidato: apre la fotocamera sulla prima foto mancante e passa da sola alle successive.
     /// Annullando la fotocamera ci si ferma (le foto che mancano restano facoltative).
     private var shutter: some View {
@@ -282,7 +331,7 @@ struct SessionView: View {
     }
 
     private func submit() {
-        let ordered = PhotoKind.allCases.compactMap { kind in shots[kind].map { (kind: kind, image: $0) } }
+        let ordered = PhotoKind.slots.compactMap { kind in shots[kind].map { (kind: kind, image: $0) } }
         seller.addDisc(photos: ordered, lot: place, media: media, sleeve: sleeve, context: context)
         recentRaw = ([place] + recent.filter { $0 != place }).prefix(8).joined(separator: "|")
         shots = [:]

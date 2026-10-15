@@ -17,6 +17,11 @@ enum DiscStatus: String, Codable, CaseIterable {
 /// distingue le diverse stampe dello stesso disco.
 enum PhotoKind: String, CaseIterable, Codable, Identifiable {
     case copertinaFronte, copertinaRetro, centrinoA, centrinoB, solco, matrice
+    /// Fotogramma di un giro con l'Occhio (il disco girato davanti al telefono): non ha un riquadro suo.
+    case giro
+
+    /// I sei riquadri della sessione (il giro non ne ha uno).
+    static var slots: [PhotoKind] { allCases.filter { $0 != .giro } }
 
     var id: String { rawValue }
     var number: String { String(format: "%02d", (PhotoKind.allCases.firstIndex(of: self) ?? 0) + 1) }
@@ -29,6 +34,7 @@ enum PhotoKind: String, CaseIterable, Codable, Identifiable {
         case .centrinoB: "Centrino lato B"
         case .solco: "Solco"
         case .matrice: "Matrice"
+        case .giro: "Giro"
         }
     }
 
@@ -40,6 +46,7 @@ enum PhotoKind: String, CaseIterable, Codable, Identifiable {
         case .centrinoB: "o etichetta 2"
         case .solco: "superficie del vinile"
         case .matrice: "codice inciso vicino al centrino"
+        case .giro: "fotogramma dell'Occhio"
         }
     }
 
@@ -50,6 +57,7 @@ enum PhotoKind: String, CaseIterable, Codable, Identifiable {
         case .centrinoA, .centrinoB: "circle.circle"
         case .solco: "circle.dotted"
         case .matrice: "number"
+        case .giro: "eye"
         }
     }
 }
