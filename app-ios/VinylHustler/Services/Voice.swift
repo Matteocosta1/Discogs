@@ -43,9 +43,9 @@ final class Voice {
 
     // MARK: - Scelta della voce (Console)
 
-    /// "" = la migliore italiana installata; "sistema" = quella delle impostazioni di iOS; altrimenti l'id della voce.
+    /// "sistema" (predefinita) = quella delle impostazioni di iOS; "" = la migliore italiana installata; altrimenti l'id della voce.
     static let systemChoice = "sistema"
-    var voiceID: String { UserDefaults.standard.string(forKey: "voiceID") ?? "" }
+    var voiceID: String { UserDefaults.standard.string(forKey: "voiceID") ?? Self.systemChoice }
 
     /// Le voci italiane del telefono, dalla più bella (Premium, Avanzata) alla base.
     static var italianVoices: [AVSpeechSynthesisVoice] {

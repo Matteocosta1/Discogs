@@ -9,7 +9,7 @@ struct ConsoleView: View {
     @State private var aiSignedIn = false
     @AppStorage("voice") private var voice = true
     @AppStorage("userName") private var userName = ""
-    @AppStorage("voiceID") private var voiceID = ""
+    @AppStorage("voiceID") private var voiceID = Voice.systemChoice
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -47,8 +47,8 @@ struct ConsoleView: View {
                         TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)
                     }
                     Picker("Voce", selection: $voiceID) {
-                        Text("La migliore italiana").tag("")
                         Text("Quella di sistema (Impostazioni)").tag(Voice.systemChoice)
+                        Text("La migliore italiana").tag("")
                         ForEach(Voice.italianVoices, id: \.identifier) { v in
                             Text(Voice.label(v)).tag(v.identifier)
                         }
