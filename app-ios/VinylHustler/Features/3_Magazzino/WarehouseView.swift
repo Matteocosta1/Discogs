@@ -68,7 +68,7 @@ struct WarehouseView: View {
                 HStack {
                     stat(String(forSaleCount), "Online")
                     Button { selectedTab = 1 } label: {        // porta alla pagina Bozze
-                        stat(String(draftCount), "Bozze ›")
+                        stat(String(draftCount), "Bozze")
                     }
                     .buttonStyle(.plain)
                     stat(total, "Euro")
@@ -153,7 +153,7 @@ struct WarehouseView: View {
 
     private var total: String {
         let sum = listings.filter { $0.status == "For Sale" }.compactMap { $0.price?.value }.reduce(0, +)
-        return sum.formatted(.number.precision(.fractionLength(0)))
+        return sum.formatted(.currency(code: seller.currency).precision(.fractionLength(2)))
     }
 
     private func stat(_ value: String, _ label: String) -> some View {

@@ -120,8 +120,11 @@ struct DiscActions: View {
                         }
                         .buttonStyle(SignalButtonStyle(filled: false))
                     }
-                    Button("Versioni") { alternatives = true }
-                        .buttonStyle(SignalButtonStyle(filled: false))
+                    // solo se ci sono davvero altre stampe trovate oltre a quella proposta
+                    if disc.candidates.contains(where: { $0.id != disc.releaseID }) {
+                        Button("Versioni") { alternatives = true }
+                            .buttonStyle(SignalButtonStyle(filled: false))
+                    }
                 }
             case .pronto:
                 VStack(alignment: .leading, spacing: 8) {
