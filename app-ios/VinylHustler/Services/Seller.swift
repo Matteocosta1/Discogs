@@ -230,6 +230,19 @@ final class Seller {
     /// DOPO: resta pronto in Revisione, sparisce dalla sessione.
     func park(_ disc: Disc) { disc.parked = true }
 
+    /// CESTINO: se è su Discogs lo toglie anche da lì, poi il disco sparisce dall'app.
+    func deleteDisc(_ disc: Disc) async {
+        if let lid = disc.listingID {
+            do { try await client.deleteListing(lid) } catch {
+                lastError = "Non sono riuscito a toglierlo da Discogs: \(error.localizedDescription)"
+                return
+            }
+            disc.listingID = nil
+        }
+        Suoni.errore()
+        discard(disc)
+    }
+
     /// RIFAI: il disco sparisce (foto comprese), come se non fosse mai stato fotografato.
     /// Resta solo come "tolto" nel database: cancellarlo mentre è sullo schermo farebbe chiudere l'app.
     func discard(_ disc: Disc) {

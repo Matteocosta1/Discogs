@@ -84,6 +84,7 @@ struct DiscCard: View {
         VStack(alignment: .leading, spacing: 0) {
             pictures
                 .overlay(alignment: .topLeading) { StatusTag(status: disc.status).padding(10) }
+                .overlay(alignment: .topTrailing) { DeleteDiscButton(disc: disc).padding(10) }
             VStack(alignment: .leading, spacing: 12) {
                 Text(disc.releaseTitle.isEmpty ? "Nessun disco proposto" : disc.releaseTitle)
                     .font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)

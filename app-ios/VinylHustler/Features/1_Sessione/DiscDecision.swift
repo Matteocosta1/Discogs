@@ -21,6 +21,7 @@ struct DiscRow: View {
                         .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
                 Spacer(minLength: 0)
+                DeleteDiscButton(disc: disc)
             }
             DiscActions(disc: disc, onRetake: onRetake)
         }
@@ -74,7 +75,6 @@ struct DiscActions: View {
     @State private var alternatives = false
     @State private var askRelease = false
     @State private var releaseText = ""
-    @State private var askDelete = false
 
     var body: some View {
         Group {
@@ -113,10 +113,6 @@ struct DiscActions: View {
                         if !disc.parked {
                             Button("Dopo") { seller.park(disc) }.buttonStyle(SignalButtonStyle(filled: false))
                         }
-                        Button(role: .destructive) { askDelete = true } label: { Image(systemName: "trash") }
-                            .buttonStyle(SignalButtonStyle(filled: false))
-                            .frame(width: 52)
-                            .accessibilityLabel("Elimina")
                     }
                 }
             case .daControllare:
@@ -169,10 +165,6 @@ struct DiscActions: View {
                 }
             }
             .presentationDetents([.medium, .large])
-        }
-        .confirmationDialog("Eliminare questo disco? Sparisce dall'app con le sue foto (su Discogs non era ancora online).",
-                            isPresented: $askDelete, titleVisibility: .visible) {
-            Button("Elimina", role: .destructive) { seller.discard(disc) }
         }
         .alert("Numero della release Discogs", isPresented: $askRelease) {
             TextField("discogs.com/release/NUMERO", text: $releaseText).keyboardType(.numberPad)
@@ -262,5 +254,40 @@ struct ScanSweep: View {
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+/// Il cestino, su ogni disco e in ogni stato. Se il disco è già su Discogs (online o in bozza)
+/// lo toglie anche da lì; poi sparisce dall'app con le sue foto. Chiede sempre conferma.
+struct DeleteDiscButton: View {
+    @Environment(Seller.self) private var seller
+    let disc: Disc
+    @State private var ask = false
+    @State private var busy = false
+
+    private var onDiscogs: Bool { disc.listingID != nil }
+
+    var body: some View {
+        Button { ask = true } label: {
+            Image(systemName: "trash")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.muted)
+                .frame(width: 36, height: 36)
+                .background(Theme.panelHigh, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .accessibilityLabel("Elimina il disco")
+        .confirmationDialog(onDiscogs ? "Eliminare il disco? Lo tolgo anche da Discogs."
+                                      : "Eliminare il disco? Sparisce dall'app con le sue foto.",
+                            isPresented: $ask, titleVisibility: .visible) {
+            Button("Elimina", role: .destructive) {
+                busy = true
+                Task {
+                    await seller.deleteDisc(disc)
+                    busy = false
+                }
+            }
+        }
     }
 }
