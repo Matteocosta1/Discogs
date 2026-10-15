@@ -29,7 +29,6 @@ struct RootView: View {
     @State private var tab = 0
 
     var body: some View {
-        @Bindable var seller = seller
         Group {
             if !seller.isLoggedIn {
                 LoginView()

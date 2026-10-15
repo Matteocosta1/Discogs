@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>DISCOGS_CONSUMER_KEY</key>
+	<string>$(DISCOGS_CONSUMER_KEY)</string>
+	<key>DISCOGS_CONSUMER_SECRET</key>
+	<string>$(DISCOGS_CONSUMER_SECRET)</string>
+	<key>SUPABASE_URL</key>
+	<string>$(SUPABASE_URL)</string>
+	<key>SUPABASE_ANON_KEY</key>
+	<string>$(SUPABASE_ANON_KEY)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>it.discosizer.seller</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>discosizer</string>
+			</array>
+		</dict>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>it.discosizer.seller.orders</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
+</dict>
+</plist>

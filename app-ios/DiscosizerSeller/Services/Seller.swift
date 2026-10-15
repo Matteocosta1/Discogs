@@ -8,7 +8,7 @@ import UIKit
 @MainActor
 @Observable
 final class Seller {
-    let client = DiscogsClient()
+    let client: DiscogsClient
     let store: CoverStore
     var username = ""
     var currency = "EUR"
@@ -28,6 +28,8 @@ final class Seller {
     private let queue = SerialQueue()
 
     init() {
+        let client = DiscogsClient()
+        self.client = client
         store = CoverStore(client: client)
     }
 

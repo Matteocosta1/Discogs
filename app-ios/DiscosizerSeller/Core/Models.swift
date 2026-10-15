@@ -59,6 +59,10 @@ final class Disc {
         priceCalculation = ""
         box = ""
         aiCost = 0
+        releaseID = nil
+        coverFile = nil
+        price = nil
+        listingID = nil
     }
 
     var status: DiscStatus {

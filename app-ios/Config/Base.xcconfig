@@ -1,0 +1,10 @@
+// Impostazioni comuni dell'app. I valori segreti NON stanno qui: li legge da ../Secrets.xcconfig,
+// che non va su GitHub (vedi Secrets.example.xcconfig). Se manca, l'app si compila lo stesso
+// e si entra con il token personale Discogs.
+
+DISCOGS_CONSUMER_KEY =
+DISCOGS_CONSUMER_SECRET =
+SUPABASE_URL =
+SUPABASE_ANON_KEY =
+
+#include? "../Secrets.xcconfig"

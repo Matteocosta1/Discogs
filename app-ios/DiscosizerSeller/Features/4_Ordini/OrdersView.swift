@@ -13,7 +13,7 @@ struct OrdersView: View {
     @State private var error: String?
     private let timer = Timer.publish(every: 180, on: .main, in: .common).autoconnect()
 
-    private var open: [Order] { orders.filter { !["Shipped", "Cancelled", "Merged"].contains(where: $0.status.hasPrefix) } }
+    private var open: [Order] { orders.filter { order in !["Shipped", "Cancelled", "Merged"].contains { order.status.hasPrefix($0) } } }
 
     var body: some View {
         NavigationStack {

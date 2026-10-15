@@ -97,7 +97,7 @@ struct RecognitionEngine {
             }
         }
 
-        guard let chosen else {
+        guard let chosenID = chosen else {
             let reason = shortlist.count > 1 ? "Più release possibili: scegli quella giusta"
                                              : "Copertina diversa da quella su Discogs"
             return RecognitionResult(outcome: .toCheck, method: method, reason: reason, details: details,
@@ -105,7 +105,7 @@ struct RecognitionEngine {
         }
 
         // 4. La release scelta: si può vendere?
-        guard let release = try? await client.release(chosen) else {
+        guard let release = try? await client.release(chosenID) else {
             return RecognitionResult(outcome: .toCheck, method: how, reason: "Discogs non risponde: riprova",
                                      details: details, candidates: candidates, aiCost: aiCost)
         }
