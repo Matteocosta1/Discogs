@@ -74,8 +74,9 @@ enum AIError: LocalizedError {
 /// Chiamate alla funzione `ai-cover` su Supabase.
 struct AIService {
     /// Tutti i dischi che si vedono nelle foto (o nei fotogrammi di un video).
-    func scan(photos: [Data]) async throws -> AIScan {
-        try await call(["task": "scan", "photos": photos.map { $0.base64EncodedString() }])
+    /// model: "haiku" (economico, per primo) o "sonnet" (preciso, di riserva).
+    func scan(photos: [Data], model: String) async throws -> AIScan {
+        try await call(["task": "scan", "model": model, "photos": photos.map { $0.base64EncodedString() }])
     }
 
     private func call<T: Decodable>(_ payload: [String: any Encodable]) async throws -> T {

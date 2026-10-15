@@ -38,18 +38,24 @@ struct Recognizer {
             }
         }
 
-        // 2. L'AI: tutti i dischi che si vedono
+        // 2. L'AI: tutti i dischi che si vedono.
+        //    Prima Haiku (13 volte più economico). Se Haiku non vede niente, o legge qualcosa che Discogs
+        //    non trova (una lettera storpiata basta), la stessa foto passa da sola a Sonnet.
         if let ai {
+            let picked = Self.spread(images, max: 8)
+            let jpegs = picked.compactMap { images[$0].jpegForUpload() }
             do {
-                let picked = Self.spread(images, max: 8)
-                let scan = try await ai.scan(photos: picked.compactMap { images[$0].jpegForUpload() })
-                out.aiCost = scan.cost ?? 0
-                for record in scan.records {
-                    let shown = record.images.compactMap { n in picked.indices.contains(n - 1) ? picked[n - 1] : nil }
-                    let results = await search(record)
-                    out.found.append(Found(images: shown.isEmpty ? all : shown, candidates: Self.candidates(results),
-                                           read: record.line, method: "ai"))
+                let haiku = try await aiFound(ai, model: "haiku", jpegs: jpegs, picked: picked, all: all)
+                out.aiCost += haiku.cost
+                if !haiku.found.isEmpty, haiku.found.allSatisfy({ !$0.candidates.isEmpty }) {
+                    out.found = haiku.found
+                    return out
                 }
+                let sonnet = try await aiFound(ai, model: "sonnet", jpegs: jpegs, picked: picked, all: all)
+                out.aiCost += sonnet.cost
+                // tiene il risultato che ha trovato più dischi su Discogs (a parità, Sonnet)
+                let ok = { (f: [Found]) in f.filter { !$0.candidates.isEmpty }.count }
+                out.found = ok(sonnet.found) >= ok(haiku.found) ? sonnet.found : haiku.found
                 if out.found.isEmpty { out.note = "Nessun disco riconosciuto: avvicinati alla copertina o al centrino" }
                 return out
             } catch {
@@ -67,6 +73,20 @@ struct Recognizer {
         }
         if out.note.isEmpty { out.note = "Non riconosciuto: prova un'altra foto (copertina o centrino)" }
         return out
+    }
+
+    /// Una lettura dell'AI con un modello, già cercata su Discogs.
+    private func aiFound(_ ai: AIService, model: String, jpegs: [Data], picked: [Int], all: [Int]) async throws
+        -> (found: [Found], cost: Double) {
+        let scan = try await ai.scan(photos: jpegs, model: model)
+        var found: [Found] = []
+        for record in scan.records {
+            let shown = record.images.compactMap { n in picked.indices.contains(n - 1) ? picked[n - 1] : nil }
+            let results = await search(record)
+            found.append(Found(images: shown.isEmpty ? all : shown, candidates: Self.candidates(results),
+                               read: record.line, method: "ai-\(model)"))
+        }
+        return (found, scan.cost ?? 0)
     }
 
     /// Ricerca su Discogs di quello che l'AI ha letto: barcode -> catalogo -> artista e titolo.

@@ -2,7 +2,8 @@
 // Un solo compito, come gli occhi di JARVIS:
 //   task "scan": l'app manda una foto o i fotogrammi di un video; Claude dice TUTTI i dischi che vede.
 //
-// Quale modello (secret AI_MODE, oppure la costante DEFAULT_MODE qui sotto):
+// Quale modello: lo sceglie l'app con "model": "haiku" | "sonnet" (l'app prova Haiku e, se Discogs non trova
+// quello che ha letto, ripete con Sonnet). Senza "model" (app vecchie) vale AI_MODE / DEFAULT_MODE:
 //   "sonnet"  solo Sonnet 5.5 (com'era)
 //   "haiku"   solo Haiku 5.5 (20 volte più economico)
 //   "hybrid"  Haiku per primo; se non trova nessun disco, Sonnet
@@ -16,7 +17,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
-const DEFAULT_MODE = "compare";
+const DEFAULT_MODE = "sonnet";
 const MODE = Deno.env.get("AI_MODE") ?? DEFAULT_MODE;
 const SONNET = Deno.env.get("AI_MODEL_SONNET") ?? "claude-sonnet-5-5";
 const HAIKU = Deno.env.get("AI_MODEL_HAIKU") ?? "claude-haiku-5-5";
@@ -138,8 +139,10 @@ Deno.serve(async (req) => {
     return { records, cost, ms: Date.now() - t0, model };
   }
 
+  const asked = body.model === "haiku" ? "haiku" : body.model === "sonnet" ? "sonnet" : null;
+  const mode = asked ?? MODE;
   let chosen: Scan;
-  if (MODE === "compare") {
+  if (mode === "compare") {
     const [s, h] = await Promise.all([scan(SONNET), scan(HAIKU)]);
     const brief = (x: Scan) => ({ model: x.model, error: x.error ?? null,
       records: x.records.map((r) => ({ artist: r.artist, title: r.title, label: r.label, catno: r.catno, barcode: r.barcode })) });
@@ -148,9 +151,9 @@ Deno.serve(async (req) => {
       sonnet_cost_usd: s.cost, haiku_cost_usd: h.cost, sonnet_ms: s.ms, haiku_ms: h.ms,
     });
     chosen = s.error ? h : s;
-  } else if (MODE === "haiku") {
+  } else if (mode === "haiku") {
     chosen = await scan(HAIKU);
-  } else if (MODE === "hybrid") {
+  } else if (mode === "hybrid") {
     chosen = await scan(HAIKU);
     if (chosen.error || chosen.records.length === 0) {
       const s = await scan(SONNET);
