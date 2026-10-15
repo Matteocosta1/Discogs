@@ -10,6 +10,7 @@ struct WarehouseView: View {
     @State private var listings: [Listing] = []
     @State private var search = ""
     @AppStorage("selectedTab") private var selectedTab = 0
+    @AppStorage("reviewPane") private var reviewPane = "Revisione"
     @State private var loading = false
     @State private var confirmDeleteAll = false
     @State private var selecting = false
@@ -64,7 +65,7 @@ struct WarehouseView: View {
             Section {
                 HStack {
                     stat(String(forSaleCount), "Online")
-                    Button { selectedTab = 2 } label: {        // porta alla pagina Bozze
+                    Button { reviewPane = "Bozze"; selectedTab = 1 } label: {        // porta alla pagina Bozze
                         stat(String(draftCount), "Bozze")
                     }
                     .buttonStyle(.plain)

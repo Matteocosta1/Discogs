@@ -24,7 +24,6 @@ struct SessionView: View {
     @State private var breathe = false
     @State private var aiReady = true
     @State private var info: InfoTopic?
-    @State private var showConsole = false
 
     private var media: Grade { Grade(rawValue: mediaRaw) ?? .m }
     private var sleeve: Grade { Grade(rawValue: sleeveRaw) ?? media }
@@ -86,14 +85,6 @@ struct SessionView: View {
             }
             .themedBackground()
             .navigationTitle("Foto")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {      // la Console sta qui: nella barra in basso c'è posto per 5
-                    Button { showConsole = true } label: { Image(systemName: "gearshape") }
-                        .tint(Theme.accent)
-                        .accessibilityLabel("Console")
-                }
-            }
-            .sheet(isPresented: $showConsole) { ConsoleView().environment(seller) }
             .onAppear {                                  // contenitore scelto che non esiste più: si torna al primo
                 if !oldKindsRaw.isEmpty {
                     let extra = oldKindsRaw.split(separator: "|").map(String.init).filter { !Self.fixedKinds.contains($0) && !custom.contains($0) }

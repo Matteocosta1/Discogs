@@ -21,7 +21,7 @@ struct DraftsView: View {
     private var publishCount: Int { shownDrafts.count }
 
     var body: some View {
-        NavigationStack {
+        Group {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(shownDrafts) { l in

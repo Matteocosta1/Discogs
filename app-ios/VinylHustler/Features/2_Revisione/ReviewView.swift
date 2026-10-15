@@ -1,6 +1,29 @@
 import SwiftData
 import SwiftUI
 
+/// La pagina in basso "Revisione": due linguette in alto, Revisione e Bozze.
+struct ReviewTabView: View {
+    enum Pane: String, CaseIterable { case review = "Revisione", drafts = "Bozze" }
+    @AppStorage("reviewPane") private var pane = Pane.review.rawValue
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if pane == Pane.drafts.rawValue { DraftsView() } else { ReviewView() }
+            }
+            .safeAreaInset(edge: .top) {
+                Picker("", selection: $pane) {
+                    ForEach(Pane.allCases, id: \.self) { p in Text(p.rawValue).tag(p.rawValue) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Theme.bg)
+            }
+        }
+    }
+}
+
 /// 02 / REVISIONE — il passo dopo la foto: i dischi che aspettano una decisione
 /// (da confermare, non riconosciuti, bloccati, col prezzo ma non ancora caricati).
 /// Da qui: Conferma → Vendi (va nel Magazzino) oppure Bozza (va nella pagina Bozze). Qui non resta niente di deciso.
@@ -17,7 +40,7 @@ struct ReviewView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        Group {
             ScrollView {
                 LazyVStack(spacing: 16) {
                     ForEach(waiting) { disc in

@@ -26,7 +26,7 @@ struct VinylHustlerApp: App {
     }
 }
 
-/// Le 5 sezioni: Foto, Revisione, Bozze, Magazzino, Ordini. La Console si apre dall'ingranaggio in Foto.
+/// Le 5 sezioni: Foto, Revisione (con le linguette Revisione / Bozze), Magazzino, Ordini, Console.
 struct RootView: View {
     @Environment(Seller.self) private var seller
     @Query(filter: #Predicate<Disc> { $0.statusRaw == "daControllare" || $0.statusRaw == "daConfermare" })
@@ -60,11 +60,11 @@ struct RootView: View {
     private var tabs: some View {
         TabView(selection: $tab) {
             SessionView().tabItem { Label("Foto", systemImage: "camera.fill") }.tag(0)
-            ReviewView().tabItem { Label("Revisione", systemImage: "checkmark.seal") }.tag(1)
+            ReviewTabView().tabItem { Label("Revisione", systemImage: "checkmark.seal") }.tag(1)
                 .badge(toCheck.count)
-            DraftsView().tabItem { Label("Bozze", systemImage: "tray.full") }.tag(2)
-            WarehouseView().tabItem { Label("Magazzino", systemImage: "square.stack.3d.up") }.tag(3)
-            OrdersView().tabItem { Label("Ordini", systemImage: "shippingbox") }.tag(4)
+            WarehouseView().tabItem { Label("Magazzino", systemImage: "square.stack.3d.up") }.tag(2)
+            OrdersView().tabItem { Label("Ordini", systemImage: "shippingbox") }.tag(3)
+            ConsoleView().tabItem { Label("Console", systemImage: "slider.horizontal.3") }.tag(4)
         }
     }
 }
