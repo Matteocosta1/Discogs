@@ -12,6 +12,48 @@ enum DiscStatus: String, Codable, CaseIterable {
     case tolto              // tolto dal venditore
 }
 
+/// I sei tipi di foto di un disco. Nessuna è obbligatoria: più ce ne sono, più il riconoscimento è preciso.
+/// La matrice (su Discogs "Matrix / Runout") è il codice inciso nella zona liscia vicino al centrino:
+/// distingue le diverse stampe dello stesso disco.
+enum PhotoKind: String, CaseIterable, Codable, Identifiable {
+    case copertinaFronte, copertinaRetro, centrinoA, centrinoB, solco, matrice
+
+    var id: String { rawValue }
+    var number: String { String(format: "%02d", (PhotoKind.allCases.firstIndex(of: self) ?? 0) + 1) }
+
+    var title: String {
+        switch self {
+        case .copertinaFronte: "Copertina fronte"
+        case .copertinaRetro: "Copertina retro"
+        case .centrinoA: "Centrino lato A"
+        case .centrinoB: "Centrino lato B"
+        case .solco: "Solco"
+        case .matrice: "Matrice"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .copertinaFronte: "o copertina 1"
+        case .copertinaRetro: "o copertina 2"
+        case .centrinoA: "o etichetta 1"
+        case .centrinoB: "o etichetta 2"
+        case .solco: "superficie del vinile"
+        case .matrice: "codice inciso vicino al centrino"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .copertinaFronte: "square"
+        case .copertinaRetro: "square.on.square"
+        case .centrinoA, .centrinoB: "circle.circle"
+        case .solco: "circle.dotted"
+        case .matrice: "number"
+        }
+    }
+}
+
 /// Un candidato proposto per un disco da controllare (tasto "È questo").
 struct Candidate: Codable, Hashable, Identifiable {
     var id: Int                 // release_id Discogs
@@ -26,7 +68,8 @@ final class Disc {
     @Attribute(.unique) var id: UUID
     var createdAt: Date
     var lot: String
-    var photoFiles: [String]            // nomi dei file: fronte, retro
+    var photoFiles: [String]            // nomi dei file, nell'ordine di PhotoKind
+    var photoKinds: [String] = []       // PhotoKind di ogni file (stesso ordine di photoFiles)
     var mediaRaw: String
     var sleeveRaw: String
     var statusRaw: String

@@ -61,14 +61,18 @@ final class Seller {
     // MARK: - 1. Sessione: foto -> riconoscimento -> prezzo
 
     /// Salva le foto, crea il disco e lo mette in coda (un disco alla volta: limite Discogs).
-    func addDisc(front: UIImage, back: UIImage, lot: String, media: Grade, sleeve: Grade, context: ModelContext) {
-        let files = [front, back].compactMap { img -> String? in
+    func addDisc(photos: [(kind: PhotoKind, image: UIImage)], lot: String, media: Grade, sleeve: Grade, context: ModelContext) {
+        var files: [String] = []
+        var kinds: [String] = []
+        for photo in photos {
             let name = "\(UUID().uuidString).jpg"
-            guard let data = img.jpegData(compressionQuality: 0.85) else { return nil }
+            guard let data = photo.image.jpegData(compressionQuality: 0.85) else { continue }
             try? data.write(to: AppFolders.photos.appendingPathComponent(name))
-            return name
+            files.append(name)
+            kinds.append(photo.kind.rawValue)
         }
         let disc = Disc(lot: lot, photoFiles: files, media: media, sleeve: sleeve)
+        disc.photoKinds = kinds
         context.insert(disc)
         try? context.save()
         working += 1
