@@ -21,9 +21,9 @@ struct DiscRow: View {
                         .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                DeleteDiscButton(disc: disc)
             }
             DiscActions(disc: disc, onRetake: onRetake)
+            DeleteDiscButton(disc: disc, wide: true)
         }
         .padding(14)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
@@ -85,15 +85,11 @@ struct DiscActions: View {
                     Text("Sto guardando…").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.glow)
                 }
             case .daConfermare:
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("È questo?").font(.system(size: 15)).foregroundStyle(Theme.muted)
-                    HStack(spacing: 8) {
-                        Button("Sì, è questo") { run { await seller.accept(disc) } }
-                            .buttonStyle(SignalButtonStyle())
-                        Button("No") { alternatives = true }
-                            .buttonStyle(SignalButtonStyle(filled: false))
-                            .frame(width: 90)
-                    }
+                HStack(spacing: 8) {
+                    Button("Conferma") { run { await seller.accept(disc) } }
+                        .buttonStyle(SignalButtonStyle())
+                    Button("Altre versioni") { alternatives = true }
+                        .buttonStyle(SignalButtonStyle(filled: false))
                 }
             case .pronto:
                 VStack(alignment: .leading, spacing: 8) {
@@ -226,7 +222,7 @@ struct AlternativesSheet: View {
             }
             .scrollContentBackground(.hidden)
             .background(Theme.bg)
-            .navigationTitle("Quale è?")
+            .navigationTitle("Altre versioni")
             .navigationBarTitleDisplayMode(.inline)
         }
         .preferredColorScheme(.dark)
@@ -262,6 +258,8 @@ struct ScanSweep: View {
 struct DeleteDiscButton: View {
     @Environment(Seller.self) private var seller
     let disc: Disc
+    /// true: tasto rosso largo "Elimina" in fondo alla scheda; false: cestino tondo.
+    var wide = false
     @State private var ask = false
     @State private var busy = false
 
@@ -269,11 +267,19 @@ struct DeleteDiscButton: View {
 
     var body: some View {
         Button { ask = true } label: {
-            Image(systemName: "trash")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.muted)
-                .frame(width: 36, height: 36)
-                .background(Theme.panelHigh, in: Circle())
+            if wide {
+                Label("Elimina", systemImage: "trash")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.warn)
+                    .frame(maxWidth: .infinity, minHeight: 40)
+                    .background(Theme.warnSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else {
+                Image(systemName: "trash")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.muted)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.panelHigh, in: Circle())
+            }
         }
         .buttonStyle(.plain)
         .disabled(busy)

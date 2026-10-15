@@ -114,8 +114,9 @@ enum InfoTopic: String, Identifiable {
                 ]),
                 ("Dopo lo scatto", [
                     "Per ogni disco ti propone la release trovata su Discogs:",
-                    "• «Sì, è questo»: conferma e calcola il prezzo.",
-                    "• «No»: ti fa vedere le altre edizioni trovate, scegli quella giusta.",
+                    "• «Conferma»: è lui, calcola il prezzo.",
+                    "• «Altre versioni»: non è quella giusta? Ti fa vedere le altre edizioni trovate e scegli tu.",
+                    "• «Elimina» (rosso, in fondo): lo togli.",
                     "Poi decidi: In vendita (subito online), Bozza (su Discogs ma nascosto) oppure Dopo (lo ritrovi in Revisione).",
                 ]),
                 ("Consigli", [
