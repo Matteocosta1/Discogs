@@ -74,6 +74,7 @@ struct DiscActions: View {
     @State private var alternatives = false
     @State private var askRelease = false
     @State private var releaseText = ""
+    @State private var askDelete = false
 
     var body: some View {
         Group {
@@ -112,6 +113,10 @@ struct DiscActions: View {
                         if !disc.parked {
                             Button("Dopo") { seller.park(disc) }.buttonStyle(SignalButtonStyle(filled: false))
                         }
+                        Button(role: .destructive) { askDelete = true } label: { Image(systemName: "trash") }
+                            .buttonStyle(SignalButtonStyle(filled: false))
+                            .frame(width: 52)
+                            .accessibilityLabel("Elimina")
                     }
                 }
             case .daControllare:
@@ -164,6 +169,10 @@ struct DiscActions: View {
                 }
             }
             .presentationDetents([.medium, .large])
+        }
+        .confirmationDialog("Eliminare questo disco? Sparisce dall'app con le sue foto (su Discogs non era ancora online).",
+                            isPresented: $askDelete, titleVisibility: .visible) {
+            Button("Elimina", role: .destructive) { seller.discard(disc) }
         }
         .alert("Numero della release Discogs", isPresented: $askRelease) {
             TextField("discogs.com/release/NUMERO", text: $releaseText).keyboardType(.numberPad)

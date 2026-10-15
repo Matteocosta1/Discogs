@@ -295,6 +295,18 @@ final class Seller {
         return forSale + drafts
     }
 
+    /// Cancella UNA bozza su Discogs (solo se è davvero una bozza: gli annunci online non si toccano).
+    func deleteDraft(_ listingID: Int, discs: [Disc]) async throws {
+        guard (try? await client.listing(listingID))?.status == "Draft" else {
+            throw DiscogsError.http(0, "L'annuncio \(listingID) non è più una bozza: non l'ho cancellato")
+        }
+        try await client.deleteListing(listingID)
+        for d in discs where d.listingID == listingID {
+            d.listingID = nil
+            d.status = .tolto
+        }
+    }
+
     /// Cancella TUTTE le bozze su Discogs (gli annunci In vendita non si toccano). Restituisce quante.
     func deleteAllDrafts() async throws -> Int {
         var done = 0

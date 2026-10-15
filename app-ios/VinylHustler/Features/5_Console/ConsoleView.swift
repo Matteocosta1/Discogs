@@ -43,7 +43,7 @@ struct ConsoleView: View {
                 }
                 Section {
                     Toggle("Ti dice il disco a voce", isOn: $voice)
-                    Toggle("Suoni dell'interfaccia (JARVIS)", isOn: $suoni)
+                    Toggle("Suoni dell'interfaccia", isOn: $suoni)
                     HStack {
                         Text("Ti chiama")
                         TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)

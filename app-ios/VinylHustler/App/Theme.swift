@@ -221,18 +221,12 @@ struct HustlerTag: View {
     var stacked = true              // VINYL sopra HUSTLER, oppure su una riga
 
     var body: some View {
-        VStack(spacing: size * 0.22) {
-            Image(stacked ? "Wordmark" : "WordmarkLine")
-                .resizable()
-                .scaledToFit()
-                .frame(height: stacked ? size * 2.11 : size)
-                .shadow(color: Theme.glow.opacity(0.55), radius: size * 0.22)
-                .shadow(color: Theme.accent.opacity(0.35), radius: size * 0.6)
-                .accessibilityLabel("Vinyl Hustler")
-            Text("A DISCOSIZER PROJECT")
-                .font(.system(size: max(11, size * 0.16), weight: .semibold))
-                .tracking(size * 0.04)
-                .foregroundStyle(Theme.muted)
-        }
+        Image(stacked ? "Wordmark" : "WordmarkLine")
+            .resizable()
+            .scaledToFit()
+            .frame(height: stacked ? size * 2.11 : size)
+            .shadow(color: Theme.glow.opacity(0.55), radius: size * 0.22)
+            .shadow(color: Theme.accent.opacity(0.35), radius: size * 0.6)
+            .accessibilityLabel("Vinyl Hustler")
     }
 }
