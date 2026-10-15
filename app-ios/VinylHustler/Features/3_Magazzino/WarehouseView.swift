@@ -29,64 +29,96 @@ struct WarehouseView: View {
 
     private func disc(for l: Listing) -> Disc? { discs.first { $0.externalID == l.externalId } }
 
+    // Il corpo è diviso in pezzi piccoli: tutto insieme era troppo per il compilatore di Swift.
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    HStack {
-                        stat("\(listings.filter { $0.status == "For Sale" }.count)", "in vendita")
-                        stat("\(listings.filter { $0.status == "Draft" }.count)", "bozze")
-                        stat(total, "valore")
-                    }
-                    Picker("Mostra", selection: $filter) {
-                        ForEach(Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
+            dialogs(chrome(list))
+        }
+    }
+
+    private var forSaleCount: Int { listings.filter { $0.status == "For Sale" }.count }
+    private var draftCount: Int { listings.filter { $0.status == "Draft" }.count }
+    private var deleteTitle: String {
+        toDelete.count == 1 ? "Eliminare questa bozza da Discogs?" : "Eliminare \(toDelete.count) bozze da Discogs?"
+    }
+    private var deleteLabel: String {
+        selected.count == 1 ? "Elimina 1 bozza" : "Elimina \(selected.count) bozze"
+    }
+    private var askingDelete: Binding<Bool> {
+        Binding(get: { !toDelete.isEmpty }, set: { if !$0 { toDelete = [] } })
+    }
+    private var showingMessage: Binding<Bool> {
+        Binding(get: { message != nil }, set: { if !$0 { message = nil } })
+    }
+
+    private var list: some View {
+        List {
+            Section {
+                HStack {
+                    stat(String(forSaleCount), "in vendita")
+                    stat(String(draftCount), "bozze")
+                    stat(total, "valore")
                 }
-                Section {
-                    ForEach(shown) { l in row(l) }
-                } footer: {
-                    if !selecting && listings.contains(where: { $0.status == "Draft" }) {
-                        Text("Per eliminare una bozza scorrila verso sinistra, oppure tocca Seleziona e scegline tante.")
-                    }
+                Picker("Mostra", selection: $filter) {
+                    ForEach(Filter.allCases, id: \.self) { f in Text(f.rawValue).tag(f) }
+                }
+                .pickerStyle(.segmented)
+            }
+            Section {
+                ForEach(shown) { l in row(l) }
+            } footer: {
+                if !selecting && draftCount > 0 {
+                    Text("Per eliminare una bozza scorrila verso sinistra, oppure tocca Seleziona e scegline tante.")
                 }
             }
+        }
+    }
+
+    private func chrome<V: View>(_ content: V) -> some View {
+        content
             .themedBackground()
             .navigationTitle("Magazzino")
             .searchable(text: $search, prompt: "Cerca nel magazzino")
             .refreshable { await Task { await sync() }.value }
             .overlay { if loading { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(selecting ? "Fine" : "Seleziona") {
-                        selecting.toggle()
-                        selected = []
-                        if selecting { filter = .drafts }
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Verifica su Discogs", systemImage: "arrow.triangle.2.circlepath") { Task { await sync() } }
-                        Button("Cancella tutte le bozze", systemImage: "trash", role: .destructive) { confirmDeleteAll = true }
-                        Link("Apri l'inventario su Discogs", destination: URL(string: "https://www.discogs.com/sell/manage")!)
-                    } label: { Image(systemName: "ellipsis.circle") }
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                if selecting && !selected.isEmpty {
-                    Button(role: .destructive) { toDelete = Array(selected) } label: {
-                        Label("Elimina \(selected.count) \(selected.count == 1 ? "bozza" : "bozze")", systemImage: "trash")
-                    }
-                    .buttonStyle(SignalButtonStyle())
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
+            .toolbar { toolbarItems }
+            .safeAreaInset(edge: .bottom) { deleteBar }
             .animation(.snappy, value: selected.isEmpty)
-            .confirmationDialog(toDelete.count == 1 ? "Eliminare questa bozza da Discogs?" : "Eliminare \(toDelete.count) bozze da Discogs?",
-                                isPresented: Binding(get: { !toDelete.isEmpty }, set: { if !$0 { toDelete = [] } }),
-                                titleVisibility: .visible) {
+            .task { if listings.isEmpty { await Task { await sync() }.value } }
+    }
+
+    @ToolbarContentBuilder private var toolbarItems: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button(selecting ? "Fine" : "Seleziona") {
+                selecting.toggle()
+                selected = []
+                if selecting { filter = .drafts }
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Button("Verifica su Discogs", systemImage: "arrow.triangle.2.circlepath") { Task { await sync() } }
+                Button("Cancella tutte le bozze", systemImage: "trash", role: .destructive) { confirmDeleteAll = true }
+                Link("Apri l'inventario su Discogs", destination: URL(string: "https://www.discogs.com/sell/manage")!)
+            } label: { Image(systemName: "ellipsis.circle") }
+        }
+    }
+
+    @ViewBuilder private var deleteBar: some View {
+        if selecting && !selected.isEmpty {
+            Button(role: .destructive) { toDelete = Array(selected) } label: {
+                Label(deleteLabel, systemImage: "trash")
+            }
+            .buttonStyle(SignalButtonStyle())
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func dialogs<V: View>(_ content: V) -> some View {
+        content
+            .confirmationDialog(deleteTitle, isPresented: askingDelete, titleVisibility: .visible) {
                 Button("Elimina", role: .destructive) {
                     let ids = toDelete
                     Task { await deleteDrafts(ids) }
@@ -96,20 +128,18 @@ struct WarehouseView: View {
             }
             .confirmationDialog("Cancellare DEFINITIVAMENTE tutte le bozze su Discogs? Gli annunci In vendita restano.",
                                 isPresented: $confirmDeleteAll, titleVisibility: .visible) {
-                Button("Cancella le bozze", role: .destructive) {
-                    Task {
-                        loading = true
-                        do {
-                            let n = try await seller.deleteAllDrafts()
-                            message = "Bozze cancellate: \(n)"
-                        } catch { message = error.localizedDescription }
-                        await sync()
-                    }
-                }
+                Button("Cancella le bozze", role: .destructive) { Task { await deleteAll() } }
             }
-            .alert(message ?? "", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {}
-            .task { if listings.isEmpty { await Task { await sync() }.value } }
-        }
+            .alert(message ?? "", isPresented: showingMessage) {}
+    }
+
+    private func deleteAll() async {
+        loading = true
+        do {
+            let n = try await seller.deleteAllDrafts()
+            message = "Bozze cancellate: \(n)"
+        } catch { message = error.localizedDescription }
+        await sync()
     }
 
     private var total: String {
@@ -125,39 +155,11 @@ struct WarehouseView: View {
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder private func row(_ l: Listing) -> some View {
+    private func row(_ l: Listing) -> some View {
         let draft = l.status == "Draft"
         let isSelected = selected.contains(l.id)
-        HStack(spacing: 12) {
-            if selecting {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .foregroundStyle(draft ? (isSelected ? Theme.accent : Theme.muted) : Theme.muted.opacity(0.3))
-            }
-            let local = disc(for: l)?.coverFile.flatMap { UIImage(contentsOfFile: AppFolders.covers.appendingPathComponent($0).path) }
-            Group {
-                if let local { Image(uiImage: local).resizable().scaledToFill() }
-                else { AsyncImage(url: l.release.thumbnail.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh } }
-            }
-            .frame(width: 52, height: 52)
-            .clipShape(Circle())
-            .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(l.release.description ?? "Release \(l.release.id)").font(.system(size: 16, weight: .semibold)).lineLimit(2)
-                HStack(spacing: 8) {
-                    Text(draft ? "Bozza" : "Online")
-                        .font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 9).padding(.vertical, 3)
-                        .foregroundStyle(draft ? Theme.warn : Theme.money)
-                        .background(draft ? Theme.warnSoft : Theme.military, in: Capsule())
-                    if let d = disc(for: l) { BoxField(disc: d) }
-                }
-            }
-            Spacer()
-            if let p = l.price?.value {
-                Text(p, format: .currency(code: l.price?.currency ?? seller.currency)).font(.system(size: 15, weight: .semibold))
-            }
-        }
+        return ListingRow(listing: l, disc: disc(for: l), selecting: selecting, isSelected: isSelected,
+                          currency: seller.currency)
         .contentShape(Rectangle())
         .onTapGesture {
             guard selecting, draft else { return }
@@ -206,6 +208,76 @@ struct WarehouseView: View {
         do { listings = try await seller.syncInventory(discs: discs) } catch {
             if !error.isCancellation { message = error.localizedDescription }
         }
+    }
+}
+
+/// Una riga del magazzino: copertina tonda, titolo, Online/Bozza, posto, prezzo.
+private struct ListingRow: View {
+    let listing: Listing
+    let disc: Disc?
+    let selecting: Bool
+    let isSelected: Bool
+    let currency: String
+
+    private var draft: Bool { listing.status == "Draft" }
+    private var checkColor: Color {
+        if !draft { return Theme.muted.opacity(0.3) }
+        return isSelected ? Theme.accent : Theme.muted
+    }
+    private var localCover: UIImage? {
+        guard let file = disc?.coverFile else { return nil }
+        return UIImage(contentsOfFile: AppFolders.covers.appendingPathComponent(file).path)
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if selecting {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(checkColor)
+            }
+            cover
+            VStack(alignment: .leading, spacing: 4) {
+                Text(listing.release.description ?? "Release \(listing.release.id)")
+                    .font(.system(size: 16, weight: .semibold)).lineLimit(2)
+                HStack(spacing: 8) {
+                    tag
+                    if let disc { BoxField(disc: disc) }
+                }
+            }
+            Spacer()
+            if let p = listing.price?.value {
+                Text(p, format: .currency(code: listing.price?.currency ?? currency))
+                    .font(.system(size: 15, weight: .semibold))
+            }
+        }
+    }
+
+    @ViewBuilder private var cover: some View {
+        Group {
+            if let localCover {
+                Image(uiImage: localCover).resizable().scaledToFill()
+            } else {
+                AsyncImage(url: listing.release.thumbnail.flatMap(URL.init(string:))) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Theme.panelHigh
+                }
+            }
+        }
+        .frame(width: 52, height: 52)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
+    }
+
+    private var tag: some View {
+        let fg: Color = draft ? Theme.warn : Theme.money
+        let bg: Color = draft ? Theme.warnSoft : Theme.military
+        return Text(draft ? "Bozza" : "Online")
+            .font(.system(size: 12, weight: .semibold))
+            .padding(.horizontal, 9).padding(.vertical, 3)
+            .foregroundStyle(fg)
+            .background(bg, in: Capsule())
     }
 }
 
