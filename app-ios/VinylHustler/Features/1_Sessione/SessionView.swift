@@ -163,7 +163,7 @@ struct SessionView: View {
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Apri la fotocamera").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
-                    Text("Scatto = un disco · REC = tanti dischi")
+                    Text("Scatto = 1 disco · REC = 20 secondi")
                         .font(.system(size: 14)).foregroundStyle(Theme.muted)
                 }
                 Spacer()
