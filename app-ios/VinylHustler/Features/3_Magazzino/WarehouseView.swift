@@ -39,11 +39,20 @@ struct WarehouseView: View {
 
     private var forSaleCount: Int { listings.filter { $0.status == "For Sale" }.count }
     private var draftCount: Int { listings.filter { $0.status == "Draft" }.count }
+    /// Quanti dei dischi da eliminare sono in vendita (non bozze): per loro la conferma è più netta.
+    private var onlineToDelete: Int {
+        listings.filter { toDelete.contains($0.id) && $0.status == "For Sale" }.count
+    }
     private var deleteTitle: String {
-        toDelete.count == 1 ? "Eliminare questa bozza da Discogs?" : "Eliminare \(toDelete.count) bozze da Discogs?"
+        toDelete.count == 1 ? "Eliminare questo disco da Discogs?" : "Eliminare \(toDelete.count) dischi da Discogs?"
+    }
+    private var deleteMessage: String {
+        if onlineToDelete == 0 { return "Sono bozze: nessuno le vede ancora." }
+        return onlineToDelete == 1 ? "Attenzione: 1 è IN VENDITA. L'annuncio sparisce da Discogs e non si recupera."
+                                   : "Attenzione: \(onlineToDelete) sono IN VENDITA. Gli annunci spariscono da Discogs e non si recuperano."
     }
     private var deleteLabel: String {
-        selected.count == 1 ? "Elimina 1 bozza" : "Elimina \(selected.count) bozze"
+        selected.count == 1 ? "Elimina 1 disco" : "Elimina \(selected.count) dischi"
     }
     private var askingDelete: Binding<Bool> {
         Binding(get: { !toDelete.isEmpty }, set: { if !$0 { toDelete = [] } })
@@ -68,8 +77,8 @@ struct WarehouseView: View {
             Section {
                 ForEach(shown) { l in row(l) }
             } footer: {
-                if !selecting && draftCount > 0 {
-                    Text("Tocca un disco per aprirlo su Discogs.\nPer eliminare una bozza scorrila verso sinistra, oppure tocca Seleziona e scegline tante.")
+                if !selecting && !listings.isEmpty {
+                    Text("Tocca un disco per aprirlo su Discogs.\nPer eliminarlo scorrilo verso sinistra, oppure tocca Seleziona e scegline tanti.")
                 }
             }
         }
@@ -93,7 +102,6 @@ struct WarehouseView: View {
             Button(selecting ? "Fine" : "Seleziona") {
                 selecting.toggle()
                 selected = []
-                if selecting { filter = .drafts }
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -122,10 +130,10 @@ struct WarehouseView: View {
             .confirmationDialog(deleteTitle, isPresented: askingDelete, titleVisibility: .visible) {
                 Button("Elimina", role: .destructive) {
                     let ids = toDelete
-                    Task { await deleteDrafts(ids) }
+                    Task { await deleteListings(ids) }
                 }
             } message: {
-                Text("Gli annunci online non si toccano.")
+                Text(deleteMessage)
             }
             .confirmationDialog("Cancellare DEFINITIVAMENTE tutte le bozze su Discogs? Gli annunci In vendita restano.",
                                 isPresented: $confirmDeleteAll, titleVisibility: .visible) {
@@ -167,12 +175,11 @@ struct WarehouseView: View {
                 openURL(URL(string: "https://www.discogs.com/sell/item/\(l.id)")!)
                 return
             }
-            guard draft else { return }
             if isSelected { selected.remove(l.id) } else { selected.insert(l.id) }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
         .swipeActions(edge: .trailing) {
-            if draft && !selecting {
+            if !selecting {
                 Button("Elimina", systemImage: "trash", role: .destructive) { toDelete = [l.id] }
             }
         }
@@ -182,18 +189,18 @@ struct WarehouseView: View {
                 Button("Metti in vendita", systemImage: "arrow.up.circle") {
                     Task { try? await seller.draftToSale(listingID: l.id); await sync() }
                 }
-                Button("Elimina la bozza", systemImage: "trash", role: .destructive) { toDelete = [l.id] }
             }
+            Button(draft ? "Elimina la bozza" : "Togli dalla vendita", systemImage: "trash", role: .destructive) { toDelete = [l.id] }
         }
     }
 
-    private func deleteDrafts(_ ids: [Int]) async {
+    private func deleteListings(_ ids: [Int]) async {
         loading = true
         var done = 0
         var failed: [String] = []
         for id in ids {
             do {
-                try await seller.deleteDraft(id, discs: discs)
+                try await seller.deleteListing(id, discs: discs)
                 done += 1
                 listings.removeAll { $0.id == id }
             } catch { failed.append(error.localizedDescription) }
@@ -203,7 +210,7 @@ struct WarehouseView: View {
         selecting = false
         toDelete = []
         Suoni.riconosciuto()
-        message = failed.isEmpty ? (done == 1 ? "Bozza eliminata" : "Bozze eliminate: \(done)")
+        message = failed.isEmpty ? (done == 1 ? "Disco eliminato da Discogs" : "Dischi eliminati da Discogs: \(done)")
                                  : "Eliminate \(done), non riuscite \(failed.count): \(failed.first ?? "")"
     }
 
@@ -226,7 +233,6 @@ struct ListingRow: View {
 
     private var draft: Bool { listing.status == "Draft" }
     private var checkColor: Color {
-        if !draft { return Theme.muted.opacity(0.3) }
         return isSelected ? Theme.accent : Theme.muted
     }
     private var localCover: UIImage? {

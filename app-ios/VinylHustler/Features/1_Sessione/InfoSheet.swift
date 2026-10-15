@@ -113,11 +113,12 @@ enum InfoTopic: String, Identifiable {
                     "Esempio: 6 dischi in fila, 3 secondi ciascuno, e in 18 secondi li hai tutti.",
                 ]),
                 ("Dopo lo scatto", [
-                    "Per ogni disco ti propone la release trovata su Discogs:",
+                    "Per ogni disco ti propone la release trovata su Discogs.",
+                    "Tocca il titolo per aprirla su Discogs e controllare che sia proprio la tua stampa.",
                     "• «Conferma»: è lui, calcola il prezzo.",
                     "• «Altre versioni»: non è quella giusta? Ti fa vedere le altre edizioni trovate e scegli tu.",
                     "• «Elimina» (rosso, in fondo): lo togli.",
-                    "Poi decidi: In vendita (subito online), Bozza (su Discogs ma nascosto) oppure Dopo (lo ritrovi in Revisione).",
+                    "Poi decidi subito: Vendi (va online) oppure Bozza (sta su Discogs ma nascosto, lo pubblichi quando vuoi).",
                 ]),
                 ("Consigli", [
                     "• Luce buona, niente riflessi sulla plastica.",

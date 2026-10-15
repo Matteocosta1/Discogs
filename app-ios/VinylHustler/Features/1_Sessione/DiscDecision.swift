@@ -15,8 +15,7 @@ struct DiscRow: View {
                 cover
                 VStack(alignment: .leading, spacing: 5) {
                     StatusTag(status: disc.status)
-                    Text(disc.releaseTitle.isEmpty ? "Disco senza nome" : disc.releaseTitle)
-                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(3)
+                    ReleaseTitle(disc: disc, size: 17)
                     Text("\(disc.gradeText) · \(disc.box)")
                         .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
@@ -62,9 +61,32 @@ struct DiscRow: View {
     }
 }
 
+/// Il titolo del disco proposto: toccandolo si apre la release su Discogs, per controllare che la stampa sia quella.
+struct ReleaseTitle: View {
+    let disc: Disc
+    var size: CGFloat = 17
+
+    var body: some View {
+        let title = disc.releaseTitle.isEmpty ? "Disco senza nome" : disc.releaseTitle
+        if let rid = disc.releaseID, let url = URL(string: "https://www.discogs.com/release/\(rid)") {
+            Link(destination: url) {
+                (Text(title) + Text("  ") + Text(Image(systemName: "arrow.up.right.square")).foregroundColor(Theme.accent))
+                    .font(.system(size: size, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                    .underline(color: Theme.accent.opacity(0.5))
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(3)
+            }
+            .accessibilityHint("Apre la release su Discogs")
+        } else {
+            Text(title).font(.system(size: size, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(3)
+        }
+    }
+}
+
 /// I tasti, sempre gli stessi e sempre pochi:
 ///   riconosciuto      -> SÌ, È QUESTO  /  NO
-///   pronto col prezzo -> IN VENDITA  /  BOZZA  /  DOPO
+///   pronto col prezzo -> VENDI  /  BOZZA   (si decide subito)
 ///   non riconosciuto  -> ALTRA FOTO  /  NUMERO RELEASE  /  RIFAI
 struct DiscActions: View {
     @Environment(Seller.self) private var seller
@@ -104,11 +126,8 @@ struct DiscActions: View {
                         }
                     }
                     HStack(spacing: 8) {
-                        Button("In vendita") { run { await seller.sell(disc) } }.buttonStyle(SignalButtonStyle())
+                        Button("Vendi") { run { await seller.sell(disc) } }.buttonStyle(SignalButtonStyle())
                         Button("Bozza") { run { await seller.sell(disc, draft: true) } }.buttonStyle(SignalButtonStyle(filled: false))
-                        if !disc.parked {
-                            Button("Dopo") { seller.park(disc) }.buttonStyle(SignalButtonStyle(filled: false))
-                        }
                     }
                 }
             case .daControllare:
@@ -200,15 +219,24 @@ struct AlternativesSheet: View {
                     Text("Nessun'altra release trovata.").font(.system(size: 15)).foregroundStyle(Theme.muted)
                 }
                 ForEach(others) { c in
-                    Button { done(.candidate(c)) } label: {
-                        HStack(spacing: 12) {
-                            AsyncImage(url: c.coverURL.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                                .frame(width: 56, height: 56)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            Text(c.title).font(.system(size: 15)).foregroundStyle(Theme.text).lineLimit(3)
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundStyle(Theme.muted)
+                    HStack(spacing: 12) {
+                        Button { done(.candidate(c)) } label: {
+                            HStack(spacing: 12) {
+                                AsyncImage(url: c.coverURL.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                                    .frame(width: 56, height: 56)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                Text(c.title).font(.system(size: 15)).foregroundStyle(Theme.text).lineLimit(3)
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        // la vedo su Discogs prima di sceglierla
+                        Link(destination: URL(string: "https://www.discogs.com/release/\(c.id)")!) {
+                            Image(systemName: "arrow.up.right.square").font(.system(size: 20)).foregroundStyle(Theme.accent)
+                                .frame(width: 40, height: 40)
+                        }
+                        .buttonStyle(.plain)
                     }
                     .listRowBackground(Theme.panel)
                 }

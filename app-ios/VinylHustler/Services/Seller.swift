@@ -320,6 +320,19 @@ final class Seller {
         }
     }
 
+    /// Toglie da Discogs un annuncio, in vendita o in bozza (non uno già venduto). Lo chiede il Magazzino.
+    func deleteListing(_ listingID: Int, discs: [Disc]) async throws {
+        let status = (try? await client.listing(listingID))?.status
+        guard status == "Draft" || status == "For Sale" else {
+            throw DiscogsError.http(0, "L'annuncio \(listingID) non è più in vendita né in bozza: non l'ho toccato")
+        }
+        try await client.deleteListing(listingID)
+        for d in discs where d.listingID == listingID {
+            d.listingID = nil
+            d.status = .tolto
+        }
+    }
+
     /// Cancella TUTTE le bozze su Discogs (gli annunci In vendita non si toccano). Restituisce quante.
     func deleteAllDrafts() async throws -> Int {
         var done = 0

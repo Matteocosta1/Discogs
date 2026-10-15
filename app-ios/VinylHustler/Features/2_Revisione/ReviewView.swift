@@ -85,8 +85,7 @@ struct DiscCard: View {
             pictures
                 .overlay(alignment: .topLeading) { StatusTag(status: disc.status).padding(10) }
             VStack(alignment: .leading, spacing: 12) {
-                Text(disc.releaseTitle.isEmpty ? "Nessun disco proposto" : disc.releaseTitle)
-                    .font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
+                ReleaseTitle(disc: disc, size: 22)
                 HStack(alignment: .lastTextBaseline) {
                     Text(disc.gradeText).font(.system(size: 13, weight: .semibold))
                         .padding(.horizontal, 10).padding(.vertical, 4)
