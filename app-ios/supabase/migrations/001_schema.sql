@@ -57,8 +57,10 @@ alter table public.profiles enable row level security;
 alter table public.usage_monthly enable row level security;
 alter table public.ai_calls enable row level security;
 
-create policy "profilo: lettura propria" on public.profiles for select using (auth.uid() = id);
-create policy "consumi: lettura propria" on public.usage_monthly for select using (auth.uid() = user_id);
-create policy "chiamate AI: lettura propria" on public.ai_calls for select using (auth.uid() = user_id);
+create policy "profilo: lettura propria" on public.profiles for select using ((select auth.uid()) = id);
+create policy "consumi: lettura propria" on public.usage_monthly for select using ((select auth.uid()) = user_id);
+create policy "chiamate AI: lettura propria" on public.ai_calls for select using ((select auth.uid()) = user_id);
 
 revoke execute on function public.add_ai_usage(uuid, numeric) from public, anon, authenticated;
+
+revoke execute on function public.handle_new_user() from public, anon, authenticated;

@@ -4,8 +4,10 @@
 
 DISCOGS_CONSUMER_KEY =
 DISCOGS_CONSUMER_SECRET =
-SUPABASE_URL =
-SUPABASE_ANON_KEY =
+// Progetto Supabase "Vinyl Hustler": URL e chiave PUBBLICA (publishable), fatte apposta per stare nell'app.
+// La chiave segreta di Anthropic NON sta qui: sta solo sul server (segreti delle Edge Functions).
+SUPABASE_URL = https:/$()/ysgvukkcqwzzreutgwqh.supabase.co
+SUPABASE_ANON_KEY = sb_publishable_q_SMWAIgB3YgZPJRDHbHWQ_tg-muv8d
 
 // Solo uso interno: token personale Discogs letto all'avvio (tasto "Usa il token del Mac").
 // Mai riempirlo in una versione da distribuire.
