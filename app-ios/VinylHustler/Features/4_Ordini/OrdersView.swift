@@ -41,9 +41,9 @@ struct OrdersView: View {
             }
             .background(Theme.bg)
             .navigationTitle("Ordini")
-            .refreshable { await load() }
+            .refreshable { await Task { await load() }.value }   // Task a parte: il gesto non la interrompe
             .overlay { if loading && orders.isEmpty { ProgressView("Leggo gli ordini…").tint(Theme.accent) } }
-            .task { await load(); await OrderWatcher.requestPermission() }
+            .task { await Task { await load() }.value; await OrderWatcher.requestPermission() }
             .onReceive(timer) { _ in Task { await load() } }
             .sheet(item: $detail) { o in
                 OrderDetail(order: o, box: box(for: o))
@@ -137,7 +137,18 @@ struct OrdersView: View {
             await OrderWatcher.notifyNew(page.orders)
             withAnimation(.snappy) { orders = page.orders }
             error = nil
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            // lettura interrotta (cambio scheda, nuovo aggiornamento): non è un errore da mostrare
+            if error.isCancellation { return }
+            self.error = error.localizedDescription
+        }
+    }
+}
+
+extension Error {
+    /// Una richiesta annullata (cambi scheda mentre carica): niente avviso.
+    var isCancellation: Bool {
+        self is CancellationError || (self as? URLError)?.code == .cancelled
     }
 }
 

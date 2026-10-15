@@ -54,7 +54,7 @@ struct WarehouseView: View {
             .themedBackground()
             .navigationTitle("Magazzino")
             .searchable(text: $search, prompt: "Cerca nel magazzino")
-            .refreshable { await sync() }
+            .refreshable { await Task { await sync() }.value }
             .overlay { if loading { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -108,7 +108,7 @@ struct WarehouseView: View {
                 }
             }
             .alert(message ?? "", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {}
-            .task { if listings.isEmpty { await sync() } }
+            .task { if listings.isEmpty { await Task { await sync() }.value } }
         }
     }
 
@@ -203,7 +203,9 @@ struct WarehouseView: View {
     private func sync() async {
         loading = true
         defer { loading = false }
-        do { listings = try await seller.syncInventory(discs: discs) } catch { message = error.localizedDescription }
+        do { listings = try await seller.syncInventory(discs: discs) } catch {
+            if !error.isCancellation { message = error.localizedDescription }
+        }
     }
 }
 
