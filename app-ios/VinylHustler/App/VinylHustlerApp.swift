@@ -59,7 +59,7 @@ struct RootView: View {
     private var tabs: some View {
         TabView(selection: $tab) {
             SessionView().tabItem { Label("Foto", systemImage: "camera.fill") }.tag(0)
-            ReviewView().tabItem { Label("Revisione", systemImage: "checkmark.seal") }.tag(1)
+            ReviewView().tabItem { Label("Bozze", systemImage: "tray.full") }.tag(1)
                 .badge(toCheck.count)
             WarehouseView().tabItem { Label("Magazzino", systemImage: "square.stack.3d.up") }.tag(2)
             OrdersView().tabItem { Label("Ordini", systemImage: "shippingbox") }.tag(3)

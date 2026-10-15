@@ -36,12 +36,6 @@ struct ReviewView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        HUDLabel(title: "Bozze")
-                        Text("\(local.count + shownDrafts.count)")
-                            .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.glow)
-                        Spacer()
-                    }
                     ForEach(local) { disc in
                         DiscCard(disc: disc)
                     }
@@ -60,7 +54,7 @@ struct ReviewView: View {
                 .padding()
             }
             .background(Theme.bg)
-            .navigationTitle("Revisione")
+            .navigationTitle("Bozze")
             .searchable(text: $search, prompt: "Titolo, artista, scatola…")
             .overlay { if loading && drafts.isEmpty { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
             .refreshable { await Task { await loadDrafts() }.value }

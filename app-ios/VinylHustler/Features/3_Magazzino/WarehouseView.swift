@@ -67,7 +67,7 @@ struct WarehouseView: View {
             Section {
                 HStack {
                     stat(String(forSaleCount), "Online")
-                    Button { selectedTab = 1 } label: {        // le bozze stanno in Revisione
+                    Button { selectedTab = 1 } label: {        // porta alla pagina Bozze
                         stat(String(draftCount), "Bozze ›")
                     }
                     .buttonStyle(.plain)
@@ -78,7 +78,7 @@ struct WarehouseView: View {
                 ForEach(shown) { l in row(l) }
             } footer: {
                 if !selecting && !listings.isEmpty {
-                    Text("Tocca un disco per aprirlo su Discogs.\nPer toglierlo dalla vendita scorrilo verso sinistra, oppure tocca Seleziona e scegline tanti.\nLe bozze sono in Revisione.")
+                    Text("Tocca un disco per aprirlo su Discogs.\nPer toglierlo dalla vendita scorrilo verso sinistra, oppure tocca Seleziona e scegline tanti.\nLe bozze sono nella pagina Bozze.")
                 }
             }
         }

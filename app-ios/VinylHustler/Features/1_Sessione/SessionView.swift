@@ -99,7 +99,7 @@ struct SessionView: View {
                     HStack {
                         stat("\(today.count)", "fotografati")
                         stat(listings.isEmpty && loadingInventory ? "…" : "\(listings.count)", "Discogs")
-                        stat("\(inReview)", "in revisione")
+                        stat("\(inReview)", "bozze")
                     }
                 } header: {
                     HUDLabel(number: "04", title: "Oggi")

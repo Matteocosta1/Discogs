@@ -111,7 +111,7 @@ struct DiscActions: View {
                     HStack(spacing: 8) {
                         Button("Conferma") { run { await seller.accept(disc) } }
                             .buttonStyle(SignalButtonStyle())
-                        // Bozza: conferma, calcola il prezzo e lo salva come bozza su Discogs (va in Revisione › Bozze)
+                        // Bozza: conferma, calcola il prezzo e lo salva come bozza su Discogs (va nella pagina Bozze)
                         Button("Bozza") {
                             run {
                                 await seller.accept(disc)
@@ -120,7 +120,7 @@ struct DiscActions: View {
                         }
                         .buttonStyle(SignalButtonStyle(filled: false))
                     }
-                    Button("Altre versioni") { alternatives = true }
+                    Button("Versioni") { alternatives = true }
                         .buttonStyle(SignalButtonStyle(filled: false))
                 }
             case .pronto:
@@ -260,7 +260,7 @@ struct AlternativesSheet: View {
             }
             .scrollContentBackground(.hidden)
             .background(Theme.bg)
-            .navigationTitle("Altre versioni")
+            .navigationTitle("Versioni")
             .navigationBarTitleDisplayMode(.inline)
         }
         .preferredColorScheme(.dark)
