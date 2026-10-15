@@ -256,17 +256,6 @@ struct AISignInRow: View {
     @AppStorage("userName") private var userName = ""
     @State private var nonce = ""
 
-    /// Gli ultimi annunci su Discogs (i più recenti per primi).
-    private var recentListings: [Listing] {
-        Array(listings.sorted { ($0.posted ?? "") > ($1.posted ?? "") }.prefix(10))
-    }
-
-    private func loadInventory() async {
-        loadingInventory = true
-        defer { loadingInventory = false }
-        if let l = try? await seller.syncInventory(discs: discs) { listings = l }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Accedi per il riconoscimento AI. Senza, legge solo barcode e scritte.")
