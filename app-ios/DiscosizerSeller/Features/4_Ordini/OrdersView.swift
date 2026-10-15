@@ -25,6 +25,7 @@ struct OrdersView: View {
                     ForEach(orders.filter { o in !open.contains(o) }) { order in orderRow(order) }
                 }
             }
+            .themedBackground()
             .navigationTitle("Ordini")
             .refreshable { await load() }
             .task { await load(); await OrderWatcher.requestPermission() }
@@ -41,9 +42,10 @@ struct OrdersView: View {
                 Text(o.status.uppercased()).font(.caption2.monospaced()).foregroundStyle(Theme.accent)
             }
             ForEach(o.items, id: \.id) { item in
-                Text(item.release.description ?? "Release \(item.release.id)").font(.subheadline.bold())
+                Text(item.release.description ?? "Release \(item.release.id)").font(Theme.display(18, .bold))
                 if let box = discs.first(where: { $0.listingID == item.id })?.box, !box.isEmpty {
-                    Text("PRELEVA DA \(box)").font(.caption.monospaced())
+                    Text("PRELEVA DA \(box)").font(Theme.mono(11, .bold)).foregroundStyle(Color.black)
+                        .padding(.horizontal, 6).padding(.vertical, 3).background(Theme.accent)
                 }
             }
             Text("Acquirente: \(o.buyer.username)").font(.caption)

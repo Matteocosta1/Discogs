@@ -42,19 +42,24 @@ struct ReviewView: View {
                                 Text("Pubblica pronti · \(visible(.sale).filter { $0.status == .pronto }.count)")
                                     .frame(maxWidth: .infinity, minHeight: 44)
                             }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(SignalButtonStyle())
                         }
                         ForEach(visible(tab)) { disc in
                             DiscCard(disc: disc)
                         }
                         if visible(tab).isEmpty {
-                            Text(tab == .sale ? "Nessun disco in vendita" : "Lista vuota · tutto in ordine")
-                                .foregroundStyle(.secondary).padding(.top, 40)
+                            VStack(spacing: 18) {
+                                VinylMark(size: 110)
+                                Text(tab == .sale ? "NESSUN DISCO IN VENDITA" : "TUTTO IN ORDINE")
+                                    .font(Theme.mono(12, .semibold)).tracking(1.5).foregroundStyle(Theme.muted)
+                            }
+                            .padding(.top, 60)
                         }
                     }
                     .padding(.horizontal)
                 }
             }
+            .background(Theme.bg)
             .navigationTitle("Revisione")
             .searchable(text: $search, prompt: "Titolo, artista, lotto…")
             .toolbar {
@@ -79,29 +84,43 @@ struct DiscCard: View {
     @State private var zoom: ZoomImage?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             pictures
-            if disc.status == .daControllare || disc.status == .bloccato {
-                Text(disc.reason).font(.subheadline.bold()).foregroundStyle(Theme.warn)
-                    .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.warn.opacity(0.08))
+                .overlay(alignment: .topLeading) { StatusTag(status: disc.status).padding(10) }
+            VStack(alignment: .leading, spacing: 12) {
+                if disc.status == .daControllare || disc.status == .bloccato {
+                    Text(disc.reason).font(Theme.mono(12, .semibold)).foregroundStyle(Theme.warn)
+                        .padding(.leading, 10)
+                        .overlay(alignment: .leading) { Rectangle().fill(Theme.warn).frame(width: 3) }
+                }
+                Text(disc.releaseTitle.isEmpty ? "Nessun disco proposto" : disc.releaseTitle)
+                    .font(Theme.display(24, .heavy)).foregroundStyle(Theme.text)
+                HStack(alignment: .lastTextBaseline) {
+                    Text(disc.gradeText.uppercased()).font(Theme.mono(10, .bold)).tracking(1)
+                        .padding(.horizontal, 6).padding(.vertical, 4)
+                        .background(Theme.military).foregroundStyle(Theme.text)
+                    Text(disc.lot.uppercased()).font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                    Spacer()
+                    if let p = disc.price {
+                        Text(p, format: .currency(code: seller.currency))
+                            .font(Theme.display(30)).foregroundStyle(Theme.accent)
+                    }
+                }
+                if !disc.priceCalculation.isEmpty {
+                    DisclosureGroup {
+                        Text(disc.priceCalculation).font(Theme.mono(11)).foregroundStyle(Theme.muted)
+                    } label: {
+                        Text("COME È STATO CALCOLATO").font(Theme.mono(11, .semibold)).foregroundStyle(Theme.muted)
+                    }
+                }
+                if disc.status == .daControllare { candidates }
+                actions
+                links
             }
-            Text(disc.releaseTitle.isEmpty ? "Nessun disco proposto" : disc.releaseTitle).font(.headline)
-            HStack {
-                Text(disc.gradeText).font(.caption.monospaced()).padding(4).background(Theme.accent).foregroundStyle(.white)
-                Text(disc.lot).font(.caption.monospaced())
-                Spacer()
-                if let p = disc.price { Text(p, format: .currency(code: seller.currency)).font(.title3.bold()) }
-            }
-            if !disc.priceCalculation.isEmpty {
-                DisclosureGroup("Come è stato calcolato il prezzo") { Text(disc.priceCalculation).font(.caption) }
-            }
-            if disc.status == .daControllare { candidates }
-            actions
-            links
+            .padding(14)
         }
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
+        .background(Theme.panel)
+        .overlay(Rectangle().stroke(Theme.line, lineWidth: 1))
         .disabled(busy)
         .overlay { if busy { ProgressView() } }
         .alert("Numero della release Discogs", isPresented: $askRelease) {
@@ -141,16 +160,16 @@ struct DiscCard: View {
     @ViewBuilder private var candidates: some View {
         let others = disc.candidates.filter { $0.id != disc.releaseID }
         if !others.isEmpty {
-            DisclosureGroup("Altre release possibili (\(others.count))") {
+            DisclosureGroup("ALTRE RELEASE POSSIBILI · \(others.count)") {
                 ForEach(others) { c in
                     HStack {
                         AsyncImage(url: c.coverURL.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.gray.opacity(0.2) }
                             .frame(width: 44, height: 44).clipped()
-                        Text(c.title).font(.caption).lineLimit(2)
+                        Text(c.title).font(Theme.mono(11)).foregroundStyle(Theme.text).lineLimit(2)
                         Spacer()
                         Link("vedi", destination: URL(string: "https://www.discogs.com/release/\(c.id)")!).font(.caption)
                         Button("È questo") { run { await seller.choose(disc, candidate: c) } }
-                            .buttonStyle(.bordered).font(.caption)
+                            .buttonStyle(SignalButtonStyle(filled: false)).frame(width: 100)
                     }
                 }
             }
@@ -162,13 +181,13 @@ struct DiscCard: View {
             switch disc.status {
             case .daControllare:
                 if disc.releaseID != nil {
-                    Button("Conferma") { run { await seller.confirm(disc) } }.buttonStyle(.borderedProminent)
+                    Button("Conferma") { run { await seller.confirm(disc) } }.buttonStyle(SignalButtonStyle())
                 }
-                Button("Altra release…") { askRelease = true }.buttonStyle(.bordered)
-                Button("Togli", role: .destructive) { run { await seller.remove(disc) } }.buttonStyle(.bordered)
+                Button("Altra release") { askRelease = true }.buttonStyle(SignalButtonStyle(filled: false))
+                Button("Togli", role: .destructive) { run { await seller.remove(disc) } }.buttonStyle(SignalButtonStyle(filled: false))
             case .pronto:
-                Button("Pubblica") { run { await seller.publish(disc) } }.buttonStyle(.borderedProminent)
-                Button("Togli (non pubblicare)", role: .destructive) { run { await seller.remove(disc) } }.buttonStyle(.bordered)
+                Button("Pubblica") { run { await seller.publish(disc) } }.buttonStyle(SignalButtonStyle())
+                Button("Togli", role: .destructive) { run { await seller.remove(disc) } }.buttonStyle(SignalButtonStyle(filled: false))
             case .bozza:
                 Button("Conferma") {
                     run {
@@ -177,14 +196,13 @@ struct DiscCard: View {
                             catch { seller.lastError = error.localizedDescription }
                         }
                     }
-                }.buttonStyle(.borderedProminent)
+                }.buttonStyle(SignalButtonStyle())
             case .inVendita:
-                Button("Togli da Discogs", role: .destructive) { run { await seller.remove(disc) } }.buttonStyle(.bordered)
+                Button("Togli da Discogs", role: .destructive) { run { await seller.remove(disc) } }.buttonStyle(SignalButtonStyle(filled: false))
             default:
                 EmptyView()
             }
         }
-        .font(.subheadline.bold())
     }
 
     private var links: some View {
@@ -196,7 +214,8 @@ struct DiscCard: View {
                 Link("Annuncio", destination: URL(string: "https://www.discogs.com/sell/item/\(lid)")!)
             }
         }
-        .font(.caption)
+        .font(Theme.mono(11, .semibold))
+        .tint(Theme.muted)
     }
 
     private func run(_ job: @escaping () async -> Void) {

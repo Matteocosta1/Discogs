@@ -33,6 +33,7 @@ struct WarehouseView: View {
                     ForEach(shown) { l in row(l) }
                 }
             }
+            .themedBackground()
             .navigationTitle("Magazzino")
             .searchable(text: $search, prompt: "Cerca nel magazzino")
             .refreshable { await sync() }
@@ -69,8 +70,8 @@ struct WarehouseView: View {
 
     private func stat(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading) {
-            Text(value).font(.title2.bold())
-            Text(label.uppercased()).font(.caption2.monospaced()).foregroundStyle(.secondary)
+            Text(value).font(Theme.display(34)).foregroundStyle(Theme.text)
+            Text(label.uppercased()).font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -83,15 +84,17 @@ struct WarehouseView: View {
             }
             .frame(width: 56, height: 56).clipped()
             VStack(alignment: .leading, spacing: 2) {
-                Text(l.release.description ?? "Release \(l.release.id)").font(.subheadline).lineLimit(2)
+                Text(l.release.description ?? "Release \(l.release.id)").font(Theme.display(17, .bold)).lineLimit(2)
                 HStack(spacing: 6) {
                     Text(l.status == "Draft" ? "BOZZA" : "ONLINE").font(.caption2.monospaced())
-                        .foregroundStyle(l.status == "Draft" ? Theme.warn : Theme.accent)
+                        .foregroundStyle(l.status == "Draft" ? Theme.warn : Theme.accent).bold()
                     if let d = disc(for: l) { BoxField(disc: d) }
                 }
             }
             Spacer()
-            if let p = l.price?.value { Text(p, format: .currency(code: l.price?.currency ?? seller.currency)).bold() }
+            if let p = l.price?.value {
+                Text(p, format: .currency(code: l.price?.currency ?? seller.currency)).font(Theme.mono(14, .bold))
+            }
         }
         .contextMenu {
             Link("Apri l'annuncio", destination: URL(string: "https://www.discogs.com/sell/item/\(l.id)")!)

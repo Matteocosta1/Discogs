@@ -23,7 +23,7 @@ struct ConsoleView: View {
                 }
                 Section("API Discogs · ultimo minuto") {
                     LabeledContent("Richieste", value: "\(apiUsed) / 60")
-                    ProgressView(value: Double(apiUsed), total: 60)
+                    ProgressView(value: Double(apiUsed), total: 60).tint(apiUsed > 50 ? Theme.warn : Theme.accent)
                     Text("Una richiesta al secondo, sempre. Il limite è per telefono (indirizzo IP).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -71,6 +71,8 @@ struct ConsoleView: View {
                     Text("DISCOSIZER SELLER · BUILD 0.1 · KR").font(.caption2.monospaced()).foregroundStyle(.secondary)
                 }
             }
+            .themedBackground()
+            .font(Theme.mono(13))
             .navigationTitle("Console")
             .onReceive(timer) { _ in Task { apiUsed = await seller.apiUsedLastMinute() } }
             .task { aiSignedIn = await Backend.shared.accessToken() != nil }

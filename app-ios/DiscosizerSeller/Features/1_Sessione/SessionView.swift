@@ -35,13 +35,28 @@ struct SessionView: View {
                     Button {
                         showCamera = true
                     } label: {
-                        Label(front == nil ? "Fotografa il FRONTE" : "Ora il RETRO", systemImage: "camera.fill")
-                            .font(.title3.bold()).frame(maxWidth: .infinity, minHeight: 56)
+                        VStack(spacing: 12) {
+                            ZStack {
+                                Circle().stroke(Theme.accent, lineWidth: 3).frame(width: 104, height: 104)
+                                Circle().fill(Theme.accent).frame(width: 86, height: 86)
+                                Image(systemName: front == nil ? "camera.fill" : "arrow.uturn.backward.circle.fill")
+                                    .font(.system(size: 30, weight: .bold)).foregroundStyle(Color.black)
+                            }
+                            Text(front == nil ? "FRONTE" : "ORA IL RETRO")
+                                .font(Theme.display(26)).foregroundStyle(Theme.text)
+                            Text(front == nil ? "FOTO 1 DI 2" : "FOTO 2 DI 2")
+                                .font(Theme.mono(11, .semibold)).tracking(1.5).foregroundStyle(Theme.muted)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 18)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.plain)
                     if front != nil {
                         Button("Ricomincia questo disco", role: .destructive) { front = nil }
+                            .font(Theme.mono(12))
                     }
+                } header: {
+                    HUDLabel(number: "01", title: "Scatto")
                 }
                 Section("Oggi") {
                     LabeledContent("Dischi fotografati", value: "\(countToday)")
@@ -52,7 +67,9 @@ struct SessionView: View {
                         LabeledContent("Media", value: String(format: "%.0f s a disco", avg))
                     }
                 }
+                .font(Theme.mono(13))
             }
+            .themedBackground()
             .navigationTitle("Sessione")
             .fullScreenCover(isPresented: $showCamera, onDismiss: {
                 if wantBack, front != nil { wantBack = false; showCamera = true }   // subito il retro
