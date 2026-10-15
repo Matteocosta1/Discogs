@@ -116,6 +116,7 @@ enum InfoTopic: String, Identifiable {
                     "Per ogni disco ti propone la release trovata su Discogs.",
                     "Tocca il titolo per aprirla su Discogs e controllare che sia proprio la tua stampa.",
                     "• «Conferma»: è lui, calcola il prezzo.",
+                    "• «Bozza»: è lui, ma non lo metti ancora online. Lo salva come bozza su Discogs e lo ritrovi in Revisione › Bozze.",
                     "• «Altre versioni»: non è quella giusta? Ti fa vedere le altre edizioni trovate e scegli tu.",
                     "• «Elimina» (rosso, in fondo): lo togli.",
                     "Poi decidi subito: Vendi (va online) oppure Bozza (sta su Discogs ma nascosto, lo pubblichi quando vuoi).",

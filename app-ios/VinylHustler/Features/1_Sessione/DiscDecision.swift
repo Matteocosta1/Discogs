@@ -85,7 +85,7 @@ struct ReleaseTitle: View {
 }
 
 /// I tasti, sempre gli stessi e sempre pochi:
-///   riconosciuto      -> SÌ, È QUESTO  /  NO
+///   riconosciuto      -> CONFERMA  /  BOZZA  /  ALTRE VERSIONI
 ///   pronto col prezzo -> VENDI  /  BOZZA   (si decide subito)
 ///   non riconosciuto  -> ALTRA FOTO  /  NUMERO RELEASE  /  RIFAI
 struct DiscActions: View {
@@ -107,9 +107,19 @@ struct DiscActions: View {
                     Text("Sto guardando…").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.glow)
                 }
             case .daConfermare:
-                HStack(spacing: 8) {
-                    Button("Conferma") { run { await seller.accept(disc) } }
-                        .buttonStyle(SignalButtonStyle())
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button("Conferma") { run { await seller.accept(disc) } }
+                            .buttonStyle(SignalButtonStyle())
+                        // Bozza: conferma, calcola il prezzo e lo salva come bozza su Discogs (va in Revisione › Bozze)
+                        Button("Bozza") {
+                            run {
+                                await seller.accept(disc)
+                                if disc.status == .pronto { await seller.sell(disc, draft: true) }
+                            }
+                        }
+                        .buttonStyle(SignalButtonStyle(filled: false))
+                    }
                     Button("Altre versioni") { alternatives = true }
                         .buttonStyle(SignalButtonStyle(filled: false))
                 }
