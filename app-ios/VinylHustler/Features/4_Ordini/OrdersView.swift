@@ -66,7 +66,7 @@ struct OrdersView: View {
 
 /// Notifiche dei nuovi ordini (in primo piano e con l'aggiornamento in sottofondo di iOS).
 enum OrderWatcher {
-    static let taskID = "it.discosizer.seller.orders"     // anche in Info.plist > BGTaskSchedulerPermittedIdentifiers
+    static let taskID = "it.vinylhustler.app.orders"     // anche in Info.plist > BGTaskSchedulerPermittedIdentifiers
     private static let seenKey = "seenOrders"
 
     static func requestPermission() async {
@@ -89,7 +89,7 @@ enum OrderWatcher {
         UserDefaults.standard.set(true, forKey: "ordersInitialized")
     }
 
-    /// Da chiamare all'avvio (DiscosizerSellerApp) per registrare il controllo in sottofondo.
+    /// Da chiamare all'avvio (VinylHustlerApp) per registrare il controllo in sottofondo.
     static func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskID, using: nil) { task in
             schedule()

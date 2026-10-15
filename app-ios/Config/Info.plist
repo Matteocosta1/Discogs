@@ -16,16 +16,16 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>it.discosizer.seller</string>
+			<string>it.vinylhustler.app</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>discosizer</string>
+				<string>vinylhustler</string>
 			</array>
 		</dict>
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>it.discosizer.seller.orders</string>
+		<string>it.vinylhustler.app.orders</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>

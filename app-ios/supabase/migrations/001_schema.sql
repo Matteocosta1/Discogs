@@ -1,4 +1,4 @@
--- Discosizer Seller: database su Supabase (Postgres).
+-- Vinyl Hustler: database su Supabase (Postgres).
 -- Si esegue una volta: Supabase > SQL Editor > incolla > Run (oppure: supabase db push).
 -- I dischi e le foto restano sul telefono; qui stanno solo account, piano e consumi (per gli abbonamenti).
 

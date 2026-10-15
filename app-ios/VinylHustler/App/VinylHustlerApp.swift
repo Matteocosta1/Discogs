@@ -2,7 +2,7 @@ import SwiftData
 import SwiftUI
 
 @main
-struct DiscosizerSellerApp: App {
+struct VinylHustlerApp: App {
     @State private var seller = Seller()
     @Environment(\.scenePhase) private var phase
 

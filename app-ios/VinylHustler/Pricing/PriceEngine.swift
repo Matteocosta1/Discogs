@@ -37,7 +37,7 @@ struct MarketData: Equatable {
 }
 
 /// Porta esatta di compute_price / standard_price / to_grid / collector_score di vendi.py.
-/// I test in DiscosizerSellerTests confrontano i risultati con quelli dello script Python.
+/// I test in VinylHustlerTests confrontano i risultati con quelli dello script Python.
 enum PriceEngine {
     static func compute(suggested: Double, market: MarketData?, grade: Grade, currency: String,
                         rules: PriceRules, competitors: (copies: Int, lowest: Double?)? = nil) -> (price: Decimal, calculation: String) {

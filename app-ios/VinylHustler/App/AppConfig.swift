@@ -4,11 +4,11 @@ import Foundation
 /// (fuori da Git) attraverso l'Info.plist. Vedi la guida, capitolo "Chiavi e secret".
 enum AppConfig {
     /// Discogs chiede un User-Agent che identifichi l'app.
-    static let userAgent = "DiscosizerSeller/0.1 +https://discosizer.it"
+    static let userAgent = "VinylHustler/0.1"
 
     /// Schema dell'URL di ritorno dal login Discogs (Info.plist > URL Types).
-    static let oauthCallbackScheme = "discosizer"
-    static let oauthCallbackURL = "discosizer://oauth"
+    static let oauthCallbackScheme = "vinylhustler"
+    static let oauthCallbackURL = "vinylhustler://oauth"
 
     // App Discogs (https://www.discogs.com/settings/developers).
     static var discogsConsumerKey: String { info("DISCOGS_CONSUMER_KEY") }

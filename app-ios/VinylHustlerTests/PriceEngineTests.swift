@@ -1,5 +1,5 @@
 import XCTest
-@testable import DiscosizerSeller
+@testable import VinylHustler
 
 /// Gli stessi casi calcolati con lo script Python (vendi.compute_price, regole di default, grado M, EUR):
 /// se un test fallisce, l'app e lo script danno prezzi diversi.
