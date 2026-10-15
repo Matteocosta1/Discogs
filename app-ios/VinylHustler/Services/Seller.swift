@@ -155,10 +155,36 @@ final class Seller {
             disc.releaseTitle = best.title
             disc.status = .daConfermare
             disc.reason = ""
+            Task { await loadVersions(disc) }
         } else {
             disc.status = .daControllare
             disc.reason = found.read.isEmpty ? "Non trovato su Discogs" : "Letto \"\(found.read)\", ma non trovato su Discogs"
         }
+    }
+
+    /// VERSIONI: dalla release proposta si risale all'album (master) e si prendono TUTTE le sue stampe in vinile.
+    /// I candidati diventano: la proposta per prima, poi le altre stampe. Se l'album ha una stampa sola
+    /// (o la release non ha un master) resta solo la proposta, e il tasto "Versioni" non compare.
+    func loadVersions(_ disc: Disc) async {
+        guard let rid = disc.releaseID, let best = disc.candidates.first(where: { $0.id == rid }) else { return }
+        guard let master = (try? await client.release(rid))?.masterId,
+              let versions = try? await client.masterVersions(master) else {
+            if disc.releaseID == rid { disc.candidates = [best] }
+            return
+        }
+        let artist = best.title.components(separatedBy: " - ").first ?? ""
+        let others: [Candidate] = versions
+            .filter { $0.id != rid }
+            .filter { v in (v.majorFormats ?? ["Vinyl"]).contains("Vinyl") || (v.format ?? "").contains("Vinyl") }
+            .map { v in
+                let label = [v.label, v.catno].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+                let extra = [label, v.country ?? "", v.released ?? "", v.format ?? ""].filter { !$0.isEmpty }
+                let name = artist.isEmpty ? (v.title ?? "") : "\(artist) - \(v.title ?? "")"
+                return Candidate(id: v.id, title: extra.isEmpty ? name : "\(name) (\(extra.joined(separator: ", ")))",
+                                 coverURL: v.thumb)
+            }
+        guard disc.releaseID == rid else { return }      // nel frattempo ha scelto un'altra stampa
+        disc.candidates = [best] + others
     }
 
     /// SÌ, È QUESTO: si legge la release (si può vendere?) e si calcola il prezzo. Non pubblica: decide il venditore.

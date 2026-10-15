@@ -71,7 +71,7 @@ struct WarehouseView: View {
                         stat(String(draftCount), "Bozze")
                     }
                     .buttonStyle(.plain)
-                    stat(total, "Euro")
+                    stat(total, "Euro").layoutPriority(1)
                 }
             }
             Section {
@@ -159,6 +159,7 @@ struct WarehouseView: View {
     private func stat(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading) {
             Text(value).font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.glow)
+                .lineLimit(1).minimumScaleFactor(0.5)          // sempre su una riga: € compreso
                 .contentTransition(.numericText())
             Text(label).font(.system(size: 13)).foregroundStyle(Theme.muted)
         }.frame(maxWidth: .infinity, alignment: .leading)

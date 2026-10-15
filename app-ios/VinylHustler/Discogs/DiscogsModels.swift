@@ -23,6 +23,23 @@ struct Pagination: Codable {
     var pages: Int
 }
 
+/// Una stampa dello stesso album (GET /masters/{id}/versions).
+struct MasterVersion: Codable, Hashable {
+    var id: Int
+    var title: String?
+    var label: String?
+    var catno: String?
+    var country: String?
+    var released: String?
+    var format: String?
+    var majorFormats: [String]?
+    var thumb: String?
+}
+
+struct MasterVersionsPage: Codable {
+    var versions: [MasterVersion]
+}
+
 struct SearchResponse: Codable {
     var results: [SearchResult]
 }
@@ -74,6 +91,7 @@ struct Release: Codable, Hashable {
     var country: String?
     var year: Int?
     var blockedFromSale: Bool?
+    var masterId: Int?              // l'album "madre": da qui si trovano tutte le stampe
 
     var artist: String { artistsSort ?? artists?.map(\.name).joined(separator: ", ") ?? "" }
 

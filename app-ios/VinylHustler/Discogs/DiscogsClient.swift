@@ -127,6 +127,13 @@ final class DiscogsClient: @unchecked Sendable {
         try await request("GET", "/releases/\(id)", query: currency.map { ["curr_abbr": $0] } ?? [:])
     }
 
+    /// Tutte le stampe in vinile di un album (master), fino a 100.
+    func masterVersions(_ masterID: Int) async throws -> [MasterVersion] {
+        let page: MasterVersionsPage = try await request("GET", "/masters/\(masterID)/versions",
+                                                         query: ["per_page": "100", "format": "Vinyl"])
+        return page.versions
+    }
+
     /// Prezzi suggeriti per grado: chiavi "Mint (M)", "Near Mint (NM or M-)", ...
     func priceSuggestions(_ id: Int) async throws -> [String: Money] {
         try await request("GET", "/marketplace/price_suggestions/\(id)")
