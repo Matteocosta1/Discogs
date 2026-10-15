@@ -74,21 +74,21 @@ struct SessionView: View {
                 }
 
                 Section {
-                    cameraButton
-                    if !aiReady { AISignInRow { aiReady = true } }
-                } header: {
-                    HUDLabel(number: "02", title: "Scatti")
-                } footer: {
-                    Text("Una foto basta: copertina, retro o centrino. Col video passi più dischi davanti al telefono e li riconosce tutti.")
-                }
-
-                Section {
                     gradeRow("Vinile", symbol: "opticaldisc", selection: $mediaRaw)
                     gradeRow("Copertina", symbol: "square", selection: $sleeveRaw)
                 } header: {
-                    HUDLabel(number: "03", title: "Grado")
+                    HUDLabel(number: "02", title: "Grado")
                 } footer: {
-                    Text("Vale per i prossimi scatti e video. Cambialo quando passi a un blocco di dischi diverso.")
+                    Text("Vale per tutti gli scatti e i video che fai dopo. Cambialo quando passi a un blocco di dischi diverso.")
+                }
+
+                Section {
+                    cameraButton
+                    if !aiReady { AISignInRow { aiReady = true } }
+                } header: {
+                    HUDLabel(number: "03", title: "Scatti")
+                } footer: {
+                    Text("Una foto basta: copertina, retro o centrino. Col video passi più dischi davanti al telefono e li riconosce tutti.")
                 }
 
                 Section {
