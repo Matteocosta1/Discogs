@@ -75,7 +75,7 @@ struct LoginView: View {
                 .ignoresSafeArea()
             ScrollView {
                 VStack(spacing: 0) {
-                    HustlerTag(size: 76)
+                    HustlerTag(size: 70)
                         .padding(.top, 150)
 
                     VStack(spacing: 12) {

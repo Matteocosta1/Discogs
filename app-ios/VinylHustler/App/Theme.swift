@@ -205,25 +205,25 @@ extension View {
     }
 }
 
-/// Il marchio, in famiglia con quello di Discosizer: scritta verde che si accende nel buio.
+/// Il marchio, con le lettere del logo Discosizer (ricavate dal logo stesso: D, I, S, C, O, Z, E, R;
+/// V, N, Y, L, H, U, T costruite con gli stessi pezzi). Verde che si accende nel buio.
 struct HustlerTag: View {
-    var size: CGFloat = 64
+    var size: CGFloat = 76          // altezza di una riga
+    var stacked = true              // VINYL sopra HUSTLER, oppure su una riga
 
     var body: some View {
-        VStack(spacing: size * 0.12) {
-            VStack(spacing: -size * 0.18) {
-                Text("VINYL").font(.system(size: size, weight: .black).width(.compressed))
-                Text("HUSTLER").font(.system(size: size, weight: .black).width(.compressed))
-            }
-            .foregroundStyle(Theme.glow)
-            .shadow(color: Theme.glow.opacity(0.55), radius: size * 0.25)
-            .shadow(color: Theme.accent.opacity(0.35), radius: size * 0.7)
+        VStack(spacing: size * 0.22) {
+            Image(stacked ? "Wordmark" : "WordmarkLine")
+                .resizable()
+                .scaledToFit()
+                .frame(height: stacked ? size * 2.11 : size)
+                .shadow(color: Theme.glow.opacity(0.55), radius: size * 0.22)
+                .shadow(color: Theme.accent.opacity(0.35), radius: size * 0.6)
+                .accessibilityLabel("Vinyl Hustler")
             Text("A DISCOSIZER PROJECT")
-                .font(.system(size: size * 0.17, weight: .semibold))
+                .font(.system(size: max(11, size * 0.16), weight: .semibold))
                 .tracking(size * 0.04)
                 .foregroundStyle(Theme.muted)
         }
-        .lineLimit(1)
-        .minimumScaleFactor(0.5)
     }
 }
