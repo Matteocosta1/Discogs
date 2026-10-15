@@ -17,6 +17,12 @@ struct WarehouseView: View {
     @State private var selected: Set<Int> = []
     @State private var toDelete: [Int] = []          // bozze in attesa di conferma
     @State private var message: String?
+    @State private var askPlace = false
+    @State private var newPlace = "Scatola 1"
+    /// Annunci (online e bozze) senza posizione.
+    private var noPlaceCount: Int {
+        listings.filter { ($0.location ?? "").trimmingCharacters(in: .whitespaces).isEmpty }.count
+    }
     @Environment(\.openURL) private var openURL
 
     private var shown: [Listing] {
@@ -105,6 +111,11 @@ struct WarehouseView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Button("Verifica su Discogs", systemImage: "arrow.triangle.2.circlepath") { Task { await sync() } }
+                Button("Posizione a chi non ce l'ha (\(noPlaceCount))", systemImage: "archivebox") {
+                    newPlace = "Scatola 1"
+                    askPlace = true
+                }
+                .disabled(noPlaceCount == 0)
                 Button("Cancella tutte le bozze", systemImage: "trash", role: .destructive) { confirmDeleteAll = true }
                 Link("Apri l'inventario su Discogs", destination: URL(string: "https://www.discogs.com/sell/manage")!)
             } label: { Image(systemName: "ellipsis.circle") }
@@ -138,6 +149,17 @@ struct WarehouseView: View {
                 Button("Cancella le bozze", role: .destructive) { Task { await deleteAll() } }
             }
             .alert(message ?? "", isPresented: showingMessage) {}
+            .alert("Posizione per \(noPlaceCount) annunci senza posizione", isPresented: $askPlace) {
+                TextField("es. Scatola 1", text: $newPlace)
+                Button("Scrivi su Discogs") {
+                    let place = newPlace.trimmingCharacters(in: .whitespaces)
+                    guard !place.isEmpty else { return }
+                    Task { await fillPlace(place) }
+                }
+                Button("Annulla", role: .cancel) {}
+            } message: {
+                Text("Solo quelli senza posizione: gli altri restano come sono. Cambia solo la posizione, niente prezzi o condizioni.")
+            }
     }
 
     private func deleteAll() async {
@@ -213,6 +235,14 @@ struct WarehouseView: View {
                                  : "Eliminate \(done), non riuscite \(failed.count): \(failed.first ?? "")"
     }
 
+    private func fillPlace(_ place: String) async {
+        loading = true
+        let r = await seller.fillMissingLocation(listings, place: place, discs: discs)
+        await sync()
+        message = r.failed == 0 ? "Posizione \"\(place)\" scritta su \(r.done) annunci"
+                                : "Scritta su \(r.done) annunci, non riuscita su \(r.failed): riprova"
+    }
+
     private func sync() async {
         loading = true
         defer { loading = false }
@@ -252,7 +282,12 @@ struct ListingRow: View {
                     .font(.system(size: 16, weight: .semibold)).lineLimit(2)
                 HStack(spacing: 8) {
                     tag
-                    if let disc { BoxField(disc: disc) }
+                    if let disc, !disc.box.isEmpty { BoxField(disc: disc) }
+                    else if let place = listing.location, !place.isEmpty {
+                        Text(place).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
+                    } else {
+                        Text("senza posizione").font(.system(size: 12)).foregroundStyle(Theme.warn).lineLimit(1)
+                    }
                 }
             }
             Spacer()

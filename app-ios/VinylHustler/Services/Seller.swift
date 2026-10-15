@@ -359,6 +359,24 @@ final class Seller {
         }
     }
 
+    /// POSIZIONE A CHI NON CE L'HA: scrive `place` nel campo privato "location" degli annunci che ce l'hanno vuoto.
+    /// Gli annunci che hanno già una posizione non si toccano; degli altri cambia solo la posizione.
+    func fillMissingLocation(_ listings: [Listing], place: String, discs: [Disc]) async -> (done: Int, failed: Int) {
+        var done = 0, failed = 0
+        let empty = listings.filter { ($0.location ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+                                      && ($0.status == "For Sale" || $0.status == "Draft") }
+        for l in empty {
+            do {
+                try await client.editListing(l.id, changes: ["location": place])
+                done += 1
+                for d in discs where d.listingID == l.id || (l.externalId != nil && d.externalID == l.externalId) {
+                    if d.box.trimmingCharacters(in: .whitespaces).isEmpty { d.box = place }
+                }
+            } catch { failed += 1 }
+        }
+        return (done, failed)
+    }
+
     /// Cancella TUTTE le bozze su Discogs (gli annunci In vendita non si toccano). Restituisce quante.
     func deleteAllDrafts() async throws -> Int {
         var done = 0
