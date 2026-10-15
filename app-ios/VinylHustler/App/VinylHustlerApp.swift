@@ -31,7 +31,7 @@ struct RootView: View {
     @Environment(Seller.self) private var seller
     @Query(filter: #Predicate<Disc> { $0.statusRaw == "daControllare" || $0.statusRaw == "daConfermare" })
     private var toCheck: [Disc]
-    @State private var tab = 0
+    @AppStorage("selectedTab") private var tab = 0
     @State private var splash = true
 
     var body: some View {

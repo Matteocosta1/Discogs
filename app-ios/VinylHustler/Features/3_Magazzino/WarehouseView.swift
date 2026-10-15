@@ -9,7 +9,7 @@ struct WarehouseView: View {
     @Query private var discs: [Disc]
     @State private var listings: [Listing] = []
     @State private var search = ""
-    @State private var filter = Filter.online
+    @AppStorage("selectedTab") private var selectedTab = 0
     @State private var loading = false
     @State private var confirmDeleteAll = false
     @State private var selecting = false
@@ -18,13 +18,10 @@ struct WarehouseView: View {
     @State private var message: String?
     @Environment(\.openURL) private var openURL
 
-    enum Filter: String, CaseIterable { case online = "Online", drafts = "Bozze" }
-
     private var shown: [Listing] {
         let q = search.lowercased()
         return listings.filter { l in
-            let inFilter = filter == .online ? l.status == "For Sale" : l.status == "Draft"
-            return inFilter && (q.isEmpty || (l.release.description ?? "").lowercased().contains(q))
+            return l.status == "For Sale" && (q.isEmpty || (l.release.description ?? "").lowercased().contains(q))
         }
     }
 
@@ -38,7 +35,11 @@ struct WarehouseView: View {
     }
 
     private var forSaleCount: Int { listings.filter { $0.status == "For Sale" }.count }
-    private var draftCount: Int { listings.filter { $0.status == "Draft" }.count }
+    /// Le stesse bozze della Revisione: quelle su Discogs più i dischi dell'app non ancora caricati.
+    private var draftCount: Int {
+        listings.filter { $0.status == "Draft" }.count
+            + discs.filter { [DiscStatus.daConfermare, .daControllare, .bloccato, .pronto].contains($0.status) }.count
+    }
     /// Quanti dei dischi da eliminare sono in vendita (non bozze): per loro la conferma è più netta.
     private var onlineToDelete: Int {
         listings.filter { toDelete.contains($0.id) && $0.status == "For Sale" }.count
@@ -65,20 +66,19 @@ struct WarehouseView: View {
         List {
             Section {
                 HStack {
-                    stat(String(forSaleCount), "in vendita")
-                    stat(String(draftCount), "bozze")
-                    stat(total, "valore")
+                    stat(String(forSaleCount), "Online")
+                    Button { selectedTab = 1 } label: {        // le bozze stanno in Revisione
+                        stat(String(draftCount), "Bozze ›")
+                    }
+                    .buttonStyle(.plain)
+                    stat(total, "Euro")
                 }
-                Picker("Mostra", selection: $filter) {
-                    ForEach(Filter.allCases, id: \.self) { f in Text(f.rawValue).tag(f) }
-                }
-                .pickerStyle(.segmented)
             }
             Section {
                 ForEach(shown) { l in row(l) }
             } footer: {
                 if !selecting && !listings.isEmpty {
-                    Text("Tocca un disco per aprirlo su Discogs.\nPer eliminarlo scorrilo verso sinistra, oppure tocca Seleziona e scegline tanti.")
+                    Text("Tocca un disco per aprirlo su Discogs.\nPer toglierlo dalla vendita scorrilo verso sinistra, oppure tocca Seleziona e scegline tanti.\nLe bozze sono in Revisione.")
                 }
             }
         }
@@ -153,7 +153,7 @@ struct WarehouseView: View {
 
     private var total: String {
         let sum = listings.filter { $0.status == "For Sale" }.compactMap { $0.price?.value }.reduce(0, +)
-        return sum.formatted(.currency(code: seller.currency).precision(.fractionLength(0)))
+        return sum.formatted(.number.precision(.fractionLength(0)))
     }
 
     private func stat(_ value: String, _ label: String) -> some View {
