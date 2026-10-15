@@ -78,6 +78,9 @@ final class Disc {
     var lot: String
     var photoFiles: [String]            // nomi dei file, nell'ordine di PhotoKind
     var photoKinds: [String] = []       // PhotoKind di ogni file (stesso ordine di photoFiles)
+    var earArtist: String = ""          // brano sentito dall'Orecchio (indizio per Discogs)
+    var earTitle: String = ""
+    var earAlbum: String = ""
     var mediaRaw: String
     var sleeveRaw: String
     var statusRaw: String
@@ -126,6 +129,10 @@ final class Disc {
         get { (try? JSONDecoder().decode([Candidate].self, from: candidatesData)) ?? [] }
         set { candidatesData = (try? JSONEncoder().encode(newValue)) ?? Data("[]".utf8) }
     }
+    var ear: BranoSentito? {
+        earTitle.isEmpty && earArtist.isEmpty ? nil : BranoSentito(titolo: earTitle, artista: earArtist, album: earAlbum, copertina: nil)
+    }
+
     /// external_id dell'annuncio su Discogs: collega l'annuncio a questo disco.
     var externalID: String { "app-\(id.uuidString.prefix(8).lowercased())" }
 

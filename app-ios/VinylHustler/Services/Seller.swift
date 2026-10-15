@@ -61,7 +61,8 @@ final class Seller {
     // MARK: - 1. Sessione: foto -> riconoscimento -> prezzo
 
     /// Salva le foto, crea il disco e lo mette in coda (un disco alla volta: limite Discogs).
-    func addDisc(photos: [(kind: PhotoKind, image: UIImage)], lot: String, media: Grade, sleeve: Grade, context: ModelContext) {
+    func addDisc(photos: [(kind: PhotoKind, image: UIImage)], lot: String, media: Grade, sleeve: Grade,
+                 ear: BranoSentito? = nil, context: ModelContext) {
         var files: [String] = []
         var kinds: [String] = []
         for photo in photos {
@@ -74,6 +75,11 @@ final class Seller {
         let disc = Disc(lot: lot, photoFiles: files, media: media, sleeve: sleeve)
         disc.photoKinds = kinds
         disc.box = lot                      // dove sta fisicamente: lo mostrano Magazzino e Ordini
+        if let ear {
+            disc.earArtist = ear.artista
+            disc.earTitle = ear.titolo
+            disc.earAlbum = ear.album
+        }
         context.insert(disc)
         try? context.save()
         working += 1
@@ -93,7 +99,7 @@ final class Seller {
         }
         let engine = RecognitionEngine(client: client, store: store, mode: mode,
                                        ai: mode.usesAI && Backend.shared.isConfigured ? AIService() : nil)
-        let result = await engine.recognize(photos: photos(of: disc))
+        let result = await engine.recognize(photos: photos(of: disc), ear: disc.ear)
         disc.details = result.details.joined(separator: "; ")
         disc.method = result.method
         disc.aiCost += result.aiCost

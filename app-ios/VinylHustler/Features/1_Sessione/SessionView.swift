@@ -21,6 +21,8 @@ struct SessionView: View {
     @State private var guided = false
     @State private var countToday = 0
     @State private var showOcchio = false
+    @State private var showOrecchio = false
+    @State private var sentito: BranoSentito?
     @State private var avviso: String?
 
     private var media: Grade { Grade(rawValue: mediaRaw) ?? .m }
@@ -100,14 +102,27 @@ struct SessionView: View {
 
                 Section {
                     occhio
+                    orecchio
+                    if let sentito {
+                        HStack(spacing: 10) {
+                            Image(systemName: "ear").foregroundStyle(Color.black)
+                            Text(sentito.riga).font(Theme.mono(11, .semibold)).foregroundStyle(Color.black).lineLimit(2)
+                            Spacer()
+                            Button { self.sentito = nil } label: { Image(systemName: "xmark").foregroundStyle(Color.black) }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Togli il brano sentito")
+                        }
+                        .padding(10)
+                        .background(Theme.accent)
+                    }
                     shutter
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                         ForEach(PhotoKind.slots) { kind in slot(kind) }
                     }
                     .padding(.vertical, 6)
-                    Button("Riconosci il disco · \(shots.count) foto") { submit() }
+                    Button("Riconosci il disco · \(shots.count) foto\(sentito == nil ? "" : " + orecchio")") { submit() }
                         .buttonStyle(SignalButtonStyle())
-                        .disabled(shots.isEmpty)
+                        .disabled(shots.isEmpty && sentito == nil)
                     if !shots.isEmpty {
                         Button("Ricomincia questo disco", role: .destructive) { shots = [:] }
                             .font(Theme.mono(12))
@@ -136,6 +151,12 @@ struct SessionView: View {
             .navigationTitle("Sessione")
             .onAppear {                                  // contenitore scelto che non esiste più: si torna al primo
                 if !kinds.contains(placeKind) { placeKind = kinds.first ?? "Scatola" }
+            }
+            .fullScreenCover(isPresented: $showOrecchio) {
+                OrecchioView { brano in
+                    showOrecchio = false
+                    if let brano { sentito = brano }
+                }
             }
             .fullScreenCover(isPresented: $showOcchio) {
                 OcchioView { dati in
@@ -286,6 +307,28 @@ struct SessionView: View {
         .buttonStyle(.plain)
     }
 
+    /// ORECCHIO: come in JARVIS, riconosce il brano che suona. Diventa l'indizio del prossimo disco.
+    private var orecchio: some View {
+        Button { showOrecchio = true } label: {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle().stroke(Theme.accent.opacity(0.5), lineWidth: 1).frame(width: 64, height: 64)
+                    Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1).frame(width: 46, height: 46)
+                    Image(systemName: "ear").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.accent)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("ORECCHIO").font(Theme.display(24)).foregroundStyle(Theme.text)
+                    Text("FAI SUONARE IL DISCO · RICONOSCE IL BRANO")
+                        .font(Theme.mono(10, .semibold)).tracking(1.2).foregroundStyle(Theme.muted)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func riceviOcchio(_ dati: [Data]) {
         let immagini = dati.compactMap { UIImage(data: $0) }
         guard !immagini.isEmpty else { return }
@@ -295,7 +338,8 @@ struct SessionView: View {
         } else {
             // il giro: il disco è già tutto lì, parte subito il riconoscimento
             let fotogrammi = immagini.map { (kind: PhotoKind.giro, image: $0) }
-            seller.addDisc(photos: fotogrammi, lot: place, media: media, sleeve: sleeve, context: context)
+            seller.addDisc(photos: fotogrammi, lot: place, media: media, sleeve: sleeve, ear: sentito, context: context)
+            sentito = nil
             recentRaw = ([place] + recent.filter { $0 != place }).prefix(8).joined(separator: "|")
             countToday += 1
             avviso = "Giro acquisito: \(immagini.count) fotogrammi in riconoscimento. Lo trovi in Revisione."
@@ -332,9 +376,10 @@ struct SessionView: View {
 
     private func submit() {
         let ordered = PhotoKind.slots.compactMap { kind in shots[kind].map { (kind: kind, image: $0) } }
-        seller.addDisc(photos: ordered, lot: place, media: media, sleeve: sleeve, context: context)
+        seller.addDisc(photos: ordered, lot: place, media: media, sleeve: sleeve, ear: sentito, context: context)
         recentRaw = ([place] + recent.filter { $0 != place }).prefix(8).joined(separator: "|")
         shots = [:]
+        sentito = nil
         countToday += 1
     }
 }

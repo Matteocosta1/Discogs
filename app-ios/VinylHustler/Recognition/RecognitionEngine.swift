@@ -26,7 +26,7 @@ struct RecognitionEngine {
     let mode: RecognitionMode
     var ai: AIService? = nil
 
-    func recognize(photos: [UIImage]) async -> RecognitionResult {
+    func recognize(photos: [UIImage], ear: BranoSentito? = nil) async -> RecognitionResult {
         // 1. Lettura locale (Vision, sul telefono)
         let (ev, prints) = await Task.detached(priority: .userInitiated) {
             (PhotoReader.evidence(from: photos),
@@ -37,7 +37,8 @@ struct RecognitionEngine {
         var aiCost = 0.0
 
         // 2. Candidati da Discogs
-        var (method, found) = await searchByEvidence(ev)
+        if let ear { details.append("orecchio: \(ear.riga)") }
+        var (method, found) = await searchByEvidence(ev, ear: ear)
         if found.isEmpty, mode == .completa, let ai {
             // La parte locale non ha trovato nulla: l'AI legge la foto, poi si cerca di nuovo
             if let read = try? await ai.read(photos: photos.compactMap { $0.jpegForUpload(maxSide: 1568) }) {
@@ -118,7 +119,7 @@ struct RecognitionEngine {
     }
 
     /// Barcode -> catalogo (confermato dall'etichetta letta) -> scritte principali.
-    private func searchByEvidence(_ ev: Evidence) async -> (String, [SearchResult]) {
+    private func searchByEvidence(_ ev: Evidence, ear: BranoSentito? = nil) async -> (String, [SearchResult]) {
         for b in ev.barcodes {
             if let res = try? await client.search(["barcode": b]), !res.isEmpty { return ("barcode", res) }
         }
@@ -126,6 +127,18 @@ struct RecognitionEngine {
             if let res = try? await client.search(["catno": raw]) {
                 let confirmed = res.filter { ($0.label ?? []).contains { Evidence.labelInText($0, ev.text) } }
                 if !confirmed.isEmpty { return ("catalogo", confirmed) }
+            }
+        }
+        // L'Orecchio: il brano sentito porta all'album (o ai dischi che contengono quel brano).
+        // Non è un codice stampato: la stampa giusta la decidono poi le copertine o il venditore.
+        if let ear, !ear.artista.isEmpty {
+            if !ear.album.isEmpty,
+               let res = try? await client.search(["artist": ear.artista, "release_title": ear.album]), !res.isEmpty {
+                return ("orecchio", res)
+            }
+            if !ear.titolo.isEmpty,
+               let res = try? await client.search(["artist": ear.artista, "track": ear.titolo]), !res.isEmpty {
+                return ("orecchio", res)
             }
         }
         let main = ev.main.prefix(3).joined(separator: " ")
