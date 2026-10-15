@@ -11,7 +11,11 @@ struct SessionView: View {
     @Query(sort: \Disc.createdAt, order: .reverse) private var discs: [Disc]
     @AppStorage("placeKind") private var placeKind = "Scatola"
     @AppStorage("placeName") private var placeName = "1"
-    @AppStorage("placeKindsV2") private var kindsRaw = "Scatola|Archivio|Scaffale"
+    /// I contenitori creati con "+" (quelli fissi non si salvano: ci sono sempre).
+    @AppStorage("placeKindsCustom") private var customRaw = ""
+    @AppStorage("placeKindsV2") private var oldKindsRaw = ""      // versione di prima: si recuperano i contenitori creati (es. Casa)
+    @State private var removing: String?
+    static let fixedKinds = ["Archivio", "Scatola", "Scaffale"]
     @AppStorage("media") private var mediaRaw = Grade.m.rawValue
     @AppStorage("sleeve") private var sleeveRaw = Grade.m.rawValue
     @State private var addingKind = false
@@ -22,7 +26,9 @@ struct SessionView: View {
 
     private var media: Grade { Grade(rawValue: mediaRaw) ?? .m }
     private var sleeve: Grade { Grade(rawValue: sleeveRaw) ?? media }
-    private var kinds: [String] { kindsRaw.split(separator: "|").map(String.init) }
+    private var custom: [String] { customRaw.split(separator: "|").map(String.init).filter { !Self.fixedKinds.contains($0) } }
+    /// Archivio, Scatola, Scaffale sempre; poi quelli creati con "+".
+    private var kinds: [String] { Self.fixedKinds + custom }
     /// Dove finiscono i dischi: "Scatola 12", "Casa 2", ...
     private var place: String {
         let name = placeName.trimmingCharacters(in: .whitespaces)
@@ -107,11 +113,27 @@ struct SessionView: View {
             .themedBackground()
             .navigationTitle("Sessione")
             .onAppear {                                  // contenitore scelto che non esiste più: si torna al primo
-                if !kinds.contains(placeKind) { placeKind = kinds.first ?? "Scatola" }
+                if !oldKindsRaw.isEmpty {
+                    let extra = oldKindsRaw.split(separator: "|").map(String.init).filter { !Self.fixedKinds.contains($0) && !custom.contains($0) }
+                    customRaw = (custom + extra).joined(separator: "|")
+                    oldKindsRaw = ""
+                }
+                if !kinds.contains(placeKind) { placeKind = Self.fixedKinds[0] }
             }
             .task {
                 let token = await Backend.shared.accessToken()
                 aiReady = !Backend.shared.isConfigured || token != nil
+            }
+            .confirmationDialog("Eliminare il contenitore \"\(removing ?? "")\"? I dischi già fotografati tengono il loro posto.",
+                                isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                                titleVisibility: .visible) {
+                Button("Elimina", role: .destructive) {
+                    if let r = removing {
+                        customRaw = custom.filter { $0 != r }.joined(separator: "|")
+                        if placeKind == r { placeKind = Self.fixedKinds[0] }
+                    }
+                    removing = nil
+                }
             }
             .alert("Nuovo contenitore", isPresented: $addingKind) {
                 TextField("es. Casa, Cassetta, Mobile…", text: $newKind)
@@ -176,11 +198,9 @@ struct SessionView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            if kinds.count > 1 {
-                Button("Togli \(kind)", systemImage: "trash", role: .destructive) {
-                    kindsRaw = kinds.filter { $0 != kind }.joined(separator: "|")
-                    if placeKind == kind { placeKind = kinds.first ?? "Scatola" }
-                }
+            // tenendo premuto: si può eliminare solo un contenitore creato con "+"
+            if !Self.fixedKinds.contains(kind) {
+                Button("Elimina \(kind)", systemImage: "trash", role: .destructive) { removing = kind }
             }
         }
     }
@@ -188,7 +208,9 @@ struct SessionView: View {
     private func addKind() {
         let name = newKind.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "|", with: " ")
         guard !name.isEmpty else { return }
-        if !kinds.contains(name) { kindsRaw = (kinds + [name]).joined(separator: "|") }
+        if !kinds.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+            customRaw = (custom + [name]).joined(separator: "|")
+        }
         placeKind = name
         placeName = ""
     }
