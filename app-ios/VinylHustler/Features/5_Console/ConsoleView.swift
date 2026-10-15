@@ -9,6 +9,7 @@ struct ConsoleView: View {
     @State private var aiSignedIn = false
     @AppStorage("voice") private var voice = true
     @AppStorage("userName") private var userName = ""
+    @AppStorage("voiceID") private var voiceID = ""
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -45,11 +46,21 @@ struct ConsoleView: View {
                         Text("Ti chiama")
                         TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)
                     }
+                    Picker("Voce", selection: $voiceID) {
+                        Text("La migliore italiana").tag("")
+                        Text("Quella di sistema (Impostazioni)").tag(Voice.systemChoice)
+                        ForEach(Voice.italianVoices, id: \.identifier) { v in
+                            Text(Voice.label(v)).tag(v.identifier)
+                        }
+                    }
                     Button("Prova la voce") { Voice.shared.say("Ciao\(userName.isEmpty ? "" : " \(userName)"), questo è Kind Of Blue di Miles Davis.") }
                 } header: {
                     Text("Voce")
                 } footer: {
-                    Text("Quando riconosce un disco te lo dice: \"Ciao \(userName.isEmpty ? "Marco" : userName), questo è…\"").font(.caption)
+                    Text(Voice.hasNiceVoice
+                         ? "Quando riconosce un disco te lo dice: \"Ciao \(userName.isEmpty ? "Marco" : userName), questo è…\""
+                         : "Per una voce più naturale scarica una voce italiana Avanzata o Premium: Impostazioni › Accessibilità › Contenuti letti › Voci › Italiano. Poi sceglila qui.")
+                        .font(.caption)
                 }
                 Section("Regole del prezzo") {
                     Stepper("Griglia: \(seller.rules.step.formatted()) €", value: decimal($seller.rules.step), in: 0.5...10, step: 0.5)

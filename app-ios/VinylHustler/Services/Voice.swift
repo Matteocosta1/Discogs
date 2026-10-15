@@ -31,10 +31,39 @@ final class Voice {
         try? AVAudioSession.sharedInstance().setActive(true)
         if synth.isSpeaking { synth.stopSpeaking(at: .word) }
         let u = AVSpeechUtterance(string: text)
-        u.voice = Self.italian
-        u.rate = AVSpeechUtteranceDefaultSpeechRate * 1.05
+        if voiceID == Self.systemChoice {
+            u.prefersAssistiveTechnologySettings = true      // la voce scelta in Impostazioni › Contenuti letti
+            u.voice = AVSpeechSynthesisVoice(language: "it-IT")
+        } else {
+            u.voice = AVSpeechSynthesisVoice(identifier: voiceID) ?? Self.italian
+            u.rate = AVSpeechUtteranceDefaultSpeechRate
+        }
         synth.speak(u)
     }
+
+    // MARK: - Scelta della voce (Console)
+
+    /// "" = la migliore italiana installata; "sistema" = quella delle impostazioni di iOS; altrimenti l'id della voce.
+    static let systemChoice = "sistema"
+    var voiceID: String { UserDefaults.standard.string(forKey: "voiceID") ?? "" }
+
+    /// Le voci italiane del telefono, dalla più bella (Premium, Avanzata) alla base.
+    static var italianVoices: [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.hasPrefix("it") }
+            .sorted { ($0.quality.rawValue, $0.name) > ($1.quality.rawValue, $1.name) }
+    }
+
+    static func label(_ v: AVSpeechSynthesisVoice) -> String {
+        switch v.quality {
+        case .premium: "\(v.name) · Premium"
+        case .enhanced: "\(v.name) · Avanzata"
+        default: v.name
+        }
+    }
+
+    /// True se sul telefono c'è almeno una voce italiana Avanzata o Premium.
+    static var hasNiceVoice: Bool { italianVoices.contains { $0.quality != .default } }
 
     /// "Miles Davis - Kind Of Blue (Columbia, US, 1959)" -> "Kind Of Blue di Miles Davis"
     nonisolated static func spoken(_ title: String) -> String {
@@ -46,7 +75,7 @@ final class Voice {
         return "\(album) di \(artist)"
     }
 
-    /// La voce italiana migliore installata (premium > enhanced > standard).
+    /// La voce italiana migliore installata (Premium > Avanzata > base).
     private static var italian: AVSpeechSynthesisVoice? {
         AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language == "it-IT" }
