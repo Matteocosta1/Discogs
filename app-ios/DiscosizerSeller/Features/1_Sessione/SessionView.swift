@@ -25,7 +25,11 @@ struct SessionView: View {
     private var sleeve: Grade { Grade(rawValue: sleeveRaw) ?? media }
     private var nextEmpty: PhotoKind? { PhotoKind.allCases.first { shots[$0] == nil } }
     private var kinds: [String] { kindsRaw.split(separator: "|").map(String.init) }
-    private var recent: [String] { recentRaw.split(separator: "|").map(String.init) }
+    /// Solo i recenti di contenitori che esistono ancora (niente "Cassa 1" se la Cassa è stata tolta).
+    private var recent: [String] {
+        recentRaw.split(separator: "|").map(String.init)
+            .filter { item in kinds.contains { item == $0 || item.hasPrefix($0 + " ") } }
+    }
     /// Dove finiscono i dischi: "Scatola 12", "Archivio B", ...
     private var place: String {
         let name = placeName.trimmingCharacters(in: .whitespaces)
@@ -127,6 +131,9 @@ struct SessionView: View {
             }
             .themedBackground()
             .navigationTitle("Sessione")
+            .onAppear {                                  // contenitore scelto che non esiste più: si torna al primo
+                if !kinds.contains(placeKind) { placeKind = kinds.first ?? "Scatola" }
+            }
             .alert("Nuovo contenitore", isPresented: $addingKind) {
                 TextField("es. Cassetta, Mobile, Stand…", text: $newKind)
                 Button("Aggiungi") { addKind() }
@@ -167,6 +174,7 @@ struct SessionView: View {
                 Button("Togli \(kind)", systemImage: "trash", role: .destructive) {
                     kindsRaw = kinds.filter { $0 != kind }.joined(separator: "|")
                     if placeKind == kind { placeKind = kinds.first ?? "Scatola" }
+                    recentRaw = recent.joined(separator: "|")
                 }
             }
         }
