@@ -3,7 +3,8 @@ import SwiftUI
 
 /// 03 / BOZZE — il deposito: le bozze su Discogs (quelle salvate con "Bozza" dall'app e quelle fatte fuori).
 /// Vendi, Elimina, tocco = apre su Discogs; "Pubblica N" le mette tutte online.
-/// I dischi ancora da decidere stanno in Revisione, quelli in vendita nel Magazzino.
+/// In cima i dischi fotografati ancora da sistemare (non riconosciuti o non ancora caricati): restano qui
+/// finché non li sistemi. Quelli in vendita stanno nel Magazzino.
 struct DraftsView: View {
     @Environment(Seller.self) private var seller
     @Query(sort: \Disc.createdAt, order: .reverse) private var discs: [Disc]
@@ -18,16 +19,28 @@ struct DraftsView: View {
         let q = search.lowercased()
         return drafts.filter { q.isEmpty || ($0.release.description ?? "").lowercased().contains(q) }
     }
-    private var publishCount: Int { shownDrafts.count }
+    /// Dischi dell'app non ancora su Discogs (da sistemare, o col prezzo ma non caricati).
+    private var local: [Disc] {
+        let states: [DiscStatus] = [.daConfermare, .daControllare, .bloccato, .pronto]
+        let q = search.lowercased()
+        return discs.filter { d in
+            states.contains(d.status) && (q.isEmpty || "\(d.releaseTitle) \(d.lot) \(d.reason)".lowercased().contains(q))
+        }
+    }
+    private var ready: [Disc] { local.filter { $0.status == .pronto } }
+    private var publishCount: Int { ready.count + shownDrafts.count }
 
     var body: some View {
         Group {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(local) { disc in
+                        DiscCard(disc: disc)
+                    }
                     ForEach(shownDrafts) { l in
                         draftCard(l)
                     }
-                    if shownDrafts.isEmpty && !loading {
+                    if local.isEmpty && shownDrafts.isEmpty && !loading {
                         VStack(spacing: 18) {
                             VinylMark(size: 110)
                             Text("Nessuna bozza").font(.system(size: 15)).foregroundStyle(Theme.muted)
@@ -39,7 +52,7 @@ struct DraftsView: View {
                 .padding()
             }
             .background(Theme.bg)
-            .navigationTitle("Revisione")
+            .navigationTitle("Bozze")
             .searchable(text: $search, prompt: "Titolo, artista, scatola…")
             .overlay { if loading && drafts.isEmpty { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
             .refreshable { await Task { await loadDrafts() }.value }
@@ -110,6 +123,7 @@ struct DraftsView: View {
     private func publishAll() async {
         publishing = true
         defer { publishing = false }
+        await seller.publishReady(ready)
         for l in shownDrafts {
             do { try await seller.draftToSale(listingID: l.id); moved(l) }
             catch { seller.lastError = error.localizedDescription }

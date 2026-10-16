@@ -71,7 +71,7 @@ struct WarehouseView: View {
             Section {
                 HStack {
                     stat(String(forSaleCount), "Online")
-                    Button { reviewPane = "Bozze"; selectedTab = 1 } label: {        // porta alla pagina Bozze
+                    Button { selectedTab = 1 } label: {        // porta alla pagina Bozze
                         stat(String(draftCount), "Bozze")
                     }
                     .buttonStyle(.plain)

@@ -1,7 +1,12 @@
 import SwiftData
 import SwiftUI
 
-/// La pagina in basso "Revisione": due linguette in alto, Revisione e Bozze.
+/// La pagina in basso "Bozze": una sola pagina, senza linguette (dalla V23).
+struct DraftsTab: View {
+    var body: some View { NavigationStack { DraftsView() } }
+}
+
+/// (V15–V22) La pagina "Revisione" con due linguette, Revisione e Bozze. Non più usata.
 struct ReviewTabView: View {
     enum Pane: String, CaseIterable { case review = "Revisione", drafts = "Bozze" }
     @AppStorage("reviewPane") private var pane = Pane.review.rawValue
