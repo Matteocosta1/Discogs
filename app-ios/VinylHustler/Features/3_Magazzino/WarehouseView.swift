@@ -173,7 +173,17 @@ struct WarehouseView: View {
 
     private var total: String {
         let sum = listings.filter { $0.status == "For Sale" }.compactMap { $0.price?.value }.reduce(0, +)
-        return sum.formatted(.currency(code: seller.currency).precision(.fractionLength(2)))
+        // formato italiano fisso: punto per le migliaia, virgola per i decimali (1.234,50 €)
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.usesGroupingSeparator = true
+        f.groupingSeparator = "."
+        f.groupingSize = 3
+        f.decimalSeparator = ","
+        f.minimumFractionDigits = 2
+        f.maximumFractionDigits = 2
+        let number = f.string(from: NSNumber(value: sum)) ?? String(format: "%.2f", sum)
+        return number + (seller.currency == "EUR" ? " €" : " \(seller.currency)")
     }
 
     private func stat(_ value: String, _ label: String) -> some View {
@@ -282,6 +292,7 @@ struct ListingRow: View {
                     .font(.system(size: 16, weight: .semibold)).lineLimit(2)
                 HStack(spacing: 8) {
                     tag
+                    grades
                     if let disc, !disc.box.isEmpty { BoxField(disc: disc) }
                     else if let place = listing.location, !place.isEmpty {
                         Text(place).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
@@ -316,6 +327,31 @@ struct ListingRow: View {
         .frame(width: 52, height: 52)
         .clipShape(Circle())
         .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
+    }
+
+    /// Condizione dell'annuncio, corta: "V NM · C VG+" (vinile · copertina).
+    @ViewBuilder private var grades: some View {
+        let media = Self.short(listing.condition)
+        let sleeve = Self.short(listing.sleeveCondition)
+        if !media.isEmpty || !sleeve.isEmpty {
+            Text([media.isEmpty ? "" : "V \(media)", sleeve.isEmpty ? "" : "C \(sleeve)"]
+                    .filter { !$0.isEmpty }.joined(separator: " · "))
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 9).padding(.vertical, 3)
+                .foregroundStyle(Theme.text)
+                .background(Theme.panelHigh, in: Capsule())
+                .lineLimit(1)
+        }
+    }
+
+    /// "Near Mint (NM or M-)" -> "NM"; "Very Good Plus (VG+)" -> "VG+"; "Generic" resta "Generic".
+    static func short(_ condition: String?) -> String {
+        guard let c = condition, !c.isEmpty else { return "" }
+        if let open = c.lastIndex(of: "("), let close = c.lastIndex(of: ")"), open < close {
+            let inside = c[c.index(after: open)..<close]
+            return String(inside.split(separator: " ").first ?? Substring(inside))
+        }
+        return c
     }
 
     private var tag: some View {
