@@ -175,6 +175,7 @@ struct WarehouseView: View {
         let sum = listings.filter { $0.status == "For Sale" }.compactMap { $0.price?.value }.reduce(0, +)
         // formato italiano fisso: punto per le migliaia, virgola per i decimali (1.234,50 €)
         let f = NumberFormatter()
+        f.locale = Locale(identifier: "it_IT")
         f.numberStyle = .decimal
         f.usesGroupingSeparator = true
         f.groupingSeparator = "."
@@ -290,15 +291,14 @@ struct ListingRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(listing.release.description ?? "Release \(listing.release.id)")
                     .font(.system(size: 16, weight: .semibold)).lineLimit(2)
-                HStack(spacing: 8) {
-                    tag
+                // una riga sola: condizioni (vinile / copertina) e posizione per intero
+                HStack(spacing: 10) {
                     grades
-                    if let disc, !disc.box.isEmpty { BoxField(disc: disc) }
-                    else if let place = listing.location, !place.isEmpty {
-                        Text(place).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
-                    } else {
-                        Text("senza posizione").font(.system(size: 12)).foregroundStyle(Theme.warn).lineLimit(1)
-                    }
+                    Text(place.isEmpty ? "senza posizione" : place)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(place.isEmpty ? Theme.warn : Theme.muted)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
             Spacer()
@@ -329,18 +329,21 @@ struct ListingRow: View {
         .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
     }
 
-    /// Condizione dell'annuncio, corta: "V NM · C VG+" (vinile · copertina).
+    /// La posizione: quella scritta su Discogs, altrimenti quella dell'app.
+    private var place: String {
+        let fromDiscogs = (listing.location ?? "").trimmingCharacters(in: .whitespaces)
+        return fromDiscogs.isEmpty ? (disc?.box ?? "").trimmingCharacters(in: .whitespaces) : fromDiscogs
+    }
+
+    /// Condizioni dell'annuncio, solo le sigle: "NM / VG+" (vinile / copertina).
     @ViewBuilder private var grades: some View {
-        let media = Self.short(listing.condition)
-        let sleeve = Self.short(listing.sleeveCondition)
-        if !media.isEmpty || !sleeve.isEmpty {
-            Text([media.isEmpty ? "" : "V \(media)", sleeve.isEmpty ? "" : "C \(sleeve)"]
-                    .filter { !$0.isEmpty }.joined(separator: " · "))
-                .font(.system(size: 12, weight: .semibold))
-                .padding(.horizontal, 9).padding(.vertical, 3)
-                .foregroundStyle(Theme.text)
-                .background(Theme.panelHigh, in: Capsule())
+        let parts = [Self.short(listing.condition), Self.short(listing.sleeveCondition)].filter { !$0.isEmpty }
+        if !parts.isEmpty {
+            Text(parts.joined(separator: " / "))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.glow)
                 .lineLimit(1)
+                .fixedSize()
         }
     }
 
