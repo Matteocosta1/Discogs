@@ -173,18 +173,23 @@ struct WarehouseView: View {
 
     private var total: String {
         let sum = listings.filter { $0.status == "For Sale" }.compactMap { $0.price?.value }.reduce(0, +)
-        // formato italiano fisso: punto per le migliaia, virgola per i decimali (1.234,50 €)
-        let f = NumberFormatter()
-        f.locale = Locale(identifier: "it_IT")
-        f.numberStyle = .decimal
-        f.usesGroupingSeparator = true
-        f.groupingSeparator = "."
-        f.groupingSize = 3
-        f.decimalSeparator = ","
-        f.minimumFractionDigits = 2
-        f.maximumFractionDigits = 2
-        let number = f.string(from: NSNumber(value: sum)) ?? String(format: "%.2f", sum)
-        return number + (seller.currency == "EUR" ? " €" : " \(seller.currency)")
+        // formato italiano fatto a mano: punto per le migliaia, virgola per i decimali (2.345,50 €).
+        // NumberFormatter in italiano non mette il punto sotto i 10.000 (regola delle "cifre minime"): quindi niente formatter.
+        return Self.italian(sum) + (seller.currency == "EUR" ? " €" : " \(seller.currency)")
+    }
+
+    /// 2345.5 -> "2.345,50"
+    static func italian(_ value: Double) -> String {
+        let cents = Int((abs(value) * 100).rounded())
+        var whole = String(cents / 100)
+        var groups: [String] = []
+        while whole.count > 3 {
+            groups.insert(String(whole.suffix(3)), at: 0)
+            whole.removeLast(3)
+        }
+        groups.insert(whole, at: 0)
+        let decimals = String(format: "%02d", cents % 100)
+        return (value < 0 ? "-" : "") + groups.joined(separator: ".") + "," + decimals
     }
 
     private func stat(_ value: String, _ label: String) -> some View {
@@ -291,14 +296,14 @@ struct ListingRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(listing.release.description ?? "Release \(listing.release.id)")
                     .font(.system(size: 16, weight: .semibold)).lineLimit(2)
-                // una riga sola: condizioni (vinile / copertina) e posizione per intero
-                HStack(spacing: 10) {
-                    grades
-                    Text(place.isEmpty ? "senza posizione" : place)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(place.isEmpty ? Theme.warn : Theme.muted)
-                        .lineLimit(1)
-                        .fixedSize()
+                // Online · condizioni (vinile / copertina) · posizione per intero.
+                // Se non ci sta su una riga, la posizione va sotto: mai tagliata.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { tag; grades; placeText }
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) { tag; grades }
+                        placeText
+                    }
                 }
             }
             Spacer()
@@ -335,12 +340,20 @@ struct ListingRow: View {
         return fromDiscogs.isEmpty ? (disc?.box ?? "").trimmingCharacters(in: .whitespaces) : fromDiscogs
     }
 
+    private var placeText: some View {
+        Text(place.isEmpty ? "senza posizione" : place)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(place.isEmpty ? Theme.warn : Theme.muted)
+            .lineLimit(1)
+            .fixedSize()
+    }
+
     /// Condizioni dell'annuncio, solo le sigle: "NM / VG+" (vinile / copertina).
     @ViewBuilder private var grades: some View {
         let parts = [Self.short(listing.condition), Self.short(listing.sleeveCondition)].filter { !$0.isEmpty }
         if !parts.isEmpty {
             Text(parts.joined(separator: " / "))
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.glow)
                 .lineLimit(1)
                 .fixedSize()
@@ -361,10 +374,11 @@ struct ListingRow: View {
         let fg: Color = draft ? Theme.warn : Theme.money
         let bg: Color = draft ? Theme.warnSoft : Theme.military
         return Text(draft ? "Bozza" : "Online")
-            .font(.system(size: 12, weight: .semibold))
-            .padding(.horizontal, 9).padding(.vertical, 3)
+            .font(.system(size: 11, weight: .semibold))
+            .padding(.horizontal, 7).padding(.vertical, 2)
             .foregroundStyle(fg)
             .background(bg, in: Capsule())
+            .fixedSize()
     }
 }
 
