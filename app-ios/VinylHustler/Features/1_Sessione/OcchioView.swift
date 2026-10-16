@@ -384,13 +384,61 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
     private var configurata = false
     private var consegnaFoto: (@Sendable (Data?) -> Void)?
     private var consegnaVideo: (@Sendable (URL?) -> Void)?
+    private var cam: AVCaptureDevice?
+
+    /// La fotocamera migliore che ha questo iPhone. Sui modelli con più obiettivi si usa quella "virtuale":
+    /// passa da sola all'ultra-grandangolo in modalità macro quando avvicini il disco (etichette, numeri di catalogo).
+    static func fotocameraMigliore() -> AVCaptureDevice? {
+        let tipi: [AVCaptureDevice.DeviceType] = [.builtInTripleCamera, .builtInDualWideCamera, .builtInWideAngleCamera]
+        for tipo in tipi {
+            if let d = AVCaptureDevice.default(tipo, for: .video, position: .back) { return d }
+        }
+        return nil
+    }
+
+    /// Le foto alla risoluzione più alta che il telefono permette (12 o 48 megapixel, secondo il modello).
+    private func massimaRisoluzione(_ cam: AVCaptureDevice) {
+        let dims = cam.activeFormat.supportedMaxPhotoDimensions
+        if let best = dims.max(by: { Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height) }) {
+            foto.maxPhotoDimensions = best
+        }
+    }
+
+    /// Messa a fuoco continua, preferendo le cose vicine; inquadratura normale (1x) sulle fotocamere virtuali.
+    private func preparaMessaAFuoco(_ cam: AVCaptureDevice) {
+        guard (try? cam.lockForConfiguration()) != nil else { return }
+        if cam.isFocusModeSupported(.continuousAutoFocus) { cam.focusMode = .continuousAutoFocus }
+        if cam.isAutoFocusRangeRestrictionSupported { cam.autoFocusRangeRestriction = .near }
+        if cam.isExposureModeSupported(.continuousAutoExposure) { cam.exposureMode = .continuousAutoExposure }
+        // sulle virtuali lo zoom 1 è l'ultra-grandangolo: si parte dal grandangolo normale, come l'app Fotocamera
+        if let uno = cam.virtualDeviceSwitchOverVideoZoomFactors.first {
+            cam.videoZoomFactor = CGFloat(truncating: uno)
+        }
+        cam.unlockForConfiguration()
+    }
+
+    /// Cambia qualità della sessione (foto piena / video) e rimette tutto a posto.
+    private func preset(_ p: AVCaptureSession.Preset) {
+        guard sessione.sessionPreset != p, sessione.canSetSessionPreset(p) else { return }
+        sessione.beginConfiguration()
+        sessione.sessionPreset = p
+        sessione.commitConfiguration()
+        if let cam {
+            massimaRisoluzione(cam)
+            preparaMessaAFuoco(cam)
+        }
+        for output in [foto, video] as [AVCaptureOutput] {
+            if let c = output.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
+        }
+    }
 
     func avvia(pronto: @escaping @Sendable (Bool) -> Void) {
         coda.async {
             if !self.configurata {
                 self.sessione.beginConfiguration()
-                self.sessione.sessionPreset = .high          // foto e video insieme
-                guard let cam = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+                // Qualità FOTO piena del telefono (come l'app Fotocamera). Il REC passa a .high solo mentre registra.
+                self.sessione.sessionPreset = self.sessione.canSetSessionPreset(.photo) ? .photo : .high
+                guard let cam = Self.fotocameraMigliore(),
                       let ingresso = try? AVCaptureDeviceInput(device: cam),
                       self.sessione.canAddInput(ingresso),
                       self.sessione.canAddOutput(self.foto) else {
@@ -404,11 +452,11 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
                 for output in [self.foto, self.video] as [AVCaptureOutput] {   // verticale, come tieni il telefono
                     if let c = output.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
                 }
+                self.foto.maxPhotoQualityPrioritization = .quality   // elaborazione Apple piena (Deep Fusion / HDR)
                 self.sessione.commitConfiguration()
-                if cam.isFocusModeSupported(.continuousAutoFocus), (try? cam.lockForConfiguration()) != nil {
-                    cam.focusMode = .continuousAutoFocus
-                    cam.unlockForConfiguration()
-                }
+                self.massimaRisoluzione(cam)
+                self.preparaMessaAFuoco(cam)
+                self.cam = cam
                 self.configurata = true
             }
             if !self.sessione.isRunning { self.sessione.startRunning() }
@@ -428,6 +476,8 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
             guard self.sessione.isRunning, self.consegnaFoto == nil else { fine(nil); return }
             self.consegnaFoto = fine
             let impostazioni = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+            impostazioni.maxPhotoDimensions = self.foto.maxPhotoDimensions
+            impostazioni.photoQualityPrioritization = .quality
             self.foto.capturePhoto(with: impostazioni, delegate: self)
         }
     }
@@ -447,6 +497,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
             guard self.sessione.isRunning, !self.video.isRecording,
                   self.sessione.outputs.contains(self.video) else { fine(nil); return }
             self.consegnaVideo = fine
+            self.preset(.high)                              // il video a qualità video (file leggero)
             self.video.maxRecordedDuration = CMTime(seconds: max, preferredTimescale: 600)
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mov")
             self.video.startRecording(to: url, recordingDelegate: self)
@@ -463,6 +514,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         let finito = (error as NSError?)?.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool
         let ok = error == nil || finito == true
         coda.async {
+            self.preset(.photo)                             // finito il REC si torna alla qualità foto piena
             let f = self.consegnaVideo
             self.consegnaVideo = nil
             f?(ok ? url : nil)
