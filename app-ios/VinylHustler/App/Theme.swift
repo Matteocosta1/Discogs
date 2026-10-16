@@ -126,14 +126,15 @@ struct VinylMark: View {
 struct SignalButtonStyle: ButtonStyle {
     var filled = true
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.controlSize) private var size        // .small = tasti bassi (nella fotocamera)
 
     func makeBody(configuration: Configuration) -> some View {
         let destructive = configuration.role == .destructive
         return configuration.label
-            .font(.system(size: 16, weight: .semibold))
+            .font(.system(size: size == .small ? 15 : 16, weight: .semibold))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
-            .padding(.vertical, 13)
+            .padding(.vertical, size == .small ? 8 : 13)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity)
             .foregroundStyle(filled ? Color.black : (destructive ? Theme.warn : Theme.text))

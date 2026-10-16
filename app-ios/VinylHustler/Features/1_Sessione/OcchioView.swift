@@ -178,8 +178,12 @@ struct OcchioView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 10) {
                     ForEach(seen) { disc in
-                        DiscRow(disc: disc, onRetake: { attachTo = disc })
-                            .frame(width: 320)
+                        // tasti bassi, e la scheda scorre in verticale: Elimina si raggiunge sempre
+                        ScrollView(.vertical, showsIndicators: false) {
+                            DiscRow(disc: disc, onRetake: { attachTo = disc })
+                                .controlSize(.small)
+                        }
+                        .frame(width: 320)
                             .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
                                                     removal: .opacity))
                     }
@@ -188,7 +192,7 @@ struct OcchioView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             }
-            .frame(height: 210)
+            .frame(height: 330)
             .background(Theme.bg)
         }
     }

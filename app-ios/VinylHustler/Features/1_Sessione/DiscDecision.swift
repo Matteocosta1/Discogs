@@ -308,6 +308,7 @@ struct DeleteDiscButton: View {
     var wide = false
     @State private var ask = false
     @State private var busy = false
+    @Environment(\.controlSize) private var size
 
     private var onDiscogs: Bool { disc.listingID != nil }
 
@@ -317,7 +318,7 @@ struct DeleteDiscButton: View {
                 Label("Elimina", systemImage: "trash")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.warn)
-                    .frame(maxWidth: .infinity, minHeight: 40)
+                    .frame(maxWidth: .infinity, minHeight: size == .small ? 34 : 40)
                     .background(Theme.warnSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else {
                 Image(systemName: "trash")
