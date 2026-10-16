@@ -296,15 +296,9 @@ struct ListingRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(listing.release.description ?? "Release \(listing.release.id)")
                     .font(.system(size: 16, weight: .semibold)).lineLimit(2)
-                // Online · condizioni (vinile / copertina) · posizione per intero.
-                // Se non ci sta su una riga, la posizione va sotto: mai tagliata.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { tag; grades; placeText }
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 8) { tag; grades }
-                        placeText
-                    }
-                }
+                // Uguale per tutti, sempre una riga: Online · condizioni (vinile / copertina) · posizione.
+                HStack(spacing: 8) { tag; grades; placeText }
+                    .lineLimit(1)
             }
             Spacer()
             if let p = listing.price?.value {
@@ -341,11 +335,11 @@ struct ListingRow: View {
     }
 
     private var placeText: some View {
-        Text(place.isEmpty ? "senza posizione" : place)
+        Text(place.isEmpty ? "—" : place)
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(place.isEmpty ? Theme.warn : Theme.muted)
+            .foregroundStyle(Theme.muted)
             .lineLimit(1)
-            .fixedSize()
+            .minimumScaleFactor(0.8)
     }
 
     /// Condizioni dell'annuncio, solo le sigle: "NM / VG+" (vinile / copertina).
