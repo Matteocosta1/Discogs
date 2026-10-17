@@ -11,6 +11,7 @@ struct ConsoleView: View {
     @AppStorage("userName") private var userName = ""
     @AppStorage("voiceID") private var voiceID = Voice.systemChoice
     @AppStorage("suoni") private var suoni = true
+    @AppStorage("voceElevenLabs") private var eleven = true
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -43,12 +44,13 @@ struct ConsoleView: View {
                 }
                 Section {
                     Toggle("Ti dice il disco a voce", isOn: $voice)
+                    Toggle("Voce Vinyl Hustler (ElevenLabs)", isOn: $eleven)
                     Toggle("Suoni dell'interfaccia", isOn: $suoni)
                     HStack {
                         Text("Ti chiama")
                         TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)
                     }
-                    Picker("Voce", selection: $voiceID) {
+                    Picker(eleven ? "Voce di riserva (Apple)" : "Voce", selection: $voiceID) {
                         Text("Quella di sistema (Impostazioni)").tag(Voice.systemChoice)
                         Text("La migliore italiana").tag("")
                         ForEach(Voice.italianVoices, id: \.identifier) { v in

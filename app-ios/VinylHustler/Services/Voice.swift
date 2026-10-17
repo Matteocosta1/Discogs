@@ -3,7 +3,7 @@ import Foundation
 
 /// La voce di Vinyl Hustler: quando riconosce un disco te lo dice, chiamandoti per nome.
 /// "Ciao Marco, questo è Kind Of Blue di Miles Davis."
-/// Gira tutta sul telefono (sintesi vocale di Apple): gratis, istantanea, anche col silenzioso.
+/// Parla con la voce ElevenLabs di Vinyl Hustler (dal server); se non c'è rete, con la voce Apple del telefono.
 @MainActor
 final class Voice {
     static let shared = Voice()
@@ -25,8 +25,61 @@ final class Voice {
         say(text)
     }
 
+    // MARK: - Voce ElevenLabs (la voce di Vinyl Hustler)
+
+    /// Console › "Voce Vinyl Hustler": la voce ElevenLabs dal server (funzione `voce`). Se manca la rete
+    /// o il server non risponde, parla la voce Apple: l'app non resta mai muta.
+    var useEleven: Bool { UserDefaults.standard.object(forKey: "voceElevenLabs") as? Bool ?? true }
+    private var player: AVAudioPlayer?
+    private var turn = 0
+
+    /// Le frasi già sentite restano sul telefono: la seconda volta parte subito e non costa niente.
+    private static func cacheURL(_ text: String) -> URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Voce")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent(Backend.sha256(text) + ".mp3")
+    }
+
+    private func elevenAudio(_ text: String) async -> Data? {
+        let file = Self.cacheURL(text)
+        if let cached = try? Data(contentsOf: file) { return cached }
+        guard let base = AppConfig.supabaseURL, let token = await Backend.shared.accessToken() else { return nil }
+        var req = URLRequest(url: base.appendingPathComponent("functions/v1/voce"), timeoutInterval: 8)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text])
+        guard let result = try? await URLSession.shared.data(for: req),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200, !result.0.isEmpty else { return nil }
+        let data = result.0
+        try? data.write(to: file)
+        return data
+    }
+
     func say(_ text: String) {
         guard enabled else { return }
+        turn += 1
+        let mine = turn
+        player?.stop()
+        if synth.isSpeaking { synth.stopSpeaking(at: .word) }
+        guard useEleven, Backend.shared.isConfigured else { sayApple(text); return }
+        Task { @MainActor in
+            let audio = await elevenAudio(text)
+            guard mine == turn else { return }                  // nel frattempo è arrivata un'altra frase
+            if let audio, let p = try? AVAudioPlayer(data: audio) {
+                try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.duckOthers])
+                try? AVAudioSession.sharedInstance().setActive(true)
+                player = p
+                p.play()
+            } else {
+                sayApple(text)
+            }
+        }
+    }
+
+    /// La voce Apple del telefono (riserva, o scelta in Console).
+    private func sayApple(_ text: String) {
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
         if synth.isSpeaking { synth.stopSpeaking(at: .word) }
