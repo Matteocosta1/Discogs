@@ -169,7 +169,7 @@ struct DraftsView: View {
     }
 }
 
-/// Una bozza: "dorme" (bordo rosso tratteggiato che scorre piano, copertina spenta, lucina rossa di standby).
+/// Una bozza: "dorme" (copertina spenta, lucina rossa di standby).
 /// Toccando Vendi si accende: bordo verde, copertina a colori, un riflesso di luce e le scintille.
 /// Titolo = apre su Discogs; tasto verde tondo = scheda annuncio; cestino = elimina.
 struct DraftRow: View {
@@ -181,7 +181,6 @@ struct DraftRow: View {
     let onSell: () -> Void
     let onDelete: () -> Void
 
-    @State private var phase: CGFloat = 0
     @State private var shown = false
     @State private var standby = false
     @State private var sheen = false
@@ -243,12 +242,13 @@ struct DraftRow: View {
             }
         }
         .padding(12)
-        .background(lit ? Color(red: 0.086, green: 0.125, blue: 0.102) : Color(red: 0.078, green: 0.078, blue: 0.082),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(lit ? Color(red: 0.086, green: 0.125, blue: 0.102) : Theme.panel,
+                    in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(lit ? Theme.accent : Theme.warn.opacity(0.55),
-                              style: StrokeStyle(lineWidth: 1, dash: lit ? [] : [8, 6], dashPhase: phase))
+            // come sempre: nessun bordo; verde solo quando la metti in vendita
+            if lit {
+                RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.accent, lineWidth: 1)
+            }
         }
         .overlay {
             // riflesso di luce che attraversa la scheda quando si accende
