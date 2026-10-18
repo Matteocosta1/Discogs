@@ -23,8 +23,6 @@ struct ListingEditor: View {
     @State private var loaded = false
     @State private var title = ""
     @State private var link: URL?
-    @State private var releaseID: Int?
-    @State private var info = false            // scheda del disco: tracce, ascolto, artista
     @State private var currency = "EUR"
     @State private var price = 0.0
     @State private var media = Grade.vgPlus.discogs
@@ -83,17 +81,6 @@ struct ListingEditor: View {
                     }
                 } else {
                     Text(title).font(.system(size: 16, weight: .semibold))
-                }
-                if let rid = releaseID {
-                    Button {
-                        Suoni.apri()
-                        info = true
-                    } label: {
-                        Label("Tracce, ascolto e artista", systemImage: "music.note.list")
-                            .font(.system(size: 15, weight: .semibold))
-                    }
-                    .tint(Theme.accent)
-                    .sheet(isPresented: $info) { ReleaseInfoView(releaseID: rid) }
                 }
                 if !editable {
                     Text("Questo annuncio non è più in vendita né in bozza: non si può modificare.")
@@ -235,7 +222,6 @@ struct ListingEditor: View {
         case .disc(let d):
             title = d.releaseTitle
             link = d.releaseID.flatMap { URL(string: "https://www.discogs.com/release/\($0)") }
-            releaseID = d.releaseID
             price = d.price ?? 0
             media = d.media.discogs
             sleeve = d.sleeve.discogs
@@ -252,7 +238,6 @@ struct ListingEditor: View {
                 let l = try await seller.client.listing(id)
                 title = l.release.description ?? "Release \(l.release.id)"
                 link = URL(string: "https://www.discogs.com/sell/item/\(id)")
-                releaseID = l.release.id
                 currency = l.price?.currency ?? seller.currency
                 price = l.price?.value ?? 0
                 media = l.condition ?? Grade.vgPlus.discogs

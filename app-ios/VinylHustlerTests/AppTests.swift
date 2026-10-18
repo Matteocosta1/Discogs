@@ -118,40 +118,4 @@ final class AppTests: XCTestCase {
         XCTAssertFalse(ResponseCache.cacheable("/marketplace/listings/55"))   // gli annunci cambiano: sempre freschi
         XCTAssertFalse(ResponseCache.cacheable("/marketplace/orders"))
     }
-
-    // MARK: - V49: voce Apple per lingua, anteprime, artista
-
-    func testTitoloDivisoPerLaVoce() {
-        let p = Voice.parts("Prince (2) - Purple Rain (Warner, US, 1984)")
-        XCTAssertEqual(p?.album, "Purple Rain")
-        XCTAssertEqual(p?.artist, "Prince")
-        XCTAssertNil(Voice.parts("Senza trattino"))
-        let segs = Voice.segments("Miles Davis - Kind Of Blue")
-        XCTAssertEqual(segs.map(\.text), ["Kind Of Blue", "di", "Miles Davis"])
-        XCTAssertEqual(segs.map(\.italian), [false, true, false])
-    }
-
-    func testLinguaDelTitolo() {
-        XCTAssertEqual(Voice.language(of: "The Dark Side Of The Moon"), "en")
-        XCTAssertEqual(Voice.language(of: "X"), "en")            // troppo corto: inglese
-    }
-
-    func testPronunciaFonetica() {
-        XCTAssertTrue(Voice.Rule(word: "Sade", sayAs: "/ʃɑːˈdeɪ/").isIPA)
-        XCTAssertFalse(Voice.Rule(word: "Sade", sayAs: "Sciadé").isIPA)
-    }
-
-    func testTitoliDelleAnteprime() {
-        XCTAssertEqual(Anteprime.key("So What (Remastered 2009)"), "sowhat")
-        XCTAssertEqual(Anteprime.key("Café Del Mar"), "cafedelmar")
-        XCTAssertEqual(Anteprime.key("Blue in Green"), Anteprime.key("BLUE IN GREEN"))
-    }
-
-    func testBiografiaSenzaCodiciDiscogs() {
-        let a = ArtistInfo(id: 1, name: "Miles Davis", realname: nil,
-                           profile: "Played with [a=John Coltrane] on [url=http://x.com]Kind Of Blue[/url]. [b]Legend[/b] [a12345]",
-                           urls: nil, images: nil)
-        XCTAssertEqual(a.cleanProfile, "Played with John Coltrane on Kind Of Blue. Legend")
-        XCTAssertTrue(ResponseCache.cacheable("/artists/23755"))
-    }
 }
