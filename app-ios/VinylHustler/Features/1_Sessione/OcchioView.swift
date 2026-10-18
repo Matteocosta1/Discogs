@@ -38,6 +38,11 @@ struct OcchioView: View {
     private var seen: [Disc] {
         all.filter { $0.createdAt >= openedAt && $0.status != .tolto && !$0.parked }
     }
+    private static func done(_ d: Disc) -> Bool { d.status == .inVendita || d.status == .bozza }
+    /// In serie: prima i dischi da decidere (il più nuovo a sinistra), poi quelli già su Discogs, in piccolo.
+    private var ordered: [Disc] { seen.filter { !Self.done($0) } + seen.filter(Self.done) }
+    private var onlineCount: Int { seen.filter { $0.status == .inVendita }.count }
+    private var draftCount: Int { seen.filter { $0.status == .bozza }.count }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -93,6 +98,14 @@ struct OcchioView: View {
                 Text("VINYL HUSTLER").font(Theme.mono(14, .bold)).tracking(4)
                 Text("\(place) · \(media == sleeve ? media.rawValue : "\(media.rawValue)/\(sleeve.rawValue)")".uppercased())
                     .font(Theme.mono(9, .semibold)).tracking(1.5).opacity(0.8)
+                if !seen.isEmpty {
+                    // contatore della serie: quanti dischi da quando hai aperto la fotocamera
+                    Text("SERIE \(seen.count) · ONLINE \(onlineCount) · BOZZE \(draftCount)")
+                        .font(Theme.mono(10, .bold)).tracking(1.5)
+                        .contentTransition(.numericText())
+                        .animation(.snappy, value: "\(seen.count)-\(onlineCount)-\(draftCount)")
+                        .padding(.top, 2)
+                }
             }
             .foregroundStyle(tinta)
             .shadow(color: tinta.opacity(0.6), radius: 6)
@@ -175,22 +188,36 @@ struct OcchioView: View {
     /// I dischi riconosciuti, sotto la fotocamera: sì / no, poi vendita.
     @ViewBuilder private var results: some View {
         if !seen.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 10) {
-                    ForEach(seen) { disc in
-                        // tasti bassi, e la scheda scorre in verticale: Elimina si raggiunge sempre
-                        ScrollView(.vertical, showsIndicators: false) {
-                            DiscRow(disc: disc, onRetake: { attachTo = disc })
-                                .controlSize(.small)
-                        }
-                        .frame(width: 320)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 10) {
+                        ForEach(ordered) { disc in
+                            Group {
+                                if Self.done(disc) {
+                                    DoneCard(disc: disc)          // già su Discogs: piccolo, fa spazio al prossimo
+                                } else {
+                                    // tasti bassi, e la scheda scorre in verticale: Elimina si raggiunge sempre
+                                    ScrollView(.vertical, showsIndicators: false) {
+                                        DiscRow(disc: disc, onRetake: { attachTo = disc })
+                                            .controlSize(.small)
+                                    }
+                                    .frame(width: 320)
+                                }
+                            }
+                            .id(disc.id)
                             .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
                                                     removal: .opacity))
+                        }
                     }
+                    .animation(.spring(duration: 0.45, bounce: 0.25), value: ordered.map(\.id))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                 }
-                .animation(.spring(duration: 0.45, bounce: 0.25), value: seen.map(\.id))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                // disco nuovo: la striscia torna all'inizio, dove compare
+                .onChange(of: seen.first?.id) { _, id in
+                    guard let id else { return }
+                    withAnimation(.snappy) { proxy.scrollTo(id, anchor: .leading) }
+                }
             }
             .frame(height: 330)
             .background(Theme.bg)
@@ -589,5 +616,41 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
             self.consegnaVideo = nil
             f?(ok ? url : nil)
         }
+    }
+}
+
+/// Un disco della serie già messo su Discogs: piccolo, con la spunta, per lasciare spazio al prossimo.
+struct DoneCard: View {
+    @Environment(Seller.self) private var seller
+    let disc: Disc
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AsyncImage(url: disc.coverURL) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                .frame(width: 64, height: 64)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Theme.money, lineWidth: 2))
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Theme.money, Color.black)
+                }
+            Text(disc.releaseTitle).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(3)
+            HStack(spacing: 6) {
+                Text(disc.status == .inVendita ? "Online" : "Bozza")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .foregroundStyle(disc.status == .inVendita ? Theme.money : Theme.warn)
+                    .background(disc.status == .inVendita ? Theme.military : Theme.warnSoft, in: Capsule())
+                if let p = disc.price {
+                    Text(p, format: .currency(code: seller.currency)).font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Theme.money)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(width: 160, height: 300, alignment: .topLeading)
+        .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
     }
 }
