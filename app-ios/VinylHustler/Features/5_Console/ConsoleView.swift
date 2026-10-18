@@ -60,7 +60,6 @@ struct ConsoleView: View {
                 }
             }
             .themedBackground()
-            .font(Theme.mono(13))
             .navigationTitle("Console")
             .onReceive(timer) { _ in Task { apiUsed = await seller.apiUsedLastMinute() } }
             .task { aiSignedIn = await Backend.shared.accessToken() != nil }
@@ -84,7 +83,7 @@ struct ConsoleView: View {
                 }
             }
             if voceModo == "eleven" {
-                Toggle("Modello veloce (Flash, metà prezzo)", isOn: $veloce)
+                Toggle("Modello veloce (Flash)", isOn: $veloce)
             }
             if voceModo != "off" {
                 Picker(voceModo == "eleven" ? "Riserva senza rete" : "Voce Apple", selection: $voiceID) {
@@ -114,7 +113,9 @@ struct ConsoleView: View {
                 Text("Prima la scheda").tag("scheda")
             }
             Toggle("Accetta offerte", isOn: $offerteDefault)
-            NavigationLink("Descrizione") { DescrizioneView() }
+            NavigationLink { DescrizioneView() } label: {
+                LabeledContent("Descrizione", value: (UserDefaults.standard.string(forKey: "descLingua") ?? "en") == "itEn" ? "Italiano + English" : "English")
+            }
         } header: {
             Text("Annunci")
         } footer: {

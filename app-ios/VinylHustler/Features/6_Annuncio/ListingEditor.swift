@@ -105,21 +105,16 @@ struct ListingEditor: View {
                 if !calculation.isEmpty { Text(calculation) }
             }
 
-            Section("Condizione") {
+            Section("Condizione · Posizione") {
                 Picker("Vinile", selection: $media) {
                     ForEach(Grade.allCases.map(\.discogs), id: \.self) { Text($0).tag($0) }
                 }
                 Picker("Copertina", selection: $sleeve) {
                     ForEach(sleeveOptions, id: \.self) { Text($0).tag($0) }
                 }
-            }
-
-            Section {
-                TextField("es. Scatola 12", text: $location)
-            } header: {
-                Text("Posizione")
-            } footer: {
-                Text("Privata: la vedi solo tu su Discogs.")
+                LabeledContent("Posizione") {
+                    TextField("es. Scatola 12", text: $location).multilineTextAlignment(.trailing)
+                }
             }
 
             Section {
@@ -199,7 +194,7 @@ struct ListingEditor: View {
             Suoni.click()
             Task { await save() }
         } label: {
-            Text(saving ? "Salvo…" : saveLabel).frame(maxWidth: .infinity, minHeight: 44)
+            Text(saving ? "Salvo…" : saveLabel).font(.system(size: 17, weight: .bold)).frame(maxWidth: .infinity, minHeight: 50)
         }
         .buttonStyle(SignalButtonStyle())
         .disabled(saving || price <= 0)

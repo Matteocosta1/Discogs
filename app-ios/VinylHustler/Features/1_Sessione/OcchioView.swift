@@ -202,7 +202,7 @@ struct OcchioView: View {
                                         DiscRow(disc: disc, onRetake: { attachTo = disc }, compact: true)
                                             .controlSize(.small)
                                     }
-                                    .frame(width: 320)
+                                    .frame(width: 350)
                                     .id(disc.id)
                                     .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
                                                             removal: .scale(scale: 0.6).combined(with: .opacity)))

@@ -58,7 +58,7 @@ struct DraftsView: View {
                     }
                     if local.isEmpty && shownDrafts.isEmpty && !loading {
                         VStack(spacing: 18) {
-                            VinylMark(size: 110)
+                            VinylMark(size: 110, spinning: true)
                             Text("Nessuna bozza").font(.system(size: 15)).foregroundStyle(Theme.muted)
                         }
                         .frame(maxWidth: .infinity)
@@ -77,7 +77,8 @@ struct DraftsView: View {
                 if publishCount > 0 {
                     Button { askPublish = true } label: {
                         Text(publishing ? "Pubblico…" : "Pubblica \(publishCount)")
-                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .font(.system(size: 17, weight: .bold))
+                            .frame(maxWidth: .infinity, minHeight: 52)
                             .background(alignment: .leading) {
                                 // la barra si riempie man mano che pubblica
                                 GeometryReader { g in
@@ -88,6 +89,7 @@ struct DraftsView: View {
                             }
                     }
                     .buttonStyle(SignalButtonStyle())
+                    .shadow(color: Theme.accent.opacity(0.35), radius: 14)
                     .disabled(publishing)
                     .padding(.horizontal)
                     .padding(.bottom, 8)

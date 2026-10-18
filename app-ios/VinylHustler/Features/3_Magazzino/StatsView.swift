@@ -33,7 +33,7 @@ struct StatsView: View {
             }
             .background(Theme.bg)
             .navigationTitle("Statistiche")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fatto") { dismiss() } } }
             .alert(error ?? "", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {}
             .task { await load() }
@@ -113,7 +113,7 @@ struct StatsView: View {
                 HStack {
                     stat(String(format: "%.0f gg", avg), "in media")
                     stat(String(format: "%.0f gg", median), "di solito")
-                    stat("\(days.count)", "dischi misurati")
+                    stat("\(days.count)", "misurati")
                 }
             }
         }
@@ -151,7 +151,7 @@ struct StatsView: View {
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
                                 Capsule().fill(Theme.panelHigh)
-                                Capsule().fill(Theme.accent)
+                                Capsule().fill(LinearGradient(colors: [Theme.military, Theme.accent], startPoint: .leading, endPoint: .trailing))
                                     .frame(width: geo.size.width * (bars ? rate(s, o) : 0))
                                     .shadow(color: Theme.glow.opacity(0.5), radius: 4)
                             }
@@ -179,7 +179,7 @@ struct StatsView: View {
                 stat(forSale.isEmpty ? "—" : "\(Int((Double(old.count) / Double(forSale.count) * 100).rounded()))%", "del magazzino")
             }
             if !old.isEmpty {
-                Text("Prova ad abbassare un po' il prezzo: dalla scheda annuncio, tasto verde nel Magazzino.")
+                Text("Prova ad abbassare un po' il prezzo: tasto verde nel Magazzino.")
                     .font(.system(size: 12)).foregroundStyle(Theme.muted)
             }
         }

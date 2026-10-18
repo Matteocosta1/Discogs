@@ -18,7 +18,7 @@ struct DiscRow: View {
                 cover
                 VStack(alignment: .leading, spacing: 5) {
                     StatusTag(status: disc.status)
-                    ReleaseTitle(disc: disc, size: 17)
+                    ReleaseTitle(disc: disc, size: compact ? 15 : 17, lines: compact ? 1 : 3)
                     Text("\(disc.gradeText) · \(disc.box)")
                         .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
@@ -75,7 +75,7 @@ struct DiscRow: View {
                 Theme.panelHigh
             }
         }
-        .frame(width: 72, height: 72)
+        .frame(width: compact ? 52 : 72, height: compact ? 52 : 72)
         .overlay { if disc.status == .inLavorazione { ScanSweep() } }
         .clipShape(Circle())
         .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
@@ -87,6 +87,7 @@ struct DiscRow: View {
 struct ReleaseTitle: View {
     let disc: Disc
     var size: CGFloat = 17
+    var lines = 3
 
     var body: some View {
         let title = disc.releaseTitle.isEmpty ? "Disco senza nome" : disc.releaseTitle
@@ -97,11 +98,11 @@ struct ReleaseTitle: View {
                     .foregroundStyle(Theme.text)
                     .underline(color: Theme.accent.opacity(0.5))
                     .multilineTextAlignment(.leading)
-                    .lineLimit(3)
+                    .lineLimit(lines)
             }
             .accessibilityHint("Apre la release su Discogs")
         } else {
-            Text(title).font(.system(size: size, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(3)
+            Text(title).font(.system(size: size, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(lines)
         }
     }
 }
@@ -469,10 +470,10 @@ struct DeleteDiscButton: View {
                     .background(Theme.warnSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else {
                 Image(systemName: "trash")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.muted)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.warn)
                     .frame(width: 36, height: 36)
-                    .background(Theme.panelHigh, in: Circle())
+                    .background(Theme.warnSoft, in: Circle())
             }
         }
         .buttonStyle(.plain)

@@ -36,8 +36,8 @@ struct OrdersView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     HStack {
                         stat("\(open.count)", "da evadere", highlight: !open.isEmpty)
-                        stat("\(closed.count)", "spediti e chiusi")
-                        stat(cashed.formatted(.currency(code: seller.currency).precision(.fractionLength(0))), "incassato")
+                        stat("\(closed.count)", "spediti")
+                        stat(cashed.formatted(.currency(code: seller.currency).precision(.fractionLength(2))), "incassato", highlight: true, money: true)
                     }
                     .padding(16)
                     .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
@@ -68,7 +68,15 @@ struct OrdersView: View {
                             }
                         }
                     }
-                    section("SPEDITI E CHIUSI", closed, empty: nil)
+                    if !closed.isEmpty {
+                        // spediti e chiusi: righe piccole e smorzate (sono fatti, non c'è niente da fare)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("SPEDITI E CHIUSI").font(Theme.mono(10, .semibold)).tracking(2).foregroundStyle(Theme.muted)
+                            ForEach(closed) { o in
+                                Button { Suoni.tocco(); detail = o } label: { closedRow(o) }.buttonStyle(.plain)
+                            }
+                        }
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
@@ -87,9 +95,10 @@ struct OrdersView: View {
         }
     }
 
-    private func stat(_ value: String, _ label: String, highlight: Bool = false) -> some View {
+    private func stat(_ value: String, _ label: String, highlight: Bool = false, money: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(.system(size: 28, weight: .bold)).foregroundStyle(highlight ? Theme.glow : Theme.text)
+            Text(value).font(.system(size: 26, weight: .bold)).foregroundStyle(money ? Theme.money : (highlight ? Theme.glow : Theme.text))
+                .lineLimit(1).minimumScaleFactor(0.6)
                 .contentTransition(.numericText())
             Text(label).font(.system(size: 13)).foregroundStyle(Theme.muted)
         }
@@ -156,6 +165,28 @@ struct OrdersView: View {
         .padding(14)
         .contentShape(Rectangle())
         .opacity(OrderStyle.closed(o.status) ? 0.75 : 1)
+    }
+
+    /// Un ordine già spedito o chiuso: copertina piccola, titolo grigio, stato e data, importo.
+    private func closedRow(_ o: Order) -> some View {
+        let style = OrderStyle(step(o) >= 3 && !OrderStyle.closed(o.status) ? "Shipped" : o.status)
+        return HStack(spacing: 12) {
+            AsyncImage(url: o.items.first?.release.thumbnail.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                .frame(width: 36, height: 36).clipShape(Circle()).opacity(0.8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(o.items.first?.release.description ?? "Ordine \(o.id)")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(white: 0.78)).lineLimit(1)
+                Text("\(style.label) · \(OrderStyle.date(o.created))").font(.system(size: 11)).foregroundStyle(Theme.muted)
+            }
+            Spacer(minLength: 4)
+            if let t = o.total {
+                Text(t.value, format: .currency(code: t.currency ?? seller.currency))
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.muted)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Color(red: 0.071, green: 0.071, blue: 0.075), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contentShape(Rectangle())
     }
 
     /// Da dove prelevare: il posto del primo disco dell'ordine (scatola, casa…).

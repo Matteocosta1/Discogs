@@ -84,7 +84,7 @@ struct WarehouseView: View {
                 ForEach(shown) { l in row(l) }
             } footer: {
                 if !selecting && !listings.isEmpty {
-                    Text("Tocca il titolo per aprire l'annuncio su Discogs; il tasto verde a destra apre la scheda per cambiare prezzo, condizioni, descrizione e posizione.\nPer toglierlo dalla vendita scorrilo verso sinistra, oppure tocca Seleziona e scegline tanti.\nLe bozze sono nella pagina Bozze.")
+                    Text("Titolo = apre l'annuncio su Discogs. Tasto verde = scheda annuncio. Scorri a sinistra per togliere dalla vendita.")
                 }
             }
         }
@@ -342,10 +342,10 @@ struct ListingRow: View {
         } else {
             Link(destination: URL(string: "https://www.discogs.com/sell/item/\(listing.id)")!) {
                 (Text(titleText) + Text(" ") + Text(Image(systemName: "arrow.up.right")).foregroundColor(Theme.accent))
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.text)
                     .multilineTextAlignment(.leading)
-                    .lineLimit(2)
+                    .lineLimit(1)
             }
             .buttonStyle(.borderless)
         }

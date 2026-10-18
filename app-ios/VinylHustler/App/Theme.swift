@@ -30,9 +30,9 @@ enum Theme {
         .system(size: size, weight: weight)
     }
 
-    /// Testo, etichette, numeri (il nome è rimasto da quando era monospace).
+    /// Scritte da console (etichette maiuscole, mirino, stati): monospace, come nel mock-up.
     static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight)
+        .system(size: size, weight: weight, design: .monospaced)
     }
 
     /// Barre di navigazione e delle schede (UIKit), da chiamare una volta all'avvio.
