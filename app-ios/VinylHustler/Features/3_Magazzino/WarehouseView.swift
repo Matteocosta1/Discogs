@@ -83,7 +83,7 @@ struct WarehouseView: View {
                 ForEach(shown) { l in row(l) }
             } footer: {
                 if !selecting && !listings.isEmpty {
-                    Text("Tocca un disco per cambiare prezzo, condizioni, descrizione e posizione.\nPer toglierlo dalla vendita scorrilo verso sinistra, oppure tocca Seleziona e scegline tanti.\nLe bozze sono nella pagina Bozze.")
+                    Text("Tocca il titolo per aprire l'annuncio su Discogs; il tasto verde a destra apre la scheda per cambiare prezzo, condizioni, descrizione e posizione.\nPer toglierlo dalla vendita scorrilo verso sinistra, oppure tocca Seleziona e scegline tanti.\nLe bozze sono nella pagina Bozze.")
                 }
             }
         }
@@ -212,13 +212,10 @@ struct WarehouseView: View {
         let draft = l.status == "Draft"
         let isSelected = selected.contains(l.id)
         return ListingRow(listing: l, disc: disc(for: l), selecting: selecting, isSelected: isSelected,
-                          currency: seller.currency)
+                          currency: seller.currency, onEdit: { editing = l })
         .contentShape(Rectangle())
         .onTapGesture {
-            guard selecting else {                       // fuori da Seleziona: apre la scheda annuncio
-                editing = l
-                return
-            }
+            guard selecting else { return }              // fuori da Seleziona: titolo = Discogs, tasto a destra = scheda
             if isSelected { selected.remove(l.id) } else { selected.insert(l.id) }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
@@ -282,6 +279,8 @@ struct ListingRow: View {
     let selecting: Bool
     let isSelected: Bool
     let currency: String
+    /// Tasto di fianco al prezzo: apre la scheda annuncio. Il titolo invece apre l'annuncio su Discogs.
+    var onEdit: (() -> Void)? = nil
 
     private var draft: Bool { listing.status == "Draft" }
     private var checkColor: Color {
@@ -301,8 +300,7 @@ struct ListingRow: View {
             }
             cover
             VStack(alignment: .leading, spacing: 4) {
-                Text(listing.release.description ?? "Release \(listing.release.id)")
-                    .font(.system(size: 16, weight: .semibold)).lineLimit(2)
+                titleView
                 // Uguale per tutti, sempre una riga: Online · condizioni (vinile / copertina) · posizione.
                 HStack(spacing: 8) { tag; grades; placeText }
                     .lineLimit(1)
@@ -312,9 +310,35 @@ struct ListingRow: View {
                 Text(p, format: .currency(code: listing.price?.currency ?? currency))
                     .font(.system(size: 15, weight: .semibold))
             }
-            if !selecting {
-                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.muted)
+            if !selecting, let onEdit {
+                Button(action: onEdit) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 38, height: 38)
+                        .background(Theme.military, in: Circle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Modifica l'annuncio")
             }
+        }
+    }
+
+    private var titleText: String { listing.release.description ?? "Release \(listing.release.id)" }
+
+    /// Il titolo: tocco = apre l'annuncio su Discogs (in modalità Seleziona è solo testo).
+    @ViewBuilder private var titleView: some View {
+        if selecting {
+            Text(titleText).font(.system(size: 16, weight: .semibold)).lineLimit(2)
+        } else {
+            Link(destination: URL(string: "https://www.discogs.com/sell/item/\(listing.id)")!) {
+                (Text(titleText) + Text(" ") + Text(Image(systemName: "arrow.up.right")).foregroundColor(Theme.accent))
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+            }
+            .buttonStyle(.borderless)
         }
     }
 

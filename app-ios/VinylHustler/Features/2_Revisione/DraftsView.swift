@@ -95,16 +95,13 @@ struct DraftsView: View {
         }
     }
 
-    /// Una bozza su Discogs: copertina, titolo (tocco = scheda annuncio), Vendi, Elimina.
+    /// Una bozza su Discogs: copertina, titolo (tocco = apre su Discogs), tasto scheda annuncio, Vendi, Elimina.
     private func draftCard(_ l: Listing) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button { editing = l } label: {             // tocco = scheda annuncio
-                ListingRow(listing: l, disc: discs.first { $0.externalID == l.externalId },
-                           selecting: false, isSelected: false, currency: seller.currency)
-                    .foregroundStyle(Theme.text)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            // titolo = apre su Discogs; tasto verde a destra = scheda annuncio
+            ListingRow(listing: l, disc: discs.first { $0.externalID == l.externalId },
+                       selecting: false, isSelected: false, currency: seller.currency, onEdit: { editing = l })
+                .foregroundStyle(Theme.text)
             Button("Vendi") {
                 Task {
                     do { try await seller.draftToSale(listingID: l.id); moved(l) }
