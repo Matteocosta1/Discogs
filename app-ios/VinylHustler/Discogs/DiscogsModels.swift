@@ -70,6 +70,7 @@ struct ReleaseFormat: Codable, Hashable {
 }
 
 struct NamedRef: Codable, Hashable {
+    var id: Int?                    // l'artista o l'etichetta su Discogs (per aprire la sua pagina)
     var name: String
     var catno: String?
 }
@@ -92,6 +93,8 @@ struct Release: Codable, Hashable {
     var year: Int?
     var blockedFromSale: Bool?
     var masterId: Int?              // l'album "madre": da qui si trovano tutte le stampe
+    var tracklist: [Track]?
+    var videos: [ReleaseVideo]?
 
     var artist: String { artistsSort ?? artists?.map(\.name).joined(separator: ", ") ?? "" }
 
@@ -112,6 +115,45 @@ struct Release: Codable, Hashable {
     /// Immagini con la principale per prima.
     var sortedImages: [ReleaseImage] {
         (images ?? []).sorted { ($0.type == "primary" ? 0 : 1) < ($1.type == "primary" ? 0 : 1) }
+    }
+}
+
+/// Una traccia della release. Le righe senza posizione sono titoli di sezione ("Side A"): non sono brani.
+struct Track: Codable, Hashable {
+    var position: String?
+    var title: String?
+    var duration: String?
+}
+
+/// Un video collegato alla release (di solito YouTube).
+struct ReleaseVideo: Codable, Hashable {
+    var uri: String
+    var title: String?
+    var duration: Int?
+}
+
+/// Un artista (GET /artists/{id}): biografia, link (sito, Wikipedia, Bandcamp…), foto.
+struct ArtistInfo: Codable, Hashable {
+    var id: Int
+    var name: String
+    var realname: String?
+    var profile: String?
+    var urls: [String]?
+    var images: [ReleaseImage]?
+
+    /// La biografia senza i codici di Discogs: [a=Miles Davis] -> Miles Davis, [url=…]testo[/url] -> testo.
+    var cleanProfile: String {
+        var t = profile ?? ""
+        let rules: [(String, String)] = [
+            (#"\[url=[^\]]*\]([^\[]*)\[/url\]"#, "$1"),
+            (#"\[(?:a|l|m|r)=([^\]]+)\]"#, "$1"),
+            (#"\[(?:a|l|m|r)\d+\]"#, ""),
+            (#"\[/?[biu]\]"#, ""),
+        ]
+        for (pattern, template) in rules {
+            t = t.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
+        }
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

@@ -11,8 +11,7 @@ struct ConsoleView: View {
     @AppStorage("userName") private var userName = ""
     @AppStorage("voiceID") private var voiceID = Voice.systemChoice
     @AppStorage("suoni") private var suoni = true
-    @AppStorage("voceModo") private var voceModo = (UserDefaults.standard.object(forKey: "voceElevenLabs") as? Bool == false ? "apple" : "eleven")
-    @AppStorage("voceVeloce") private var veloce = false
+    @AppStorage("voceModo") private var voceModo = "apple"
     @AppStorage("vendiModo") private var vendiModo = "subito"
     @AppStorage("offerteDefault") private var offerteDefault = true
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
@@ -70,32 +69,27 @@ struct ConsoleView: View {
     private var voiceSection: some View {
         Section {
             Picker("Voce", selection: $voceModo) {
-                Text("Vinyl Hustler").tag("eleven")
                 Text("Apple").tag("apple")
                 Text("Nessuna").tag("off")
             }
             .pickerStyle(.segmented)
             .onChange(of: voceModo) { _, m in if m != "off" { voice = true } }
+            .onAppear { if voceModo != "off" && voceModo != "apple" { voceModo = "apple" } }   // la voce a pagamento non c'è più
             if voceModo != "off" {
                 HStack {
                     Text("Ti chiama")
                     TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)
                 }
             }
-            if voceModo == "eleven" {
-                Toggle("Modello veloce (Flash)", isOn: $veloce)
-            }
             if voceModo != "off" {
-                Picker(voceModo == "eleven" ? "Riserva senza rete" : "Voce Apple", selection: $voiceID) {
+                Picker("Voce italiana", selection: $voiceID) {
                     Text("Quella di sistema (Impostazioni)").tag(Voice.systemChoice)
                     Text("La migliore italiana").tag("")
                     ForEach(Voice.italianVoices, id: \.identifier) { v in
                         Text(Voice.label(v)).tag(v.identifier)
                     }
                 }
-                Button("Prova la voce") { Voice.shared.sayTitles(["Kind Of Blue di Miles Davis"]) }
-            }
-            if voceModo == "eleven" {
+                Button("Prova la voce") { Voice.shared.sayReleases(["Miles Davis - Kind Of Blue", "Daft Punk - Random Access Memories"]) }
                 NavigationLink("Pronuncia") { PronunciaView() }
             }
             Toggle("Suoni dell'interfaccia", isOn: $suoni)
@@ -127,13 +121,13 @@ struct ConsoleView: View {
     }
 
     private var footer: String {
-        switch voceModo {
-        case "eleven": "La voce di Vinyl Hustler. Ogni frase si genera una volta sola per tutti gli utenti: le volte dopo è gratis e parte subito."
-        case "apple": Voice.hasNiceVoice
-            ? "La voce del telefono: gratis, anche senza rete."
-            : "La voce del telefono: gratis, anche senza rete. Per una voce più naturale scarica una voce italiana Avanzata o Premium: Impostazioni › Accessibilità › Contenuti letti › Voci › Italiano."
-        default: "L'app non parla. I dischi trovati li vedi sullo schermo."
+        if voceModo == "off" { return "L'app non parla. I dischi trovati li vedi sullo schermo." }
+        var t = "La voce del telefono: gratis, anche senza rete. Le parole dell'app in italiano, album e artista con la voce della loro lingua."
+        let missing = [("it", "italiana"), ("en", "inglese")].filter { !Voice.hasNiceVoice($0.0) }.map { $0.1 }
+        if !missing.isEmpty {
+            t += " Per una voce più naturale scarica una voce \(missing.joined(separator: " e una ")) Avanzata o Premium: Impostazioni › Accessibilità › Contenuti letti › Voci."
         }
+        return t
     }
 
     private func decimal(_ b: Binding<Decimal>) -> Binding<Double> {
@@ -142,7 +136,7 @@ struct ConsoleView: View {
     }
 }
 
-/// Console › Voce › Pronuncia: come deve dire certe parole la voce di Vinyl Hustler.
+/// Console › Voce › Pronuncia: come deve dire certe parole la voce dell'app.
 /// Le regole valgono per tutti gli utenti.
 struct PronunciaView: View {
     @State private var rules: [Voice.Rule] = []
@@ -201,7 +195,7 @@ struct PronunciaView: View {
             Section {
                 TextField("Parola scritta (es. Miles Davis)", text: $word)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
-                TextField("Come dirla (es. Màils Dèivis)", text: $sayAs)
+                TextField("Come dirla (es. Sciadé, oppure /ʃɑːˈdeɪ/)", text: $sayAs)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 HStack {
                     Button("Ascolta") { Voice.shared.say(sayAs) }
@@ -214,7 +208,7 @@ struct PronunciaView: View {
             } header: {
                 Text(editing == nil ? "Nuova regola" : "Modifica")
             } footer: {
-                Text("Scrivi la parola come si legge in italiano, con gli accenti dove cade la voce. Vale per tutti gli utenti di Vinyl Hustler.")
+                Text("Due modi. Come si legge in italiano, con gli accenti (Sciadé): la dice la voce italiana. Oppure la pronuncia fonetica tra due barre (/ʃɑːˈdeɪ/): la dice la voce della lingua del titolo, con l'accento giusto. Vale per tutti gli utenti di Vinyl Hustler.")
             }
     }
 

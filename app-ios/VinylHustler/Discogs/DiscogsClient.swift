@@ -50,7 +50,7 @@ actor ResponseCache {
     private let ttl: TimeInterval = 600
 
     static func cacheable(_ path: String) -> Bool {
-        ["/releases/", "/masters/", "/marketplace/price_suggestions/", "/marketplace/stats/", "/database/search"]
+        ["/releases/", "/masters/", "/artists/", "/marketplace/price_suggestions/", "/marketplace/stats/", "/database/search"]
             .contains { path.hasPrefix($0) }
     }
 
@@ -159,6 +159,10 @@ final class DiscogsClient: @unchecked Sendable {
 
     func release(_ id: Int, currency: String? = nil) async throws -> Release {
         try await request("GET", "/releases/\(id)", query: currency.map { ["curr_abbr": $0] } ?? [:])
+    }
+
+    func artist(_ id: Int) async throws -> ArtistInfo {
+        try await request("GET", "/artists/\(id)")
     }
 
     /// Tutte le stampe in vinile di un album (master), fino a 100.

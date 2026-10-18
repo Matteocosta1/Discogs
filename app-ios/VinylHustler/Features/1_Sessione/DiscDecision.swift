@@ -11,11 +11,12 @@ struct DiscRow: View {
     var compact = false
     @State private var flash = false
     @State private var zap = false              // lampo verde: è appena andato su Discogs
+    @State private var info = false             // scheda del disco: tracce, ascolto, artista
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                cover
+                coverButton
                 VStack(alignment: .leading, spacing: 5) {
                     StatusTag(status: disc.status)
                     ReleaseTitle(disc: disc, size: compact ? 15 : 17, lines: compact ? 1 : 3)
@@ -60,6 +61,31 @@ struct DiscRow: View {
                 try? await Task.sleep(for: .milliseconds(60))
                 withAnimation(.easeOut(duration: 0.9)) { flash = false }
             }
+        }
+    }
+
+    /// Toccando la copertina si apre la scheda del disco (tracce da ascoltare, artista, video).
+    @ViewBuilder
+    private var coverButton: some View {
+        if let rid = disc.releaseID {
+            Button {
+                Suoni.apri()
+                info = true
+            } label: {
+                cover.overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "music.note")
+                        .font(.system(size: compact ? 9 : 11, weight: .bold))
+                        .foregroundStyle(Color.black)
+                        .frame(width: compact ? 18 : 22, height: compact ? 18 : 22)
+                        .background(Theme.accent, in: Circle())
+                        .offset(x: 2, y: 2)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Tracce e artista")
+            .sheet(isPresented: $info) { ReleaseInfoView(releaseID: rid) }
+        } else {
+            cover
         }
     }
 
