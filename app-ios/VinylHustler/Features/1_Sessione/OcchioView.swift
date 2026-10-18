@@ -22,6 +22,7 @@ struct OcchioView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \Disc.createdAt, order: .reverse) private var all: [Disc]
     @AppStorage("voice") private var voice = true
+    @Environment(\.scenePhase) private var fase
     @State private var motore = MotoreOcchio()
     @State private var openedAt = Date()
     @State private var stato = "AGGANCIO OTTICO"
@@ -86,6 +87,25 @@ struct OcchioView: View {
         .statusBarHidden()
         .task { await prepara() }
         .onDisappear { motore.ferma() }
+        // app in secondo piano (per esempio si torna a una videochiamata): la fotocamera si libera subito,
+        // così una videochiamata o un'altra app la riavranno; tornando qui si riaccende da sola
+        .onChange(of: fase) { _, nuova in
+            switch nuova {
+            case .active:
+                guard !motore.sessione.isRunning else { return }
+                motore.avvia { ok in
+                    Task { @MainActor in
+                        agganciato = ok
+                        if ok { stato = "INQUADRA UN DISCO" }
+                    }
+                }
+            case .background:
+                agganciato = false
+                motore.ferma()                      // ferma anche un video in corso: il file arriva lo stesso
+            default:
+                break                               // tendina, Centro di Controllo: la fotocamera resta accesa
+            }
+        }
         // disco riconosciuto: il mirino si accende un attimo ("LOCK")
         .onChange(of: seen.filter { $0.status == .daConfermare }.count) { old, new in
             guard new > old else { return }
@@ -615,8 +635,9 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         sessione.beginConfiguration()
         sessione.inputs.forEach { sessione.removeInput($0) }
         sessione.outputs.forEach { sessione.removeOutput($0) }
-        // la fotocamera funziona anche quando un'altra app è in primo piano insieme (video PiP, chiamata, finestra mobile)
-        if sessione.isMultitaskingCameraAccessSupported { sessione.isMultitaskingCameraAccessEnabled = true }
+        // Niente fotocamera condivisa con altre app (V50): se c'è una videochiamata in corso,
+        // Vinyl Hustler non tiene la fotocamera quando non è lui in primo piano.
+        if sessione.isMultitaskingCameraAccessSupported { sessione.isMultitaskingCameraAccessEnabled = false }
         let preset: AVCaptureSession.Preset = migliore && sessione.canSetSessionPreset(.photo) ? .photo : .high
         sessione.sessionPreset = preset
         let device = migliore ? Self.fotocameraMigliore()
