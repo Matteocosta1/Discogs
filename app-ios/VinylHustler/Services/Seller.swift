@@ -200,7 +200,20 @@ final class Seller {
             disc.reason = "Discogs non permette di vendere questa release"
             return
         }
+        teach(disc, releaseID: rid, title: release.description)
         await price(disc)
+    }
+
+    /// Insegna alla memoria condivisa: questo disco confermato è questa release (Vendi o Bozza passano da qui).
+    private func teach(_ disc: Disc, releaseID: Int, title: String) {
+        let photo = disc.photoKinds.first == PhotoKind.foto.rawValue ? photos(of: disc).first : nil
+        // la lettura originale dell'AI (anche se poi l'utente ha scelto un'altra stampa: è proprio la correzione utile)
+        let read = disc.details.hasPrefix("barcode") || disc.details.hasPrefix("memoria") ? nil : disc.details
+        let cover = disc.coverURL?.absoluteString
+        Task.detached(priority: .utility) {
+            let impronta = photo.flatMap(Memoria.impronta)
+            await Memoria.impara(impronta: impronta, lettura: read, release: releaseID, titolo: title, copertina: cover)
+        }
     }
 
     /// NO, È QUEST'ALTRO: una delle alternative proposte.

@@ -38,6 +38,15 @@ struct Recognizer {
             }
         }
 
+        // 1b. La memoria condivisa: qualcuno ha già confermato questa copertina? Istantaneo e gratis.
+        //     Solo per le foto: un video può avere più dischi.
+        if !video, let first = images.first, let impronta = Memoria.impronta(first),
+           let ricordo = await Memoria.cerca(impronta: impronta)?.photo {
+            out.found = [Found(images: all, candidates: [ricordo.candidate],
+                               read: "memoria condivisa (\(ricordo.confirmations ?? 1) conferme)", method: "memoria")]
+            return out
+        }
+
         // 2. L'AI: tutti i dischi che si vedono.
         //    Prima Haiku (13 volte più economico). Se Haiku non vede niente, o legge qualcosa che Discogs
         //    non trova (una lettera storpiata basta), la stessa foto passa da sola a Sonnet.
@@ -79,11 +88,18 @@ struct Recognizer {
     private func aiFound(_ ai: AIService, model: String, jpegs: [Data], picked: [Int], all: [Int]) async throws
         -> (found: [Found], cost: Double) {
         let scan = try await ai.scan(photos: jpegs, model: model)
+        // la memoria condivisa sa già a che disco porta questa lettura? (anche se l'AI l'ha storpiata)
+        let ricordi = await Memoria.cerca(impronta: nil, letture: scan.records.map(\.line))?.reads ?? [:]
         var found: [Found] = []
         for record in scan.records {
             let shown = record.images.compactMap { n in picked.indices.contains(n - 1) ? picked[n - 1] : nil }
-            let results = await search(record)
-            found.append(Found(images: shown.isEmpty ? all : shown, candidates: Self.candidates(results),
+            let candidates: [Candidate]
+            if let ricordo = ricordi[record.line] {
+                candidates = [ricordo.candidate]          // confermato da altri: niente ricerca su Discogs
+            } else {
+                candidates = Self.candidates(await search(record))
+            }
+            found.append(Found(images: shown.isEmpty ? all : shown, candidates: candidates,
                                read: record.line, method: "ai-\(model)"))
         }
         return (found, scan.cost ?? 0)
