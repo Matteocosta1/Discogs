@@ -137,6 +137,7 @@ struct Listing: Codable, Hashable, Identifiable {
     var externalId: String?
     var location: String?
     var posted: String?
+    var allowOffers: Bool?
     var release: ListingRelease
 }
 

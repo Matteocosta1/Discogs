@@ -6,6 +6,9 @@ enum Grade: String, CaseIterable, Codable, Identifiable {
 
     var id: String { rawValue }
 
+    /// "Near Mint (NM or M-)" -> .nm
+    static func from(discogs text: String) -> Grade? { allCases.first { $0.discogs == text } }
+
     /// Condizione esatta richiesta dalle API Discogs.
     var discogs: String {
         switch self {

@@ -180,11 +180,14 @@ final class DiscogsClient: @unchecked Sendable {
     // MARK: - Annunci
 
     func createListing(releaseID: Int, condition: Grade, sleeve: Grade, price: Double,
-                       externalID: String, location: String = "", status: String = "For Sale") async throws -> Int {
+                       externalID: String, location: String = "", status: String = "For Sale",
+                       comments: String = "", allowOffers: Bool = true) async throws -> Int {
         // location: campo privato dell'annuncio (lo vede solo il venditore): dove sta il disco ("Scatola 12").
+        // comments: la descrizione che vedono i compratori.
         let res: CreatedListing = try await request("POST", "/marketplace/listings", body: [
             "release_id": releaseID, "condition": condition.discogs, "sleeve_condition": sleeve.discogs,
             "price": price, "status": status, "external_id": externalID, "location": location,
+            "comments": comments, "allow_offers": allowOffers,
         ])
         return res.listingId
     }
@@ -204,6 +207,7 @@ final class DiscogsClient: @unchecked Sendable {
         if let c = current.comments { body["comments"] = c }
         if let e = current.externalId { body["external_id"] = e }
         if let l = current.location { body["location"] = l }
+        if let a = current.allowOffers { body["allow_offers"] = a }
         body.merge(changes) { _, new in new }
         _ = try await raw("POST", "/marketplace/listings/\(id)", body: body)
     }

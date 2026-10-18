@@ -19,6 +19,7 @@ struct WarehouseView: View {
     @State private var message: String?
     @State private var askPlace = false
     @State private var newPlace = "Scatola 1"
+    @State private var editing: Listing?                // scheda annuncio aperta
     /// Annunci (online e bozze) senza posizione.
     private var noPlaceCount: Int {
         listings.filter { ($0.location ?? "").trimmingCharacters(in: .whitespaces).isEmpty }.count
@@ -82,7 +83,7 @@ struct WarehouseView: View {
                 ForEach(shown) { l in row(l) }
             } footer: {
                 if !selecting && !listings.isEmpty {
-                    Text("Tocca un disco per aprirlo su Discogs.\nPer toglierlo dalla vendita scorrilo verso sinistra, oppure tocca Seleziona e scegline tanti.\nLe bozze sono nella pagina Bozze.")
+                    Text("Tocca un disco per cambiare prezzo, condizioni, descrizione e posizione.\nPer toglierlo dalla vendita scorrilo verso sinistra, oppure tocca Seleziona e scegline tanti.\nLe bozze sono nella pagina Bozze.")
                 }
             }
         }
@@ -149,6 +150,12 @@ struct WarehouseView: View {
                 Button("Cancella le bozze", role: .destructive) { Task { await deleteAll() } }
             }
             .alert(message ?? "", isPresented: showingMessage) {}
+            .sheet(item: $editing) { l in
+                ListingEditor(target: .listing(l.id)) { after in
+                    if after.status == "For Sale" || after.status == "Draft",
+                       let i = listings.firstIndex(where: { $0.id == after.id }) { listings[i] = after }
+                }
+            }
             .alert("Posizione per \(noPlaceCount) annunci senza posizione", isPresented: $askPlace) {
                 TextField("es. Scatola 1", text: $newPlace)
                 Button("Scrivi su Discogs") {
@@ -208,8 +215,8 @@ struct WarehouseView: View {
                           currency: seller.currency)
         .contentShape(Rectangle())
         .onTapGesture {
-            guard selecting else {                       // fuori da Seleziona: apre l'annuncio su Discogs
-                openURL(URL(string: "https://www.discogs.com/sell/item/\(l.id)")!)
+            guard selecting else {                       // fuori da Seleziona: apre la scheda annuncio
+                editing = l
                 return
             }
             if isSelected { selected.remove(l.id) } else { selected.insert(l.id) }
@@ -306,7 +313,7 @@ struct ListingRow: View {
                     .font(.system(size: 15, weight: .semibold))
             }
             if !selecting {
-                Image(systemName: "arrow.up.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.muted)
+                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.muted)
             }
         }
     }

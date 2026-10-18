@@ -14,6 +14,7 @@ struct DraftsView: View {
     @State private var askPublish = false
     @State private var publishing = false
     @State private var toDelete: Listing?
+    @State private var editing: Listing?
 
     private var shownDrafts: [Listing] {
         let q = search.lowercased()
@@ -75,6 +76,15 @@ struct DraftsView: View {
             } message: {
                 Text("Vanno online subito su Discogs.")
             }
+            .sheet(item: $editing) { l in
+                ListingEditor(target: .listing(l.id)) { after in
+                    if after.status == "Draft", let i = drafts.firstIndex(where: { $0.id == after.id }) {
+                        drafts[i] = after
+                    } else {
+                        moved(l)                                 // messa in vendita dalla scheda
+                    }
+                }
+            }
             .confirmationDialog("Eliminare questa bozza da Discogs?",
                                 isPresented: Binding(get: { toDelete != nil }, set: { if !$0 { toDelete = nil } }),
                                 titleVisibility: .visible) {
@@ -85,13 +95,14 @@ struct DraftsView: View {
         }
     }
 
-    /// Una bozza su Discogs: copertina, titolo (tocco = apre su Discogs), Vendi, Elimina.
+    /// Una bozza su Discogs: copertina, titolo (tocco = scheda annuncio), Vendi, Elimina.
     private func draftCard(_ l: Listing) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Link(destination: URL(string: "https://www.discogs.com/sell/item/\(l.id)")!) {
+            Button { editing = l } label: {             // tocco = scheda annuncio
                 ListingRow(listing: l, disc: discs.first { $0.externalID == l.externalId },
                            selecting: false, isSelected: false, currency: seller.currency)
                     .foregroundStyle(Theme.text)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             Button("Vendi") {

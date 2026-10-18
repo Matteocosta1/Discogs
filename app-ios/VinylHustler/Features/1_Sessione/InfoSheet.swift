@@ -121,6 +121,7 @@ enum InfoTopic: String, Identifiable {
                     "• «Elimina» (rosso, in fondo): lo togli.",
                     "Se chiudi la fotocamera senza decidere, il disco ti aspetta nella pagina Bozze.",
                     "Poi decidi subito: Vendi (va online) oppure Bozza (sta su Discogs ma nascosto, lo pubblichi quando vuoi).",
+                    "Prezzo, condizioni, posizione e descrizione si cambiano quando vuoi: tocca il prezzo del disco, oppure il disco in Magazzino o in Bozze. Se preferisci controllare tutto prima di mettere online: Console › Annunci › Vendi › Prima la scheda.",
                 ]),
                 ("Consigli", [
                     "• Luce buona, niente riflessi sulla plastica.",

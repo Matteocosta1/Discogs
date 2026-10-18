@@ -13,6 +13,8 @@ struct ConsoleView: View {
     @AppStorage("suoni") private var suoni = true
     @AppStorage("voceModo") private var voceModo = (UserDefaults.standard.object(forKey: "voceElevenLabs") as? Bool == false ? "apple" : "eleven")
     @AppStorage("voceVeloce") private var veloce = false
+    @AppStorage("vendiModo") private var vendiModo = "subito"
+    @AppStorage("offerteDefault") private var offerteDefault = true
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -43,42 +45,8 @@ struct ConsoleView: View {
                     }
                     LabeledContent("Spesa AI (tutti i dischi)", value: discs.reduce(0) { $0 + $1.aiCost }.formatted(.currency(code: "EUR")))
                 }
-                Section {
-                    Picker("Voce", selection: $voceModo) {
-                        Text("Vinyl Hustler").tag("eleven")
-                        Text("Apple").tag("apple")
-                        Text("Nessuna").tag("off")
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: voceModo) { _, m in if m != "off" { voice = true } }
-                    if voceModo != "off" {
-                        HStack {
-                            Text("Ti chiama")
-                            TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)
-                        }
-                    }
-                    if voceModo == "eleven" {
-                        Toggle("Modello veloce (Flash, metà prezzo)", isOn: $veloce)
-                    }
-                    if voceModo != "off" {
-                        Picker(voceModo == "eleven" ? "Riserva senza rete" : "Voce Apple", selection: $voiceID) {
-                            Text("Quella di sistema (Impostazioni)").tag(Voice.systemChoice)
-                            Text("La migliore italiana").tag("")
-                            ForEach(Voice.italianVoices, id: \.identifier) { v in
-                                Text(Voice.label(v)).tag(v.identifier)
-                            }
-                        }
-                        Button("Prova la voce") { Voice.shared.sayTitles(["Kind Of Blue di Miles Davis"]) }
-                    }
-                    if voceModo == "eleven" {
-                        NavigationLink("Pronuncia") { PronunciaView() }
-                    }
-                    Toggle("Suoni dell'interfaccia", isOn: $suoni)
-                } header: {
-                    Text("Voce")
-                } footer: {
-                    Text(footer).font(.caption)
-                }
+                voiceSection
+                annunciSection
                 Section("Regole del prezzo") {
                     Stepper("Griglia: \(seller.rules.step.formatted()) €", value: decimal($seller.rules.step), in: 0.5...10, step: 0.5)
                     Stepper("Prezzo minimo: \(seller.rules.minimum.formatted()) €", value: decimal($seller.rules.minimum), in: 0.5...20, step: 0.5)
@@ -96,6 +64,64 @@ struct ConsoleView: View {
             .navigationTitle("Console")
             .onReceive(timer) { _ in Task { apiUsed = await seller.apiUsedLastMinute() } }
             .task { aiSignedIn = await Backend.shared.accessToken() != nil }
+        }
+    }
+
+    // Il corpo è diviso in pezzi: tutto insieme è troppo per il compilatore di Swift.
+    private var voiceSection: some View {
+        Section {
+            Picker("Voce", selection: $voceModo) {
+                Text("Vinyl Hustler").tag("eleven")
+                Text("Apple").tag("apple")
+                Text("Nessuna").tag("off")
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: voceModo) { _, m in if m != "off" { voice = true } }
+            if voceModo != "off" {
+                HStack {
+                    Text("Ti chiama")
+                    TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)
+                }
+            }
+            if voceModo == "eleven" {
+                Toggle("Modello veloce (Flash, metà prezzo)", isOn: $veloce)
+            }
+            if voceModo != "off" {
+                Picker(voceModo == "eleven" ? "Riserva senza rete" : "Voce Apple", selection: $voiceID) {
+                    Text("Quella di sistema (Impostazioni)").tag(Voice.systemChoice)
+                    Text("La migliore italiana").tag("")
+                    ForEach(Voice.italianVoices, id: \.identifier) { v in
+                        Text(Voice.label(v)).tag(v.identifier)
+                    }
+                }
+                Button("Prova la voce") { Voice.shared.sayTitles(["Kind Of Blue di Miles Davis"]) }
+            }
+            if voceModo == "eleven" {
+                NavigationLink("Pronuncia") { PronunciaView() }
+            }
+            Toggle("Suoni dell'interfaccia", isOn: $suoni)
+        } header: {
+            Text("Voce")
+        } footer: {
+            Text(footer).font(.caption)
+        }
+    }
+
+    private var annunciSection: some View {
+        Section {
+            Picker("Vendi", selection: $vendiModo) {
+                Text("Subito").tag("subito")
+                Text("Prima la scheda").tag("scheda")
+            }
+            Toggle("Accetta offerte", isOn: $offerteDefault)
+            NavigationLink("Descrizione") { DescrizioneView() }
+        } header: {
+            Text("Annunci")
+        } footer: {
+            Text(vendiModo == "subito"
+                 ? "Vendi mette il disco online con un tocco. Prezzo e tutto il resto li cambi quando vuoi toccando il disco in Magazzino."
+                 : "Vendi apre la scheda annuncio già compilata: controlli prezzo, condizioni e descrizione, poi «Metti online».")
+                .font(.caption)
         }
     }
 
@@ -205,5 +231,50 @@ struct PronunciaView: View {
         } else {
             failed = true
         }
+    }
+}
+
+/// Console › Annunci › Descrizione: il testo che finisce in ogni annuncio.
+struct DescrizioneView: View {
+    @AppStorage("descLingua") private var lingua = ListingText.Language.en.rawValue
+    @AppStorage("descCondizione") private var condizione = true
+    @AppStorage("descFisso") private var fisso = ""
+
+    private var preview: String {
+        ListingText.build(media: Grade.nm.discogs, sleeve: Grade.vgPlus.discogs, tags: ["Apribile", "Inserto incluso"],
+                          note: "", language: ListingText.Language(rawValue: lingua) ?? .en,
+                          includeCondition: condizione, fixed: fisso)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Lingua", selection: $lingua) {
+                    Text("English").tag(ListingText.Language.en.rawValue)
+                    Text("Italiano + English").tag(ListingText.Language.itEn.rawValue)
+                }
+                .pickerStyle(.segmented)
+                Toggle("Condizione scritta per intero", isOn: $condizione)
+            } footer: {
+                Text("Su Discogs comprano da tutto il mondo: l'inglese lo capiscono tutti.")
+            }
+            Section {
+                TextEditor(text: $fisso)
+                    .frame(minHeight: 120)
+                    .scrollContentBackground(.hidden)
+            } header: {
+                Text("Testo fisso")
+            } footer: {
+                Text("In fondo a ogni annuncio. Per esempio: «Ships within 2 days in a sturdy record mailer. Combined shipping available.»")
+            }
+            Section("Anteprima") {
+                Text(preview.isEmpty ? "—" : preview)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.text)
+                    .textSelection(.enabled)
+            }
+        }
+        .themedBackground()
+        .navigationTitle("Descrizione")
     }
 }

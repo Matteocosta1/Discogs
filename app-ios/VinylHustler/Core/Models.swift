@@ -52,6 +52,11 @@ final class Disc {
     var listingID: Int?
     var box: String                     // dove sta fisicamente: "Scatola 12", "Casa 2"…
     var aiCost: Double
+    // Scheda annuncio (V36): descrizione e offerte. comments vuoto = descrizione automatica.
+    var comments: String = ""
+    var noteTags: [String] = []         // note veloci ("Copertina scollata", "Inserto incluso"…)
+    var noteText: String = ""           // nota scritta a mano
+    var allowOffers: Bool = true
 
     init(lot: String, photoFiles: [String], media: Grade, sleeve: Grade) {
         id = UUID()
@@ -73,6 +78,7 @@ final class Disc {
         coverFile = nil
         price = nil
         listingID = nil
+        allowOffers = UserDefaults.standard.object(forKey: "offerteDefault") as? Bool ?? true
     }
 
     var status: DiscStatus {

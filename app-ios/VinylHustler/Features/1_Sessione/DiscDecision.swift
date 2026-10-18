@@ -97,6 +97,14 @@ struct DiscActions: View {
     @State private var alternatives = false
     @State private var askRelease = false
     @State private var releaseText = ""
+    @State private var editor: EditorRequest?
+    /// Console › Annunci › Vendi: "subito" = un tocco ed è online; "scheda" = prima si apre la scheda annuncio.
+    @AppStorage("vendiModo") private var vendiModo = "subito"
+
+    struct EditorRequest: Identifiable {
+        let id = UUID()
+        let status: String
+    }
 
     var body: some View {
         Group {
@@ -110,20 +118,10 @@ struct DiscActions: View {
                 // uno sotto l'altro: Vendi, Bozza, Versioni (se ci sono altre stampe); Elimina è in fondo alla scheda
                 VStack(spacing: 8) {
                     // Vendi: conferma, calcola il prezzo e lo mette subito online su Discogs
-                    Button("Vendi") {
-                        run {
-                            await seller.accept(disc)
-                            if disc.status == .pronto { await seller.sell(disc) }
-                        }
-                    }
+                    Button("Vendi") { decide(draft: false) }
                     .buttonStyle(SignalButtonStyle())
                     // Bozza: conferma, calcola il prezzo e lo salva come bozza su Discogs (va nella pagina Bozze)
-                    Button("Bozza") {
-                        run {
-                            await seller.accept(disc)
-                            if disc.status == .pronto { await seller.sell(disc, draft: true) }
-                        }
-                    }
+                    Button("Bozza") { decide(draft: true) }
                     .buttonStyle(SignalButtonStyle(filled: false))
                     // solo se ci sono davvero altre stampe trovate oltre a quella proposta
                     if disc.candidates.contains(where: { $0.id != disc.releaseID }) {
@@ -148,6 +146,14 @@ struct DiscActions: View {
                         Button("Vendi") { run { await seller.sell(disc) } }.buttonStyle(SignalButtonStyle())
                         Button("Bozza") { run { await seller.sell(disc, draft: true) } }.buttonStyle(SignalButtonStyle(filled: false))
                     }
+                    Button { editor = EditorRequest(status: "For Sale") } label: {
+                        Label("Modifica annuncio", systemImage: "slider.horizontal.3")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
                     changeRelease
                 }
             case .daControllare:
@@ -178,9 +184,17 @@ struct DiscActions: View {
                         .font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.money)
                     Spacer()
                     if let p = disc.price {
-                        Text(p, format: .currency(code: seller.currency)).font(.system(size: 15, weight: .semibold))
+                        // tocco = scheda annuncio: si cambia prezzo, condizioni, descrizione… anche da online
+                        Button { if disc.listingID != nil { editor = EditorRequest(status: "For Sale") } } label: {
+                            HStack(spacing: 6) {
+                                Text(p, format: .currency(code: seller.currency))
+                                Image(systemName: "pencil").font(.system(size: 11, weight: .bold))
+                            }
+                            .font(.system(size: 15, weight: .semibold))
                             .padding(.horizontal, 12).padding(.vertical, 5)
                             .foregroundStyle(Theme.money).background(Theme.military, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             case .tolto:
@@ -190,6 +204,13 @@ struct DiscActions: View {
         .disabled(busy)
         .opacity(busy ? 0.5 : 1)
         .overlay { if busy { ProgressView().tint(Theme.accent) } }
+        .sheet(item: $editor) { req in
+            if let lid = disc.listingID {
+                ListingEditor(target: .listing(lid))
+            } else {
+                ListingEditor(target: .disc(disc), initialStatus: req.status)
+            }
+        }
         .sheet(isPresented: $alternatives) {
             AlternativesSheet(disc: disc, onRetake: onRetake) { pick in
                 alternatives = false
@@ -254,6 +275,20 @@ struct DiscActions: View {
 
     private var reason: some View {
         Text(disc.reason).font(.system(size: 14)).foregroundStyle(Theme.warn)
+    }
+
+    /// Vendi / Bozza su un disco riconosciuto: conferma e prezzo, poi online subito oppure la scheda annuncio
+    /// (Console › Annunci › Vendi).
+    private func decide(draft: Bool) {
+        run {
+            await seller.accept(disc)
+            guard disc.status == .pronto else { return }
+            if vendiModo == "scheda" {
+                editor = EditorRequest(status: draft ? "Draft" : "For Sale")
+            } else {
+                await seller.sell(disc, draft: draft)
+            }
+        }
     }
 
     private func run(_ job: @escaping () async -> Void) {

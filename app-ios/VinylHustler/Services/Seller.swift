@@ -364,7 +364,8 @@ final class Seller {
         do {
             disc.listingID = try await client.createListing(releaseID: rid, condition: disc.media, sleeve: disc.sleeve,
                                                             price: price, externalID: disc.externalID,
-                                                            location: disc.box, status: status)
+                                                            location: disc.box, status: status,
+                                                            comments: description(for: disc), allowOffers: disc.allowOffers)
             disc.status = status == "Draft" ? .bozza : .inVendita
             dropPhotos(disc)                 // è su Discogs: la foto non serve più, libera spazio
         } catch DiscogsError.uncertain(let m) {
@@ -373,6 +374,31 @@ final class Seller {
             disc.status = .daControllare
             disc.reason = "Discogs ha rifiutato l'annuncio: \(error.localizedDescription)"
         }
+    }
+
+    /// La descrizione dell'annuncio: quella scritta nella scheda, altrimenti quella automatica (Console › Descrizione).
+    func description(for disc: Disc) -> String {
+        let manual = disc.comments.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !manual.isEmpty { return manual }
+        return ListingText.build(media: disc.media.discogs, sleeve: disc.sleeve.discogs, tags: disc.noteTags, note: disc.noteText)
+    }
+
+    /// SCHEDA ANNUNCIO: modifica un annuncio già su Discogs (prezzo, condizioni, posizione, descrizione, offerte, stato).
+    /// Restituisce l'annuncio come lo vede Discogs dopo la modifica, e allinea il disco dell'app.
+    func updateListing(_ id: Int, changes: [String: Any], discs: [Disc]) async throws -> Listing {
+        try await client.editListing(id, changes: changes)
+        let after = try await client.listing(id)
+        for d in discs where d.listingID == id || (after.externalId != nil && d.externalID == after.externalId) {
+            d.listingID = id
+            if let p = after.price?.value { d.price = p }
+            if let c = after.condition, let g = Grade.from(discogs: c) { d.mediaRaw = g.rawValue }
+            if let c = after.sleeveCondition, let g = Grade.from(discogs: c) { d.sleeveRaw = g.rawValue }
+            if let l = after.location { d.box = l }
+            if let c = after.comments { d.comments = c }
+            if let a = after.allowOffers { d.allowOffers = a }
+            d.status = after.status == "Draft" ? .bozza : .inVendita
+        }
+        return after
     }
 
     /// PUBBLICA PRONTI: tutti i dischi pronti in vendita.
