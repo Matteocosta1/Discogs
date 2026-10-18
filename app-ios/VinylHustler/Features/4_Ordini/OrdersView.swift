@@ -17,6 +17,7 @@ struct OrdersView: View {
     @State private var detail: Order?
     private let timer = Timer.publish(every: 180, on: .main, in: .common).autoconnect()
     /// Preso / Imballato / Spedito, segnati nell'app (sul telefono): 0 = niente, 3 = spedito.
+    @State private var checkedAt: Date?
     @State private var steps: [String: Int] = (UserDefaults.standard.dictionary(forKey: "orderSteps") as? [String: Int]) ?? [:]
 
     private func step(_ o: Order) -> Int { steps[o.id] ?? 0 }
@@ -42,7 +43,19 @@ struct OrdersView: View {
                     .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
 
                     if open.isEmpty && !loading {
-                        RadarCard()
+                        // niente ordini da spedire: una riga sola, con l'ora dell'ultimo controllo
+                        HStack(spacing: 10) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.money)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Nessun ordine da spedire").font(.system(size: 15, weight: .semibold))
+                                Text(checkedAt.map { "Controllato alle \($0.formatted(date: .omitted, time: .shortened)) · ricontrollo ogni 3 minuti" }
+                                     ?? "Ricontrollo ogni 3 minuti")
+                                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            }
+                            Spacer()
+                        }
+                        .padding(14)
+                        .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
                     } else {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("DA EVADERE").font(.system(size: 13)).foregroundStyle(Theme.muted).padding(.leading, 16)
@@ -162,6 +175,7 @@ struct OrdersView: View {
                 Suoni.nuovoOrdine()                      // è arrivato un ordine mentre guardi la pagina
             }
             withAnimation(.snappy) { orders = page.orders }
+            checkedAt = Date()
             error = nil
         } catch {
             // lettura interrotta (cambio scheda, nuovo aggiornamento): non è un errore da mostrare
@@ -175,47 +189,6 @@ extension Error {
     /// Una richiesta annullata (cambi scheda mentre carica): niente avviso.
     var isCancellation: Bool {
         self is CancellationError || (self as? URLError)?.code == .cancelled
-    }
-}
-
-/// Nessun ordine da spedire: un radar verde che gira, in ascolto su Discogs.
-struct RadarCard: View {
-    @State private var giro = false
-    @State private var ping = false
-
-    var body: some View {
-        VStack(spacing: 14) {
-            ZStack {
-                Circle().fill(RadialGradient(colors: [Color(red: 0.04, green: 0.07, blue: 0.05), .black], center: .center,
-                                             startRadius: 0, endRadius: 75))
-                Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 1)
-                Circle().stroke(Theme.accent.opacity(0.18), lineWidth: 1).padding(25)
-                Circle().stroke(Theme.accent.opacity(0.18), lineWidth: 1).padding(50)
-                Rectangle().fill(Theme.accent.opacity(0.15)).frame(width: 1)
-                Rectangle().fill(Theme.accent.opacity(0.15)).frame(height: 1)
-                Circle()
-                    .fill(AngularGradient(colors: [Theme.glow.opacity(0.45), Theme.glow.opacity(0), .clear, .clear], center: .center))
-                    .rotationEffect(.degrees(giro ? 360 : 0))
-                    .animation(.linear(duration: 3.2).repeatForever(autoreverses: false), value: giro)
-                ZStack {
-                    Circle().stroke(Theme.glow, lineWidth: 1).frame(width: 24, height: 24)
-                        .scaleEffect(ping ? 1.6 : 0.3).opacity(ping ? 0 : 0.9)
-                        .animation(.easeOut(duration: 1.6).repeatForever(autoreverses: false), value: ping)
-                    Circle().fill(Theme.glow).frame(width: 8, height: 8).shadow(color: Theme.glow, radius: 6)
-                }
-                .offset(x: 30, y: -30)
-            }
-            .frame(width: 150, height: 150)
-            .clipShape(Circle())
-            Text("IN ASCOLTO SU DISCOGS").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.accent)
-            Text("Controllo ogni 3 minuti. Quando un disco si vende, suona e ti dico da quale scatola prenderlo.")
-                .font(.system(size: 13)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 22).padding(.horizontal, 16)
-        .background(Color(red: 0.04, green: 0.043, blue: 0.04), in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).stroke(Theme.accent.opacity(0.12), lineWidth: 1))
-        .onAppear { giro = true; ping = true }
     }
 }
 
