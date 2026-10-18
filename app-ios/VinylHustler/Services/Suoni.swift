@@ -7,14 +7,9 @@ import UIKit
 ///   «scheda»        parte il riconoscimento ("sto guardando…")
 ///   «schedapronta»  disco riconosciuto
 ///   «apertura»      apertura dell'app (mp3 scelto da Alessandro)
-///   «carica»        Vendi o Bozza: l'annuncio sta partendo (nuovo, V39)
-///   «pubblico»      Pubblica tutto: suona mentre pubblica, sfuma alla fine (nuovo, V39)
-///   «seleziona»     note veloci e − / + del prezzo nella scheda annuncio, spunte in Seleziona (nuovo)
-///   «nego»          Discogs rifiuta o non risponde (nuovo)
-///   «elaboro»       Statistiche: mentre fa i conti, sfuma quando sono pronte (nuovo)
-///   nuovo ordine con l'app aperta: il suono di disco pronto (prima era muto)
+/// Nei momenti che prima erano muti (Vendi, Pubblica, note veloci, errori di Discogs, nuovo ordine)
+/// si usano gli stessi suoni: click «tick», «schedapronta», errore.
 /// L'errore (non riconosciuto) è un doppio segnale basso generato al volo.
-/// I due nuovi sono di RescopicSound (Pixabay), scelti da Alessandro; gli altri restano quelli di sempre.
 /// Si spengono in Console › Suoni dell'interfaccia.
 @MainActor
 enum Suoni {
@@ -43,47 +38,22 @@ enum Suoni {
         riproduci("schedapronta", volume: 0.8)
     }
 
-    /// Vendi / Bozza: parte l'annuncio.
-    static func carica() { riproduci("carica", volume: 0.6) }
-
+    // Momenti che prima erano muti: usano solo i suoni di sempre (scelta di Alessandro).
+    /// Vendi / Bozza: parte l'annuncio (click).
+    static func carica() { tocco() }
     /// L'annuncio è su Discogs.
     static func online() { riproduci("schedapronta", volume: 0.8) }
-
-    /// Pubblica tutto: il suono gira mentre pubblica; fine() lo sfuma.
-    static func pubblico() {
-        guard attivi, let p = lettore("pubblico", volume: 0.6) else { return }
-        lettorePubblico?.stop()
-        p.numberOfLoops = -1
-        lettorePubblico = p
-        p.play()
-    }
-
-    static func fine() {
-        guard let p = lettorePubblico else { return }
-        p.setVolume(0, fadeDuration: 0.4)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { p.stop() }
-        lettorePubblico = nil
-        online()
-    }
-
-    static func seleziona() { riproduci("seleziona", volume: 0.45) }
-    static func nego() { riproduci("nego", volume: 0.55) }
-    static func nuovoOrdine() { riproduci("schedapronta", volume: 0.8) }
-
-    /// Statistiche: il suono dei dati mentre fa i conti; pronto() lo sfuma.
-    static func elaboro() {
-        guard attivi, let p = lettore("elaboro", volume: 0.5) else { return }
-        lettoreElaboro?.stop()
-        lettoreElaboro = p
-        p.play()
-    }
-
-    static func pronto() {
-        guard let p = lettoreElaboro else { return }
-        p.setVolume(0, fadeDuration: 0.35)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { p.stop() }
-        lettoreElaboro = nil
-    }
+    /// Pubblica tutto: click alla partenza, "pronto" alla fine.
+    static func pubblico() { tocco() }
+    static func fine() { online() }
+    /// Note veloci, − / + del prezzo, spunte in Seleziona.
+    static func seleziona() { tocco() }
+    /// Discogs rifiuta o non risponde.
+    static func nego() { errore() }
+    static func nuovoOrdine() { online() }
+    /// Statistiche: niente suono mentre fa i conti.
+    static func elaboro() {}
+    static func pronto() {}
 
     /// Non riconosciuto.
     static func errore() {
@@ -100,8 +70,6 @@ enum Suoni {
     // MARK: - Lettori
 
     private static var lettoreScheda: AVAudioPlayer?
-    private static var lettorePubblico: AVAudioPlayer?
-    private static var lettoreElaboro: AVAudioPlayer?
     private static var lettori: [AVAudioPlayer] = []
     private static var cacheErrore: Data?
 
