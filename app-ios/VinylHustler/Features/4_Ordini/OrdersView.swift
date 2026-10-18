@@ -45,7 +45,7 @@ struct OrdersView: View {
                     if open.isEmpty && !loading {
                         // niente ordini da spedire: una riga sola, con l'ora dell'ultimo controllo
                         HStack(spacing: 10) {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.money)
+                            MiniRadar()                       // piccolo: dice solo "sto controllando"
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Nessun ordine da spedire").font(.system(size: 15, weight: .semibold))
                                 Text(checkedAt.map { "Controllato alle \($0.formatted(date: .omitted, time: .shortened)) · ricontrollo ogni 3 minuti" }
@@ -192,6 +192,28 @@ extension Error {
     }
 }
 
+/// Un radar piccolo (come un'icona): il fascio gira piano, l'app sta controllando gli ordini.
+struct MiniRadar: View {
+    @State private var giro = false
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color(red: 0.04, green: 0.07, blue: 0.05))
+            Circle().stroke(Theme.accent.opacity(0.35), lineWidth: 1)
+            Circle().stroke(Theme.accent.opacity(0.2), lineWidth: 1).padding(8)
+            Circle()
+                .fill(AngularGradient(colors: [Theme.glow.opacity(0.6), Theme.glow.opacity(0), .clear, .clear], center: .center))
+                .rotationEffect(.degrees(giro ? 360 : 0))
+                .animation(.linear(duration: 3.2).repeatForever(autoreverses: false), value: giro)
+            Circle().fill(Theme.glow).frame(width: 4, height: 4).shadow(color: Theme.glow, radius: 3).offset(x: 6, y: -6)
+        }
+        .frame(width: 34, height: 34)
+        .clipShape(Circle())
+        .onAppear { giro = true }
+        .accessibilityHidden(true)
+    }
+}
+
 /// Un ordine da evadere: NUOVO che lampeggia, bordo che respira, "Preleva da …" in grande,
 /// e i tre passi Preso → Imballato → Spedito. Su Spedito parte il furgoncino.
 struct OpenOrderCard: View {
@@ -265,7 +287,7 @@ struct OpenOrderCard: View {
                     let done = step > k
                     let next = step == k
                     Button {
-                        guard next else { Suoni.tocco(); return }
+                        guard next else { Suoni.click(); return }
                         if k < 2 {
                             Suoni.seleziona()
                             onStep(k + 1)

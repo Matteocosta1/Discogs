@@ -196,6 +196,7 @@ struct ListingEditor: View {
 
     private var saveBar: some View {
         Button {
+            Suoni.click()
             Task { await save() }
         } label: {
             Text(saving ? "Salvo…" : saveLabel).frame(maxWidth: .infinity, minHeight: 44)

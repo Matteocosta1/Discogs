@@ -52,7 +52,8 @@ struct DraftsView: View {
                     }
                     ForEach(Array(shownDrafts.enumerated()), id: \.element.id) { i, l in
                         DraftRow(listing: l, lit: lit.contains(l.id), currency: seller.currency, index: i,
-                                 onEdit: { editing = l }, onSell: { Task { await sell(l) } }, onDelete: { toDelete = l })
+                                 onEdit: { Suoni.click(); editing = l }, onSell: { Suoni.click(); Task { await sell(l) } },
+                                 onDelete: { Suoni.click(); toDelete = l })
                             .transition(.asymmetric(insertion: .opacity, removal: .move(edge: .trailing).combined(with: .opacity)))
                     }
                     if local.isEmpty && shownDrafts.isEmpty && !loading {
@@ -266,7 +267,6 @@ struct DraftRow: View {
         .offset(y: shown ? 0 : 22)
         .onAppear {
             withAnimation(.spring(duration: 0.5, bounce: 0.25).delay(Double(index) * 0.07)) { shown = true }
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = -28 }
             standby = true
         }
     }

@@ -8,7 +8,7 @@ import UIKit
 ///   «schedapronta»  disco riconosciuto
 ///   «apertura»      apertura dell'app (mp3 scelto da Alessandro)
 /// Nei momenti che prima erano muti (Vendi, Pubblica, note veloci, errori di Discogs, nuovo ordine)
-/// si usano gli stessi suoni: click «tick», «schedapronta», errore.
+/// si usano: il click scelto da Alessandro («click»), «schedapronta», errore.
 /// L'errore (non riconosciuto) è un doppio segnale basso generato al volo.
 /// Si spengono in Console › Suoni dell'interfaccia.
 @MainActor
@@ -39,15 +39,17 @@ enum Suoni {
     }
 
     // Momenti che prima erano muti: usano solo i suoni di sempre (scelta di Alessandro).
-    /// Vendi / Bozza: parte l'annuncio (click).
-    static func carica() { tocco() }
+    /// Il click scelto da Alessandro («click», RescopicSound "select small"): solo dove prima non c'era niente.
+    static func click() { riproduci("click", volume: 0.5) }
+    /// Vendi / Bozza: parte l'annuncio.
+    static func carica() { click() }
     /// L'annuncio è su Discogs.
     static func online() { riproduci("schedapronta", volume: 0.8) }
     /// Pubblica tutto: click alla partenza, "pronto" alla fine.
-    static func pubblico() { tocco() }
+    static func pubblico() { click() }
     static func fine() { online() }
     /// Note veloci, − / + del prezzo, spunte in Seleziona.
-    static func seleziona() { tocco() }
+    static func seleziona() { click() }
     /// Discogs rifiuta o non risponde.
     static func nego() { errore() }
     static func nuovoOrdine() { online() }

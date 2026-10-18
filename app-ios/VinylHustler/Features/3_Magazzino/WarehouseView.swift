@@ -111,7 +111,7 @@ struct WarehouseView: View {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            Button { showStats = true } label: { Image(systemName: "chart.bar.xaxis") }
+            Button { Suoni.click(); showStats = true } label: { Image(systemName: "chart.bar.xaxis") }
                 .accessibilityLabel("Statistiche")
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -218,7 +218,7 @@ struct WarehouseView: View {
         let draft = l.status == "Draft"
         let isSelected = selected.contains(l.id)
         return ListingRow(listing: l, disc: disc(for: l), selecting: selecting, isSelected: isSelected,
-                          currency: seller.currency, onEdit: { editing = l })
+                          currency: seller.currency, onEdit: { Suoni.click(); editing = l })
         .contentShape(Rectangle())
         .onTapGesture {
             guard selecting else { return }              // fuori da Seleziona: titolo = Discogs, tasto a destra = scheda
