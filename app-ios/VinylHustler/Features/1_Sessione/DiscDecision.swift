@@ -7,6 +7,8 @@ struct DiscRow: View {
     @Environment(Seller.self) private var seller
     @Bindable var disc: Disc
     var onRetake: (() -> Void)? = nil
+    /// Nella fotocamera: scheda bassa, tasti in fila e cestino sempre in vista in alto a destra.
+    var compact = false
     @State private var flash = false
     @State private var zap = false              // lampo verde: è appena andato su Discogs
 
@@ -21,9 +23,10 @@ struct DiscRow: View {
                         .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
                 Spacer(minLength: 0)
+                if compact { DeleteDiscButton(disc: disc, wide: false) }     // Elimina sempre in vista
             }
-            DiscActions(disc: disc, onRetake: onRetake)
-            DeleteDiscButton(disc: disc, wide: true)
+            DiscActions(disc: disc, onRetake: onRetake, compact: compact)
+            if !compact { DeleteDiscButton(disc: disc, wide: true) }
         }
         .padding(14)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
@@ -112,6 +115,7 @@ struct DiscActions: View {
     @Environment(\.modelContext) private var context
     @Bindable var disc: Disc
     var onRetake: (() -> Void)? = nil
+    var compact = false
     @State private var busy = false
     @State private var alternatives = false
     @State private var askRelease = false
@@ -134,8 +138,11 @@ struct DiscActions: View {
                     Text("Sto guardando…").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.glow)
                 }
             case .daConfermare:
-                // uno sotto l'altro: Vendi, Bozza, Versioni (se ci sono altre stampe); Elimina è in fondo alla scheda
+                // uno sotto l'altro: Vendi, Bozza, Versioni (se ci sono altre stampe); Elimina è in fondo alla scheda.
+                // Nella fotocamera (compact): tutti in fila, il cestino è in alto a destra.
+                let layout = compact ? AnyLayout(HStackLayout(spacing: 6)) : AnyLayout(VStackLayout(spacing: 8))
                 VStack(spacing: 8) {
+                  layout {
                     // Vendi: conferma, calcola il prezzo e lo mette subito online su Discogs
                     Button("Vendi") { decide(draft: false) }
                     .buttonStyle(SignalButtonStyle())
@@ -147,7 +154,8 @@ struct DiscActions: View {
                         Button("Versioni") { alternatives = true }
                             .buttonStyle(SignalButtonStyle(filled: false))
                     }
-                    changeRelease
+                  }
+                  changeRelease
                 }
             case .pronto:
                 VStack(alignment: .leading, spacing: 8) {

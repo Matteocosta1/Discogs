@@ -40,8 +40,6 @@ struct OcchioView: View {
         all.filter { $0.createdAt >= openedAt && $0.status != .tolto && !$0.parked }
     }
     private static func done(_ d: Disc) -> Bool { d.status == .inVendita || d.status == .bozza }
-    private var onlineCount: Int { seen.filter { $0.status == .inVendita }.count }
-    private var draftCount: Int { seen.filter { $0.status == .bozza }.count }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -107,14 +105,6 @@ struct OcchioView: View {
                 Text("VINYL HUSTLER").font(Theme.mono(14, .bold)).tracking(4)
                 Text("\(place) · \(media == sleeve ? media.rawValue : "\(media.rawValue)/\(sleeve.rawValue)")".uppercased())
                     .font(Theme.mono(9, .semibold)).tracking(1.5).opacity(0.8)
-                if !seen.isEmpty {
-                    // contatore della serie: quanti dischi da quando hai aperto la fotocamera
-                    Text("SERIE \(seen.count) · ONLINE \(onlineCount) · BOZZE \(draftCount)")
-                        .font(Theme.mono(10, .bold)).tracking(1.5)
-                        .contentTransition(.numericText())
-                        .animation(.snappy, value: "\(seen.count)-\(onlineCount)-\(draftCount)")
-                        .padding(.top, 2)
-                }
             }
             .foregroundStyle(tinta)
             .shadow(color: tinta.opacity(0.6), radius: 6)
@@ -209,7 +199,7 @@ struct OcchioView: View {
                                 ForEach(pending) { disc in
                                     // tasti bassi, e la scheda scorre in verticale: Elimina si raggiunge sempre
                                     ScrollView(.vertical, showsIndicators: false) {
-                                        DiscRow(disc: disc, onRetake: { attachTo = disc })
+                                        DiscRow(disc: disc, onRetake: { attachTo = disc }, compact: true)
                                             .controlSize(.small)
                                     }
                                     .frame(width: 320)
