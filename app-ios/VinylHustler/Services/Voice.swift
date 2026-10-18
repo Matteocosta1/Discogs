@@ -3,7 +3,8 @@ import Foundation
 
 /// La voce di Vinyl Hustler: quando riconosce un disco te lo dice, chiamandoti per nome.
 /// "Ciao Marco, questo è Kind Of Blue di Miles Davis."
-/// Parla con la voce ElevenLabs di Vinyl Hustler (dal server); se non c'è rete, con la voce Apple del telefono.
+/// Parla con la voce ElevenLabs di Vinyl Hustler (dal server, con la memoria condivisa delle frasi e la pronuncia
+/// condivisa); oppure con la voce Apple del telefono; oppure sta zitta (Console › Voce).
 @MainActor
 final class Voice {
     static let shared = Voice()
@@ -11,88 +12,147 @@ final class Voice {
 
     /// Nome con cui l'app ti saluta (Console). Vuoto = niente nome.
     var name: String { UserDefaults.standard.string(forKey: "userName") ?? "" }
-    var enabled: Bool { UserDefaults.standard.object(forKey: "voice") as? Bool ?? true }
 
-    func say(found discs: [Disc]) {
-        let hello = name.isEmpty ? "" : "Ciao \(name), "
-        let names = discs.compactMap { d in d.status == .daConfermare ? Self.spoken(d.releaseTitle) : nil }
-        let text: String
-        switch names.count {
-        case 0: text = "\(hello)questo non lo riconosco. Prova un'altra foto."
-        case 1: text = "\(hello)questo è \(names[0])."
-        default: text = "\(hello)ne ho trovati \(names.count): " + names.joined(separator: "; ") + "."
-        }
-        say(text)
+    /// Console › Voce: "eleven" = voce Vinyl Hustler (ElevenLabs), "apple" = voce del telefono (gratis), "off" = muta.
+    enum Mode: String, CaseIterable { case eleven, apple, off }
+    var mode: Mode {
+        let d = UserDefaults.standard
+        if let raw = d.string(forKey: "voceModo"), let m = Mode(rawValue: raw) { return m }
+        // impostazione delle versioni di prima
+        return d.object(forKey: "voceElevenLabs") as? Bool == false ? .apple : .eleven
     }
+    /// Parla se in Console c'è una voce e se non l'hai zittita col tasto in fotocamera.
+    var enabled: Bool { mode != .off && UserDefaults.standard.object(forKey: "voice") as? Bool != false }
+    /// Console › "Modello veloce": ElevenLabs Flash, metà prezzo (stessa voce, un po' meno ricca).
+    var fast: Bool { UserDefaults.standard.bool(forKey: "voceVeloce") }
+
+    /// Il saluto e il titolo sono due pezzi: "Ciao Marco." si genera una volta per persona,
+    /// "questo è Kind Of Blue di Miles Davis." una volta per tutti gli utenti (memoria condivisa della voce).
+    func say(found discs: [Disc]) {
+        sayTitles(discs.compactMap { d in d.status == .daConfermare ? Self.spoken(d.releaseTitle) : nil })
+    }
+
+    func sayTitles(_ names: [String]) {
+        let body: String
+        switch names.count {
+        case 0: body = "Questo non lo riconosco. Prova un'altra foto."
+        case 1: body = "Questo è \(names[0])."
+        default: body = "Ne ho trovati \(names.count): " + names.joined(separator: "; ") + "."
+        }
+        speak(name.isEmpty ? [body] : ["Ciao \(name).", body])
+    }
+
+    func say(_ text: String) { speak([text]) }
 
     // MARK: - Voce ElevenLabs (la voce di Vinyl Hustler)
 
-    /// Console › "Voce Vinyl Hustler": la voce ElevenLabs dal server (funzione `voce`). Se manca la rete
-    /// o il server non risponde, parla la voce Apple: l'app non resta mai muta.
-    var useEleven: Bool { UserDefaults.standard.object(forKey: "voceElevenLabs") as? Bool ?? true }
+    var useEleven: Bool { mode == .eleven }
     private var player: AVAudioPlayer?
     private var turn = 0
 
     /// Le frasi già sentite restano sul telefono: la seconda volta parte subito e non costa niente.
-    private static func cacheURL(_ text: String, ext: String = "mp3") -> URL {
+    private static var cacheDir: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Voce")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent(Backend.sha256(text) + "." + ext)
+        return dir
     }
-
-    private func elevenAudio(_ text: String) async -> Data? {
-        let file = Self.cacheURL(text)
-        if let cached = try? Data(contentsOf: file) { return cached }
-        guard let base = AppConfig.supabaseURL, let token = await Backend.shared.accessToken() else { return nil }
-        var req = URLRequest(url: base.appendingPathComponent("functions/v1/voce"), timeoutInterval: 8)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text])
-        guard let result = try? await URLSession.shared.data(for: req),
-              (result.1 as? HTTPURLResponse)?.statusCode == 200, !result.0.isEmpty else { return nil }
-        let data = result.0
-        try? data.write(to: file)
-        return data
+    private func cacheURL(_ text: String, ext: String) -> URL {
+        Self.cacheDir.appendingPathComponent(Backend.sha256(text + (fast ? "|fast" : "")) + "." + ext)
     }
+    /// Dopo una correzione di pronuncia le frasi salvate sul telefono vanno rifatte.
+    static func clearCache() { try? FileManager.default.removeItem(at: cacheDir) }
 
-    func say(_ text: String) {
+    /// Dice i pezzi uno dopo l'altro. Una frase nuova interrompe quella in corso.
+    private func speak(_ parts: [String]) {
         guard enabled else { return }
         turn += 1
         let mine = turn
         player?.stop()
         if engineReady { node.stop() }
         if synth.isSpeaking { synth.stopSpeaking(at: .word) }
-        guard useEleven, Backend.shared.isConfigured else { sayApple(text); return }
+        guard useEleven, Backend.shared.isConfigured else { sayApple(parts.joined(separator: " ")); return }
         Task { @MainActor in
-            // 1. già detta su questo telefono: parte subito, gratis
-            let wav = Self.cacheURL(text, ext: "wav"), mp3 = Self.cacheURL(text)
-            if let cached = (try? Data(contentsOf: wav)) ?? (try? Data(contentsOf: mp3)) {
-                play(cached)
+            for (i, part) in parts.enumerated() {
+                guard mine == turn else { return }
+                if await sayEleven(part, turn: mine) { continue }
+                // niente rete o server fermo: il resto lo dice la voce Apple
+                if mine == turn { sayApple(parts[i...].joined(separator: " ")) }
                 return
             }
-            // 2. in streaming: parla mentre ElevenLabs genera la frase
-            if await stream(text, turn: mine) { return }
-            guard mine == turn else { return }
-            // 3. riserva: la frase intera in mp3, poi la voce Apple
-            if let audio = await elevenAudio(text), mine == turn, play(audio) { return }
-            if mine == turn { sayApple(text) }
         }
     }
 
-    @discardableResult
-    private func play(_ audio: Data) -> Bool {
+    /// Un pezzo con la voce ElevenLabs; torna quando ha finito di parlare. false = non è riuscito.
+    private func sayEleven(_ text: String, turn mine: Int) async -> Bool {
+        // 1. già detta su questo telefono
+        if let cached = (try? Data(contentsOf: cacheURL(text, ext: "wav"))) ?? (try? Data(contentsOf: cacheURL(text, ext: "mp3"))) {
+            return await playAndWait(cached, turn: mine)
+        }
+        // 2. dal server: già detta da qualcuno (gratis) o nuova, in streaming
+        if let ok = await stream(text, turn: mine) { return ok }
+        // 3. riserva: frase intera in mp3
+        guard mine == turn, let audio = await request(text, stream: false) else { return false }
+        try? audio.data.write(to: cacheURL(text, ext: audio.ext))
+        return await playAndWait(audio.data, turn: mine)
+    }
+
+    private func request(_ text: String, stream: Bool) async -> (data: Data, ext: String)? {
+        guard let req = await voiceRequest(["text": text, "stream": stream, "fast": fast]),
+              let result = try? await URLSession.shared.data(for: req),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200, !result.0.isEmpty else { return nil }
+        return (result.0, (result.1.mimeType ?? "").contains("wav") ? "wav" : "mp3")
+    }
+
+    private func voiceRequest(_ body: [String: Any]) async -> URLRequest? {
+        guard let base = AppConfig.supabaseURL, let token = await Backend.shared.accessToken() else { return nil }
+        var req = URLRequest(url: base.appendingPathComponent("functions/v1/voce"), timeoutInterval: 8)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return req
+    }
+
+    private func playAndWait(_ audio: Data, turn mine: Int) async -> Bool {
         guard let p = try? AVAudioPlayer(data: audio) else { return false }
         activateSession()
         player = p
         p.play()
+        try? await Task.sleep(for: .seconds(p.duration + 0.05))
         return true
     }
 
     private func activateSession() {
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
+    }
+
+    // MARK: - Pronuncia condivisa (Console › Pronuncia)
+
+    struct Rule: Decodable, Identifiable, Hashable {
+        var word: String
+        var sayAs: String
+        var id: String { word }
+    }
+
+    static func rules() async -> [Rule] {
+        guard let req = await shared.voiceRequest(["task": "lexicon"]),
+              let result = try? await URLSession.shared.data(for: req) else { return [] }
+        struct Out: Decodable { var rules: [Rule] }
+        let d = JSONDecoder()
+        d.keyDecodingStrategy = .convertFromSnakeCase
+        return (try? d.decode(Out.self, from: result.0))?.rules ?? []
+    }
+
+    /// Salva come si dice una parola (vuoto = toglie la regola). Vale per tutti gli utenti.
+    @discardableResult
+    static func setRule(word: String, say: String) async -> Bool {
+        guard let req = await shared.voiceRequest(["task": "lexicon_set", "word": word, "say": say]),
+              let result = try? await URLSession.shared.data(for: req),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200 else { return false }
+        clearCache()
+        return true
     }
 
     // MARK: - Streaming (PCM 16 bit, 24 kHz, mono)
@@ -103,20 +163,23 @@ final class Voice {
     private static let sampleRate = 24_000.0
     private static let pcm = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false)!
 
-    /// Chiede la frase in streaming e la suona mentre arriva (parte dopo ~0,2 s di audio).
-    /// Alla fine la salva come WAV, così la prossima volta è istantanea. false = non è partita: si usa la riserva.
-    private func stream(_ text: String, turn mine: Int) async -> Bool {
-        guard let base = AppConfig.supabaseURL, let token = await Backend.shared.accessToken() else { return false }
-        var req = URLRequest(url: base.appendingPathComponent("functions/v1/voce"), timeoutInterval: 8)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "stream": true])
-        guard let result = try? await URLSession.shared.bytes(for: req),
-              (result.1 as? HTTPURLResponse)?.statusCode == 200,
-              (result.1.mimeType ?? "").contains("pcm") else { return false }
+    /// Chiede la frase al server. Se è già stata detta da qualcuno arriva intera (WAV, gratis); se è nuova arriva
+    /// in streaming e si suona mentre arriva. Torna quando ha finito di parlare. nil = il server non ha risposto.
+    private func stream(_ text: String, turn mine: Int) async -> Bool? {
+        guard let req = await voiceRequest(["text": text, "stream": true, "fast": fast]),
+              let result = try? await URLSession.shared.bytes(for: req),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         let bytes = result.0
+        let mime = result.1.mimeType ?? ""
+
+        // frase condivisa: arriva tutta, la si salva e la si suona
+        if !mime.contains("pcm") {
+            var data = Data()
+            do { for try await b in bytes { data.append(b) } } catch { return nil }
+            guard !data.isEmpty else { return nil }
+            try? data.write(to: cacheURL(text, ext: mime.contains("wav") ? "wav" : "mp3"))
+            return await playAndWait(data, turn: mine)
+        }
 
         if !engineReady {
             engine.attach(node)
@@ -124,12 +187,12 @@ final class Voice {
             engineReady = true
         }
         activateSession()
-        guard (try? engine.start()) != nil else { return false }
+        guard (try? engine.start()) != nil else { return nil }
         node.stop()
 
         let chunk = Int(Self.sampleRate * 0.2) * 2           // 0,2 s di audio a 16 bit
         var pending = Data(), all = Data()
-        var started = false
+        var startedAt: Date?
         func flush() {
             let even = pending.count - pending.count % 2
             guard even > 0 else { return }
@@ -137,7 +200,7 @@ final class Voice {
             schedule(piece)
             all.append(piece)
             pending.removeFirst(even)
-            if !started { node.play(); started = true }
+            if startedAt == nil { node.play(); startedAt = Date() }
         }
         do {
             for try await byte in bytes {
@@ -146,11 +209,15 @@ final class Voice {
                 if pending.count >= chunk { flush() }
             }
         } catch {
-            if !started { return false }
+            if startedAt == nil { return nil }
         }
         flush()
-        guard started else { return false }
-        try? Self.wav(all).write(to: Self.cacheURL(text, ext: "wav"))
+        guard let startedAt else { return nil }
+        try? Self.wav(all).write(to: cacheURL(text, ext: "wav"))
+        // aspetta che finisca di parlare prima del pezzo dopo
+        let total = Double(all.count / 2) / Self.sampleRate
+        let left = total - Date().timeIntervalSince(startedAt)
+        if left > 0 { try? await Task.sleep(for: .seconds(left + 0.05)) }
         return true
     }
 

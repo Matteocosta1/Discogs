@@ -11,7 +11,8 @@ struct ConsoleView: View {
     @AppStorage("userName") private var userName = ""
     @AppStorage("voiceID") private var voiceID = Voice.systemChoice
     @AppStorage("suoni") private var suoni = true
-    @AppStorage("voceElevenLabs") private var eleven = true
+    @AppStorage("voceModo") private var voceModo = (UserDefaults.standard.object(forKey: "voceElevenLabs") as? Bool == false ? "apple" : "eleven")
+    @AppStorage("voceVeloce") private var veloce = false
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -43,28 +44,40 @@ struct ConsoleView: View {
                     LabeledContent("Spesa AI (tutti i dischi)", value: discs.reduce(0) { $0 + $1.aiCost }.formatted(.currency(code: "EUR")))
                 }
                 Section {
-                    Toggle("Ti dice il disco a voce", isOn: $voice)
-                    Toggle("Voce Vinyl Hustler (ElevenLabs)", isOn: $eleven)
-                    Toggle("Suoni dell'interfaccia", isOn: $suoni)
-                    HStack {
-                        Text("Ti chiama")
-                        TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)
+                    Picker("Voce", selection: $voceModo) {
+                        Text("Vinyl Hustler").tag("eleven")
+                        Text("Apple").tag("apple")
+                        Text("Nessuna").tag("off")
                     }
-                    Picker(eleven ? "Voce di riserva (Apple)" : "Voce", selection: $voiceID) {
-                        Text("Quella di sistema (Impostazioni)").tag(Voice.systemChoice)
-                        Text("La migliore italiana").tag("")
-                        ForEach(Voice.italianVoices, id: \.identifier) { v in
-                            Text(Voice.label(v)).tag(v.identifier)
+                    .pickerStyle(.segmented)
+                    .onChange(of: voceModo) { _, m in if m != "off" { voice = true } }
+                    if voceModo != "off" {
+                        HStack {
+                            Text("Ti chiama")
+                            TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)
                         }
                     }
-                    Button("Prova la voce") { Voice.shared.say("Ciao\(userName.isEmpty ? "" : " \(userName)"), questo è Kind Of Blue di Miles Davis.") }
+                    if voceModo == "eleven" {
+                        Toggle("Modello veloce (Flash, metà prezzo)", isOn: $veloce)
+                    }
+                    if voceModo != "off" {
+                        Picker(voceModo == "eleven" ? "Riserva senza rete" : "Voce Apple", selection: $voiceID) {
+                            Text("Quella di sistema (Impostazioni)").tag(Voice.systemChoice)
+                            Text("La migliore italiana").tag("")
+                            ForEach(Voice.italianVoices, id: \.identifier) { v in
+                                Text(Voice.label(v)).tag(v.identifier)
+                            }
+                        }
+                        Button("Prova la voce") { Voice.shared.sayTitles(["Kind Of Blue di Miles Davis"]) }
+                    }
+                    if voceModo == "eleven" {
+                        NavigationLink("Pronuncia") { PronunciaView() }
+                    }
+                    Toggle("Suoni dell'interfaccia", isOn: $suoni)
                 } header: {
                     Text("Voce")
                 } footer: {
-                    Text(Voice.hasNiceVoice
-                         ? "Quando riconosce un disco te lo dice: \"Ciao \(userName.isEmpty ? "Marco" : userName), questo è…\""
-                         : "Per una voce più naturale scarica una voce italiana Avanzata o Premium: Impostazioni › Accessibilità › Contenuti letti › Voci › Italiano. Poi sceglila qui.")
-                        .font(.caption)
+                    Text(footer).font(.caption)
                 }
                 Section("Regole del prezzo") {
                     Stepper("Griglia: \(seller.rules.step.formatted()) €", value: decimal($seller.rules.step), in: 0.5...10, step: 0.5)
@@ -86,8 +99,91 @@ struct ConsoleView: View {
         }
     }
 
+    private var footer: String {
+        switch voceModo {
+        case "eleven": "La voce di Vinyl Hustler. Ogni frase si genera una volta sola per tutti gli utenti: le volte dopo è gratis e parte subito."
+        case "apple": Voice.hasNiceVoice
+            ? "La voce del telefono: gratis, anche senza rete."
+            : "La voce del telefono: gratis, anche senza rete. Per una voce più naturale scarica una voce italiana Avanzata o Premium: Impostazioni › Accessibilità › Contenuti letti › Voci › Italiano."
+        default: "L'app non parla. I dischi trovati li vedi sullo schermo."
+        }
+    }
+
     private func decimal(_ b: Binding<Decimal>) -> Binding<Double> {
         Binding(get: { NSDecimalNumber(decimal: b.wrappedValue).doubleValue },
                 set: { b.wrappedValue = Decimal(string: String(format: "%.2f", $0)) ?? 0 })
+    }
+}
+
+/// Console › Voce › Pronuncia: come deve dire certe parole la voce di Vinyl Hustler.
+/// Le regole valgono per tutti gli utenti.
+struct PronunciaView: View {
+    @State private var rules: [Voice.Rule] = []
+    @State private var loading = true
+    @State private var word = ""
+    @State private var sayAs = ""
+    @State private var editing: Voice.Rule?
+    @State private var failed = false
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Parola scritta (es. Miles Davis)", text: $word)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Come dirla (es. Màils Dèivis)", text: $sayAs)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                HStack {
+                    Button("Ascolta") { Voice.shared.say(sayAs) }
+                        .disabled(sayAs.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Spacer()
+                    Button("Salva") { Task { await save(word, sayAs) } }
+                        .disabled(word.trimmingCharacters(in: .whitespaces).isEmpty || sayAs.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .buttonStyle(.borderless)
+            } header: {
+                Text(editing == nil ? "Nuova regola" : "Modifica")
+            } footer: {
+                Text("Scrivi la parola come si legge in italiano, con gli accenti dove cade la voce. Vale per tutti gli utenti di Vinyl Hustler.")
+            }
+            Section("Regole") {
+                if loading {
+                    ProgressView()
+                } else if rules.isEmpty {
+                    Text("Nessuna regola").foregroundStyle(.secondary)
+                }
+                ForEach(rules) { r in
+                    Button {
+                        editing = r; word = r.word; sayAs = r.sayAs
+                    } label: {
+                        HStack {
+                            Text(r.word).foregroundStyle(Theme.text)
+                            Spacer()
+                            Text(r.sayAs).foregroundStyle(.secondary)
+                        }
+                    }
+                    .swipeActions {
+                        Button("Elimina", role: .destructive) { Task { await save(r.word, "") } }
+                    }
+                }
+            }
+        }
+        .themedBackground()
+        .navigationTitle("Pronuncia")
+        .task { await load() }
+        .alert("Non sono riuscito a salvare", isPresented: $failed) { Button("OK") {} }
+    }
+
+    private func load() async {
+        rules = await Voice.rules()
+        loading = false
+    }
+
+    private func save(_ w: String, _ s: String) async {
+        if await Voice.setRule(word: w.trimmingCharacters(in: .whitespaces), say: s.trimmingCharacters(in: .whitespaces)) {
+            word = ""; sayAs = ""; editing = nil
+            await load()
+        } else {
+            failed = true
+        }
     }
 }
