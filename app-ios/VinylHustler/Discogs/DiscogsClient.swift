@@ -43,6 +43,28 @@ actor RateLimiter {
     }
 }
 
+/// Le risposte del catalogo (release, master, prezzi suggeriti, statistiche, ricerche) valgono 10 minuti:
+/// riconoscere, mostrare le versioni e calcolare il prezzo dello stesso disco chiede la release una volta sola.
+actor ResponseCache {
+    private var items: [URL: (Date, Data)] = [:]
+    private let ttl: TimeInterval = 600
+
+    static func cacheable(_ path: String) -> Bool {
+        ["/releases/", "/masters/", "/marketplace/price_suggestions/", "/marketplace/stats/", "/database/search"]
+            .contains { path.hasPrefix($0) }
+    }
+
+    func get(_ url: URL) -> Data? {
+        guard let item = items[url], Date().timeIntervalSince(item.0) < ttl else { return nil }
+        return item.1
+    }
+
+    func put(_ url: URL, _ data: Data) {
+        if items.count > 500 { items = items.filter { Date().timeIntervalSince($0.value.0) < ttl } }
+        items[url] = (Date(), data)
+    }
+}
+
 /// Client delle API Discogs (porta di DiscogsAPI in vendi.py).
 final class DiscogsClient: @unchecked Sendable {
     static let base = URL(string: "https://api.discogs.com")!
@@ -71,7 +93,19 @@ final class DiscogsClient: @unchecked Sendable {
         guard let credentials else { throw DiscogsError.notLoggedIn }
         var comps = URLComponents(url: Self.base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { comps.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) } }
-        var req = URLRequest(url: comps.url!, timeoutInterval: 30)
+        // Dati del catalogo già chiesti da poco: si riusano, senza consumare una delle 60 richieste al minuto.
+        let cacheable = method == "GET" && ResponseCache.cacheable(path)
+        if cacheable, let hit = await cache.get(comps.url!) { return hit }
+        let data = try await send(method, comps.url!, body: body, credentials: credentials, path: path)
+        if cacheable { await cache.put(comps.url!, data) }
+        return data
+    }
+
+    private let cache = ResponseCache()
+
+    private func send(_ method: String, _ url: URL, body: [String: Any]?, credentials: DiscogsCredentials,
+                      path: String) async throws -> Data {
+        var req = URLRequest(url: url, timeoutInterval: 30)
         req.httpMethod = method
         req.setValue(AppConfig.userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("application/json", forHTTPHeaderField: "Accept")

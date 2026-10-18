@@ -2,6 +2,7 @@
 //   task "lookup": { dhash?: "hex16", reads?: [string] } -> { photo?: Rel, reads: { [read]: Rel } }
 //   task "learn":  { dhash?: "hex16", read?: string, release_id, title?, cover? } -> { ok: true }
 // Solo testo e impronte numeriche, niente foto. La tabella si tocca solo da qui (service role).
+// Una conferma conta una volta per persona (tabella disc_memory_votes): nessuno può "gonfiare" un disco sbagliato.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const MAX_DIST = 6;                 // bit diversi su 64 per dire "è la stessa foto/copertina"
@@ -56,12 +57,12 @@ Deno.serve(async (req) => {
     const cover = body.cover ? String(body.cover).slice(0, 500) : null;
     const big = typeof body.dhash === "string" ? toBig(body.dhash) : null;
     if (big) {
-      await admin.rpc("learn_disc", { p_kind: "dhash", p_key: body.dhash.toLowerCase(), p_dhash: big,
+      await admin.rpc("learn_disc", { p_user: auth.user.id, p_kind: "dhash", p_key: body.dhash.toLowerCase(), p_dhash: big,
                                       p_release: release, p_title: title, p_cover: cover });
     }
     const read = body.read ? norm(String(body.read)) : "";
     if (read.length >= 3) {
-      await admin.rpc("learn_disc", { p_kind: "read", p_key: read.slice(0, 200), p_dhash: null,
+      await admin.rpc("learn_disc", { p_user: auth.user.id, p_kind: "read", p_key: read.slice(0, 200), p_dhash: null,
                                       p_release: release, p_title: title, p_cover: cover });
     }
     return json({ ok: true });

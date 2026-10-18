@@ -119,6 +119,7 @@ struct ConsoleView: View {
 /// Le regole valgono per tutti gli utenti.
 struct PronunciaView: View {
     @State private var rules: [Voice.Rule] = []
+    @State private var admin = false
     @State private var loading = true
     @State private var word = ""
     @State private var sayAs = ""
@@ -127,6 +128,49 @@ struct PronunciaView: View {
 
     var body: some View {
         Form {
+            if admin {
+                editor
+            } else if !loading {
+                Section {
+                    Text("Le regole di pronuncia valgono per tutti gli utenti: le cambia solo l'amministratore.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Section("Regole") {
+                if loading {
+                    ProgressView()
+                } else if rules.isEmpty {
+                    Text("Nessuna regola").foregroundStyle(.secondary)
+                }
+                ForEach(rules) { r in
+                    if admin {
+                        Button {
+                            editing = r; word = r.word; sayAs = r.sayAs
+                        } label: { row(r) }
+                        .swipeActions {
+                            Button("Elimina", role: .destructive) { Task { await save(r.word, "") } }
+                        }
+                    } else {
+                        row(r)
+                    }
+                }
+            }
+        }
+        .themedBackground()
+        .navigationTitle("Pronuncia")
+        .task { await load() }
+        .alert("Non sono riuscito a salvare", isPresented: $failed) { Button("OK") {} }
+    }
+
+    private func row(_ r: Voice.Rule) -> some View {
+        HStack {
+            Text(r.word).foregroundStyle(Theme.text)
+            Spacer()
+            Text(r.sayAs).foregroundStyle(.secondary)
+        }
+    }
+
+    private var editor: some View {
             Section {
                 TextField("Parola scritta (es. Miles Davis)", text: $word)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -145,36 +189,12 @@ struct PronunciaView: View {
             } footer: {
                 Text("Scrivi la parola come si legge in italiano, con gli accenti dove cade la voce. Vale per tutti gli utenti di Vinyl Hustler.")
             }
-            Section("Regole") {
-                if loading {
-                    ProgressView()
-                } else if rules.isEmpty {
-                    Text("Nessuna regola").foregroundStyle(.secondary)
-                }
-                ForEach(rules) { r in
-                    Button {
-                        editing = r; word = r.word; sayAs = r.sayAs
-                    } label: {
-                        HStack {
-                            Text(r.word).foregroundStyle(Theme.text)
-                            Spacer()
-                            Text(r.sayAs).foregroundStyle(.secondary)
-                        }
-                    }
-                    .swipeActions {
-                        Button("Elimina", role: .destructive) { Task { await save(r.word, "") } }
-                    }
-                }
-            }
-        }
-        .themedBackground()
-        .navigationTitle("Pronuncia")
-        .task { await load() }
-        .alert("Non sono riuscito a salvare", isPresented: $failed) { Button("OK") {} }
     }
 
     private func load() async {
-        rules = await Voice.rules()
+        let out = await Voice.rules()
+        rules = out.rules
+        admin = out.admin
         loading = false
     }
 

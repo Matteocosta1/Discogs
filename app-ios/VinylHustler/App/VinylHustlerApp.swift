@@ -29,6 +29,7 @@ struct VinylHustlerApp: App {
 /// Le 5 sezioni: Foto, Bozze, Magazzino, Ordini, Console.
 struct RootView: View {
     @Environment(Seller.self) private var seller
+    @Environment(\.modelContext) private var context
     @Query(filter: #Predicate<Disc> { $0.statusRaw == "daControllare" || $0.statusRaw == "daConfermare" })
     private var toCheck: [Disc]
     @AppStorage("selectedTab") private var tab = 0
@@ -45,6 +46,7 @@ struct RootView: View {
         .overlay {
             if splash { SplashView().transition(.opacity) }
         }
+        .task { seller.startup(context: context) }
         .task {
             // all'apertura il marchio si accende come un neon, col suono d'avvio di JARVIS, poi sfuma
             Suoni.apertura()

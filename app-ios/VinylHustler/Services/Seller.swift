@@ -167,7 +167,7 @@ final class Seller {
     /// (o la release non ha un master) resta solo la proposta, e il tasto "Versioni" non compare.
     func loadVersions(_ disc: Disc) async {
         guard let rid = disc.releaseID, let best = disc.candidates.first(where: { $0.id == rid }) else { return }
-        guard let master = (try? await client.release(rid))?.masterId,
+        guard let master = (try? await client.release(rid, currency: currency))?.masterId,
               let versions = try? await client.masterVersions(master) else {
             if disc.releaseID == rid { disc.candidates = [best] }
             return
@@ -313,11 +313,50 @@ final class Seller {
     /// RIFAI: il disco sparisce (foto comprese), come se non fosse mai stato fotografato.
     /// Resta solo come "tolto" nel database: cancellarlo mentre è sullo schermo farebbe chiudere l'app.
     func discard(_ disc: Disc) {
+        dropPhotos(disc)
+        disc.status = .tolto
+        disc.reason = "Rifatto"
+    }
+
+    /// Cancella le foto del disco dal telefono (la scheda poi mostra la copertina di Discogs).
+    func dropPhotos(_ disc: Disc) {
         for f in disc.photoFiles { try? FileManager.default.removeItem(at: AppFolders.photos.appendingPathComponent(f)) }
         disc.photoFiles = []
         disc.photoKinds = []
-        disc.status = .tolto
-        disc.reason = "Rifatto"
+    }
+
+    // MARK: - All'avvio
+
+    /// Pulizia e ripresa, a ogni apertura dell'app:
+    /// - i dischi rimasti su "Sto guardando…" (app chiusa a metà) si riconoscono di nuovo;
+    /// - le foto dei dischi già su Discogs, venduti o tolti si cancellano, e anche i file che nessun disco usa più.
+    func startup(context: ModelContext) {
+        guard let all = try? context.fetch(FetchDescriptor<Disc>()) else { return }
+        var used = Set<String>()
+        for d in all {
+            switch d.status {
+            case .inVendita, .bozza, .tolto:
+                dropPhotos(d)
+            case .inLavorazione:
+                let images = photos(of: d)
+                if images.isEmpty {
+                    d.status = .daControllare
+                    d.reason = "Riconoscimento interrotto: fai un'altra foto"
+                } else {
+                    working += 1
+                    let video = d.photoKinds.first == PhotoKind.fotogramma.rawValue
+                    Task { await queue.run { await self.recognize(d, images: images, video: video, context: context) } }
+                }
+            default:
+                break
+            }
+            used.formUnion(d.photoFiles)
+        }
+        let folder = AppFolders.photos
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] where !used.contains(name) {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+        }
+        try? context.save()
     }
 
     func publish(_ disc: Disc, status: String = "For Sale") async {
@@ -327,6 +366,7 @@ final class Seller {
                                                             price: price, externalID: disc.externalID,
                                                             location: disc.box, status: status)
             disc.status = status == "Draft" ? .bozza : .inVendita
+            dropPhotos(disc)                 // è su Discogs: la foto non serve più, libera spazio
         } catch DiscogsError.uncertain(let m) {
             lastError = "Esito incerto per \(disc.releaseTitle): \(m). Premi Verifica prima di riprovare."
         } catch {

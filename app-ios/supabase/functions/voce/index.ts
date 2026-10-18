@@ -6,8 +6,10 @@
 //   2. se la frase è già stata generata per qualcuno, si restituisce quella (WAV, bucket "voce"): gratis
 //   3. altrimenti ElevenLabs: in streaming (PCM 24 kHz, l'app parla subito) o mp3 intero;
 //      intanto la si salva nel bucket, così la prossima volta è gratis per tutti.
-// POST { task: "lexicon" }               -> { rules: [{ word, say_as }] }
-// POST { task: "lexicon_set", word, say } -> salva una regola (say vuoto = la toglie)
+// POST { task: "lexicon" }               -> { rules: [{ word, say_as }], admin }
+// POST { task: "lexicon_set", word, say } -> salva una regola (say vuoto = la toglie). Solo amministratori.
+// Tetto: ogni utente genera al mese al massimo profiles.voice_monthly_chars caratteri NUOVI
+// (le frasi già in memoria sono gratis e non contano). Oltre il tetto risponde 402 e l'app usa la voce Apple.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const VOICE_ID = "37FWDeENZrUWBEHOcBcO";          // la voce di Vinyl Hustler (non quella di JARVIS)
@@ -52,13 +54,16 @@ Deno.serve(async (req) => {
   const { data: auth } = await admin.auth.getUser(jwt);
   if (!auth?.user) return json({ error: "accesso richiesto" }, 401);
   const body = await req.json().catch(() => ({}));
+  const { data: profile } = await admin.from("profiles").select("is_admin, voice_monthly_chars").eq("id", auth.user.id).maybeSingle();
+  const isAdmin = profile?.is_admin === true;
 
   // --- pronuncia condivisa ---
   if (body.task === "lexicon") {
     const { data } = await admin.from("voice_lexicon").select("word, say_as").order("word");
-    return json({ rules: data ?? [] });
+    return json({ rules: data ?? [], admin: isAdmin });
   }
   if (body.task === "lexicon_set") {
+    if (!isAdmin) return json({ error: "la pronuncia la cambia solo l'amministratore" }, 403);
     const word = String(body.word ?? "").trim().toLowerCase().slice(0, 100);
     const say = String(body.say ?? "").trim().slice(0, 150);
     if (!word) return json({ error: "parola mancante" }, 400);
@@ -83,6 +88,14 @@ Deno.serve(async (req) => {
   const hitMp3 = await admin.storage.from("voce").download(`${name}.mp3`);
   if (hitMp3.data) return new Response(hitMp3.data, { headers: { "Content-Type": "audio/mpeg", "X-Voce": "condivisa" } });
 
+  // tetto del mese: solo per le frasi nuove
+  const month = new Date().toISOString().slice(0, 7) + "-01";
+  const { data: usage } = await admin.from("usage_monthly").select("voice_chars")
+    .eq("user_id", auth.user.id).eq("month", month).maybeSingle();
+  if (Number(usage?.voice_chars ?? 0) + text.length > Number(profile?.voice_monthly_chars ?? 20000)) {
+    return json({ error: "tetto voce del mese raggiunto" }, 402);
+  }
+
   const stream = body.stream === true;
   const url = stream
     ? `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream?output_format=pcm_24000`
@@ -92,7 +105,11 @@ Deno.serve(async (req) => {
     headers: { "xi-api-key": key, "Content-Type": "application/json" },
     body: JSON.stringify({ text, model_id: model, language_code: "it", voice_settings: { stability: 0.5, similarity_boost: 0.8 } }),
   });
-  if (!res.ok || !res.body) return json({ error: `ElevenLabs ${res.status}: ${(await res.text()).slice(0, 300)}` }, 502);
+  if (!res.ok || !res.body) {
+    console.error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    return json({ error: "voce non disponibile" }, 502);
+  }
+  await admin.rpc("add_voice_usage", { p_user: auth.user.id, p_chars: text.length });
 
   // una copia va all'app, l'altra si salva per tutti (finita la frase)
   const [toApp, toStore] = res.body.tee();

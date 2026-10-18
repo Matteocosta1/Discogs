@@ -162,7 +162,10 @@ Deno.serve(async (req) => {
   } else {
     chosen = await scan(SONNET);
   }
-  if (chosen.error && chosen.records.length === 0) return json({ error: chosen.error }, 502);
+  if (chosen.error && chosen.records.length === 0) {
+    console.error(chosen.error);                       // il dettaglio resta nei log, all'app solo il messaggio
+    return json({ error: "AI non disponibile, riprova tra poco" }, 502);
+  }
   const records = chosen.records;
   const cost = chosen.cost;
   const clean = (v: unknown) => String(v ?? "").trim();

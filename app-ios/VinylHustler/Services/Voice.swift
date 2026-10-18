@@ -136,16 +136,18 @@ final class Voice {
         var id: String { word }
     }
 
-    static func rules() async -> [Rule] {
+    /// Le regole, e se chi chiede può cambiarle (solo gli amministratori).
+    static func rules() async -> (rules: [Rule], admin: Bool) {
         guard let req = await shared.voiceRequest(["task": "lexicon"]),
-              let result = try? await URLSession.shared.data(for: req) else { return [] }
-        struct Out: Decodable { var rules: [Rule] }
+              let result = try? await URLSession.shared.data(for: req) else { return ([], false) }
+        struct Out: Decodable { var rules: [Rule]; var admin: Bool? }
         let d = JSONDecoder()
         d.keyDecodingStrategy = .convertFromSnakeCase
-        return (try? d.decode(Out.self, from: result.0))?.rules ?? []
+        guard let out = try? d.decode(Out.self, from: result.0) else { return ([], false) }
+        return (out.rules, out.admin ?? false)
     }
 
-    /// Salva come si dice una parola (vuoto = toglie la regola). Vale per tutti gli utenti.
+    /// Salva come si dice una parola (vuoto = toglie la regola). Vale per tutti gli utenti. Solo amministratori.
     @discardableResult
     static func setRule(word: String, say: String) async -> Bool {
         guard let req = await shared.voiceRequest(["task": "lexicon_set", "word": word, "say": say]),
