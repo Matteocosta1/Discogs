@@ -1,6 +1,6 @@
 // voce — fa parlare Vinyl Hustler con la voce ElevenLabs scelta da Alessandro.
 // La chiave sta SOLO qui sul server (secret ELEVENLABS_API_KEY), mai nell'app.
-// POST { text } con la sessione dell'utente -> audio/mpeg.
+// POST { text, stream? } con la sessione dell'utente -> audio/mpeg, oppure PCM in streaming.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const VOICE_ID = "37FWDeENZrUWBEHOcBcO";          // la voce di Vinyl Hustler (non quella di JARVIS)
@@ -26,9 +26,14 @@ Deno.serve(async (req) => {
   const text = String(body.text ?? "").trim().slice(0, MAX_CHARS);
   if (!text) return json({ error: "testo vuoto" }, 400);
 
-  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}?output_format=mp3_44100_128`, {
+  // stream: true -> PCM 16 bit 24 kHz mentre ElevenLabs genera (l'app parla subito); altrimenti mp3 intero
+  const stream = body.stream === true;
+  const url = stream
+    ? `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream?output_format=pcm_24000`
+    : `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}?output_format=mp3_44100_128`;
+  const res = await fetch(url, {
     method: "POST",
-    headers: { "xi-api-key": key, "Content-Type": "application/json", "Accept": "audio/mpeg" },
+    headers: { "xi-api-key": key, "Content-Type": "application/json", "Accept": stream ? "audio/pcm" : "audio/mpeg" },
     body: JSON.stringify({
       text,
       model_id: MODEL,
@@ -37,5 +42,5 @@ Deno.serve(async (req) => {
     }),
   });
   if (!res.ok) return json({ error: `ElevenLabs ${res.status}: ${(await res.text()).slice(0, 300)}` }, 502);
-  return new Response(res.body, { headers: { "Content-Type": "audio/mpeg" } });
+  return new Response(res.body, { headers: { "Content-Type": stream ? "audio/pcm;rate=24000" : "audio/mpeg" } });
 });
