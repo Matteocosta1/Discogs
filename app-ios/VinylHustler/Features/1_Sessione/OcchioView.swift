@@ -31,6 +31,7 @@ struct OcchioView: View {
     @State private var inizioVideo = Date()
     @State private var preparo = false
     @State private var attachTo: Disc?              // "Altra foto": il prossimo scatto va a questo disco
+    @State private var preso = false                // disco appena riconosciuto: il mirino fa "LOCK"
 
     private let tinta = Theme.accent
 
@@ -49,7 +50,8 @@ struct OcchioView: View {
                 AnteprimaOcchio(sessione: motore.sessione)
                     .opacity(agganciato ? 1 : 0)
                     .animation(.easeOut(duration: 0.4), value: agganciato)
-                MirinoOcchio(agganciato: agganciato, scattando: registrando, tinta: tinta)
+                MirinoOcchio(agganciato: agganciato, scattando: registrando, analizzo: seller.working > 0,
+                             preso: preso, tinta: tinta)
                     .allowsHitTesting(false)
                 Color.white.opacity(lampo ? 0.85 : 0).allowsHitTesting(false)
                 VStack(spacing: 10) {
@@ -86,6 +88,15 @@ struct OcchioView: View {
         .statusBarHidden()
         .task { await prepara() }
         .onDisappear { motore.ferma() }
+        // disco riconosciuto: il mirino si accende un attimo ("LOCK")
+        .onChange(of: seen.filter { $0.status == .daConfermare }.count) { old, new in
+            guard new > old else { return }
+            withAnimation(.spring(duration: 0.35, bounce: 0.4)) { preso = true }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.6))
+                withAnimation(.easeOut(duration: 0.5)) { preso = false }
+            }
+        }
     }
 
     // MARK: Pezzi
@@ -358,53 +369,114 @@ struct OcchioView: View {
 struct MirinoOcchio: View {
     let agganciato: Bool
     let scattando: Bool
+    /// Sta riconoscendo un disco: la cornice si stringe sul disco e "aggancia".
+    var analizzo = false
+    /// Disco appena riconosciuto: la cornice si allarga un filo e si accende ("LOCK").
+    var preso = false
     var tinta: Color = Theme.accent
 
+    private var scala: CGFloat { analizzo ? 0.9 : (preso ? 1.03 : 1) }
+    private var etichetta: String {
+        if scattando { return "● REC" }
+        if analizzo { return "AGGANCIO…" }
+        if preso { return "● LOCK" }
+        return agganciato ? "PRONTO" : "…"
+    }
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            Canvas { gc, size in
-                let w = Double(size.width), h = Double(size.height)
-                let c = CGPoint(x: w / 2, y: h / 2)
-                let lato = min(w, h) * 0.78
-                let colore = scattando ? Theme.warn : tinta
-                let x0 = (w - lato) / 2, y0 = (h - lato) / 2
-                let braccio = lato * 0.12
-
-                var angoli = Path()
-                for (ax, ay, dx, dy) in [(x0, y0, 1.0, 1.0), (x0 + lato, y0, -1.0, 1.0), (x0, y0 + lato, 1.0, -1.0), (x0 + lato, y0 + lato, -1.0, -1.0)] {
-                    angoli.move(to: CGPoint(x: ax, y: ay + dy * braccio))
-                    angoli.addLine(to: CGPoint(x: ax, y: ay))
-                    angoli.addLine(to: CGPoint(x: ax + dx * braccio, y: ay))
+        GeometryReader { geo in
+            let lato = min(geo.size.width, geo.size.height) * 0.78
+            ZStack {
+                TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
+                    disegno(t: ctx.date.timeIntervalSinceReferenceDate)
                 }
-                gc.stroke(angoli, with: .color(colore.opacity(0.9)), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-
-                let giro = t * (agganciato ? 0.8 : 2.4)
-                for (r, verso, lung) in [(lato * 0.16, 1.0, 0.6), (lato * 0.21, -1.0, 0.35)] {
-                    var arco = Path()
-                    let inizio = Angle(radians: giro * verso)
-                    arco.addArc(center: c, radius: r, startAngle: inizio, endAngle: inizio + .radians(2 * .pi * lung), clockwise: false)
-                    gc.stroke(arco, with: .color(colore.opacity(0.7)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .scaleEffect(scala)
+                // le scritte sopra gli angoli della cornice
+                HStack {
+                    Text("AF · AUTO")
+                    Spacer()
+                    Text(etichetta).contentTransition(.opacity)
                 }
-                var croce = Path()
-                croce.move(to: CGPoint(x: c.x - 8, y: c.y)); croce.addLine(to: CGPoint(x: c.x + 8, y: c.y))
-                croce.move(to: CGPoint(x: c.x, y: c.y - 8)); croce.addLine(to: CGPoint(x: c.x, y: c.y + 8))
-                gc.stroke(croce, with: .color(colore.opacity(0.8)), lineWidth: 1)
+                .font(Theme.mono(9, .bold)).tracking(1.5)
+                .foregroundStyle((scattando ? Theme.warn : (preso ? Theme.glow : tinta)).opacity(0.85))
+                .frame(width: lato * scala)
+                .position(x: geo.size.width / 2, y: (geo.size.height - lato * scala) / 2 - 12)
+            }
+            .animation(.spring(duration: 0.45, bounce: 0.35), value: scala)
+            .animation(.easeOut(duration: 0.2), value: etichetta)
+        }
+    }
 
-                let p = (t * 0.55).truncatingRemainder(dividingBy: 1)
-                let y = y0 + lato * p
-                gc.fill(Path(CGRect(x: x0, y: y - 1, width: lato, height: 2)), with: .color(colore.opacity(0.55)))
-                let scia = Path(CGRect(x: x0, y: max(y0, y - 40), width: lato, height: min(40, y - y0)))
-                gc.fill(scia, with: .linearGradient(Gradient(colors: [colore.opacity(0), colore.opacity(0.14)]),
-                                                    startPoint: CGPoint(x: 0, y: y - 40), endPoint: CGPoint(x: 0, y: y)))
+    private func disegno(t: Double) -> some View {
+        Canvas { gc, size in
+            let w = Double(size.width), h = Double(size.height)
+            let c = CGPoint(x: w / 2, y: h / 2)
+            let lato = min(w, h) * 0.78
+            let colore = scattando ? Theme.warn : (preso ? Theme.glow : tinta)
+            let x0 = (w - lato) / 2, y0 = (h - lato) / 2
+            let braccio = lato * 0.15
+            let r = 10.0                                          // angoli arrotondati
+            // respiro della luce: lento a riposo, veloce mentre aggancia
+            let respiro = 0.5 + 0.5 * sin(t * (analizzo ? 9 : 2.6))
 
-                for k in 0..<12 {
-                    let ty = y0 + lato * Double(k) / 11
-                    var tacca = Path()
-                    tacca.move(to: CGPoint(x: x0 - 14, y: ty)); tacca.addLine(to: CGPoint(x: x0 - (k % 3 == 0 ? 4 : 8), y: ty))
-                    tacca.move(to: CGPoint(x: x0 + lato + 14, y: ty)); tacca.addLine(to: CGPoint(x: x0 + lato + (k % 3 == 0 ? 4 : 8), y: ty))
-                    gc.stroke(tacca, with: .color(colore.opacity(0.45)), lineWidth: 1)
-                }
+            var angoli = Path()
+            for (ax, ay, dx, dy) in [(x0, y0, 1.0, 1.0), (x0 + lato, y0, -1.0, 1.0), (x0, y0 + lato, 1.0, -1.0), (x0 + lato, y0 + lato, -1.0, -1.0)] {
+                angoli.move(to: CGPoint(x: ax, y: ay + dy * braccio))
+                angoli.addLine(to: CGPoint(x: ax, y: ay + dy * r))
+                angoli.addQuadCurve(to: CGPoint(x: ax + dx * r, y: ay), control: CGPoint(x: ax, y: ay))
+                angoli.addLine(to: CGPoint(x: ax + dx * braccio, y: ay))
+            }
+            // alone dietro gli angoli
+            var alone = gc
+            alone.addFilter(.blur(radius: 4 + 5 * respiro))
+            alone.stroke(angoli, with: .color(colore.opacity(0.35 + 0.45 * respiro)), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+            gc.stroke(angoli, with: .color(colore.opacity(0.95)), style: StrokeStyle(lineWidth: preso ? 3.5 : 3, lineCap: .round))
+
+            // lati tratteggiati tra un angolo e l'altro
+            var lati = Path()
+            let gap = braccio + 14
+            lati.move(to: CGPoint(x: x0 + gap, y: y0)); lati.addLine(to: CGPoint(x: x0 + lato - gap, y: y0))
+            lati.move(to: CGPoint(x: x0 + gap, y: y0 + lato)); lati.addLine(to: CGPoint(x: x0 + lato - gap, y: y0 + lato))
+            lati.move(to: CGPoint(x: x0, y: y0 + gap)); lati.addLine(to: CGPoint(x: x0, y: y0 + lato - gap))
+            lati.move(to: CGPoint(x: x0 + lato, y: y0 + gap)); lati.addLine(to: CGPoint(x: x0 + lato, y: y0 + lato - gap))
+            gc.stroke(lati, with: .color(colore.opacity(0.35)), style: StrokeStyle(lineWidth: 1, dash: [6, 6]))
+
+            // anelli che girano attorno al centro (più veloci mentre aggancia)
+            let giro = t * (analizzo ? 4.5 : (agganciato ? 0.8 : 2.4))
+            for (raggio, verso, lung) in [(lato * 0.16, 1.0, 0.6), (lato * 0.21, -1.0, 0.35)] {
+                var arco = Path()
+                let inizio = Angle(radians: giro * verso)
+                arco.addArc(center: c, radius: raggio, startAngle: inizio, endAngle: inizio + .radians(2 * .pi * lung), clockwise: false)
+                gc.stroke(arco, with: .color(colore.opacity(0.7)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+            }
+            // croce al centro: oscilla mentre aggancia
+            let ang = analizzo ? sin(t * 10) * .pi / 8 : 0
+            var croce = Path()
+            for (dx, dy) in [(1.0, 0.0), (0.0, 1.0)] {
+                let ex = dx * cos(ang) - dy * sin(ang), ey = dx * sin(ang) + dy * cos(ang)
+                croce.move(to: CGPoint(x: c.x - 10 * ex, y: c.y - 10 * ey))
+                croce.addLine(to: CGPoint(x: c.x + 10 * ex, y: c.y + 10 * ey))
+            }
+            gc.stroke(croce, with: .color(colore.opacity(0.9)), lineWidth: 1.5)
+
+            // linea di scansione: veloce mentre aggancia
+            let p = (t * (analizzo ? 1.6 : 0.55)).truncatingRemainder(dividingBy: 1)
+            let y = y0 + lato * p
+            gc.fill(Path(CGRect(x: x0, y: y - 1, width: lato, height: 2)), with: .color(colore.opacity(analizzo ? 0.9 : 0.55)))
+            let scia = Path(CGRect(x: x0, y: max(y0, y - 40), width: lato, height: min(40, y - y0)))
+            gc.fill(scia, with: .linearGradient(Gradient(colors: [colore.opacity(0), colore.opacity(analizzo ? 0.25 : 0.14)]),
+                                                startPoint: CGPoint(x: 0, y: y - 40), endPoint: CGPoint(x: 0, y: y)))
+            if analizzo {
+                gc.fill(Path(CGRect(x: x0, y: y0, width: lato, height: lato)), with: .color(colore.opacity(0.04 + 0.04 * respiro)))
+            }
+
+            // tacche ai lati
+            for k in 0..<12 {
+                let ty = y0 + lato * Double(k) / 11
+                var tacca = Path()
+                tacca.move(to: CGPoint(x: x0 - 14, y: ty)); tacca.addLine(to: CGPoint(x: x0 - (k % 3 == 0 ? 4 : 8), y: ty))
+                tacca.move(to: CGPoint(x: x0 + lato + 14, y: ty)); tacca.addLine(to: CGPoint(x: x0 + lato + (k % 3 == 0 ? 4 : 8), y: ty))
+                gc.stroke(tacca, with: .color(colore.opacity(0.45)), lineWidth: 1)
             }
         }
     }

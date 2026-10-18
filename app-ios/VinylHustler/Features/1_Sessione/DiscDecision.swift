@@ -8,6 +8,7 @@ struct DiscRow: View {
     @Bindable var disc: Disc
     var onRetake: (() -> Void)? = nil
     @State private var flash = false
+    @State private var zap = false              // lampo verde: è appena andato su Discogs
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -30,8 +31,25 @@ struct DiscRow: View {
             .stroke(flash ? Theme.glow : (disc.status == .daConfermare ? Theme.glow.opacity(0.45) : .clear),
                     lineWidth: flash ? 2.5 : 1))
         .shadow(color: Theme.glow.opacity(flash ? 0.55 : 0), radius: flash ? 18 : 0)
+        .overlay {
+            if zap {
+                RadialGradient(colors: [Theme.glow.opacity(0.85), Theme.glow.opacity(0)], center: .bottom,
+                               startRadius: 0, endRadius: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
         .animation(.spring(duration: 0.4, bounce: 0.2), value: disc.statusRaw)
-        .onChange(of: disc.statusRaw) { _, new in
+        .onChange(of: disc.statusRaw) { old, new in
+            // appena online o in bozza: lampo verde che sale dal basso e si spegne
+            if (new == DiscStatus.inVendita.rawValue || new == DiscStatus.bozza.rawValue) && old != new {
+                withAnimation(.easeOut(duration: 0.12)) { zap = true }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(140))
+                    withAnimation(.easeOut(duration: 0.6)) { zap = false }
+                }
+            }
             // riconosciuto o prezzo pronto: la scheda si accende un attimo, come un'icona di JARVIS
             guard new == DiscStatus.daConfermare.rawValue || new == DiscStatus.pronto.rawValue else { return }
             flash = true
@@ -58,6 +76,7 @@ struct DiscRow: View {
         .overlay { if disc.status == .inLavorazione { ScanSweep() } }
         .clipShape(Circle())
         .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
+        .overlay { if disc.status == .daConfermare { NeonRing().padding(-6) } }   // riconosciuto: anello neon che gira
     }
 }
 
@@ -204,8 +223,8 @@ struct DiscActions: View {
             }
         }
         .disabled(busy)
-        .opacity(busy ? 0.5 : 1)
-        .overlay { if busy { ProgressView().tint(Theme.accent) } }
+        .opacity(busy ? 0.75 : 1)
+        .overlay { if busy { ChargeSweep() } }          // si "carica" mentre lavora (prezzo, Discogs)
         .sheet(item: $editor) { req in
             if let lid = disc.listingID {
                 ListingEditor(target: .listing(lid))
@@ -355,6 +374,41 @@ struct AlternativesSheet: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+/// Mentre Vendi / Bozza lavorano: una luce che scorre sui tasti, come una barra che si carica.
+struct ChargeSweep: View {
+    @State private var x: CGFloat = -1
+
+    var body: some View {
+        GeometryReader { g in
+            LinearGradient(colors: [.clear, Theme.glow.opacity(0.55), .white.opacity(0.35), .clear],
+                           startPoint: .leading, endPoint: .trailing)
+                .frame(width: g.size.width * 0.45)
+                .offset(x: x * g.size.width)
+                .blendMode(.plusLighter)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .allowsHitTesting(false)
+        .onAppear { withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: false)) { x = 1.1 } }
+    }
+}
+
+/// L'anello neon che gira attorno alla copertina del disco riconosciuto, come un vinile sul piatto.
+struct NeonRing: View {
+    @State private var giro = false
+
+    var body: some View {
+        Circle()
+            .stroke(AngularGradient(colors: [Theme.glow, Theme.glow.opacity(0), Theme.glow.opacity(0), Theme.glow],
+                                    center: .center),
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round))
+            .shadow(color: Theme.glow.opacity(0.8), radius: 5)
+            .rotationEffect(.degrees(giro ? 360 : 0))
+            .animation(.linear(duration: 1.6).repeatForever(autoreverses: false), value: giro)
+            .onAppear { giro = true }
+            .allowsHitTesting(false)
     }
 }
 

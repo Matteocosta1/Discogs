@@ -12,6 +12,7 @@ struct StatsView: View {
     @State private var orders: [Order] = []
     @State private var loading = true
     @State private var error: String?
+    @State private var bars = false                     // le barre si riempiono quando i conti sono pronti
 
     var body: some View {
         NavigationStack {
@@ -55,6 +56,7 @@ struct StatsView: View {
             var all = first.orders
             if first.pagination.pages > 1, let second = try? await seller.client.orders(page: 2) { all += second.orders }
             withAnimation(.snappy) { orders = all }
+            withAnimation(.timingCurve(0.2, 0.9, 0.3, 1, duration: 1.1).delay(0.25)) { bars = true }
         } catch {
             self.error = error.localizedDescription
         }
@@ -150,7 +152,7 @@ struct StatsView: View {
                             ZStack(alignment: .leading) {
                                 Capsule().fill(Theme.panelHigh)
                                 Capsule().fill(Theme.accent)
-                                    .frame(width: geo.size.width * rate(s, o))
+                                    .frame(width: geo.size.width * (bars ? rate(s, o) : 0))
                                     .shadow(color: Theme.glow.opacity(0.5), radius: 4)
                             }
                         }

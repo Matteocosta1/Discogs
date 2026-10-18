@@ -16,9 +16,17 @@ struct OrdersView: View {
     @State private var loading = false
     @State private var detail: Order?
     private let timer = Timer.publish(every: 180, on: .main, in: .common).autoconnect()
+    /// Preso / Imballato / Spedito, segnati nell'app (sul telefono): 0 = niente, 3 = spedito.
+    @State private var steps: [String: Int] = (UserDefaults.standard.dictionary(forKey: "orderSteps") as? [String: Int]) ?? [:]
 
-    private var open: [Order] { orders.filter { !OrderStyle.closed($0.status) } }
-    private var closed: [Order] { orders.filter { OrderStyle.closed($0.status) } }
+    private func step(_ o: Order) -> Int { steps[o.id] ?? 0 }
+    private var open: [Order] { orders.filter { !OrderStyle.closed($0.status) && step($0) < 3 } }
+    private var closed: [Order] { orders.filter { OrderStyle.closed($0.status) || step($0) >= 3 } }
+
+    private func setStep(_ o: Order, _ v: Int) {
+        steps[o.id] = v
+        UserDefaults.standard.set(steps, forKey: "orderSteps")
+    }
     private var cashed: Double { orders.filter { !$0.status.hasPrefix("Cancelled") }.compactMap { $0.total?.value }.reduce(0, +) }
 
     var body: some View {
@@ -33,7 +41,20 @@ struct OrdersView: View {
                     .padding(16)
                     .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
 
-                    section("DA EVADERE", open, empty: "Nessun ordine da spedire. Quando arriva, ti avviso.")
+                    if open.isEmpty && !loading {
+                        RadarCard()
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("DA EVADERE").font(.system(size: 13)).foregroundStyle(Theme.muted).padding(.leading, 16)
+                            ForEach(open) { o in
+                                OpenOrderCard(order: o, box: box(for: o), step: step(o), currency: seller.currency,
+                                              onOpen: { Suoni.tocco(); detail = o },
+                                              onStep: { v in withAnimation(.spring(duration: 0.4)) { setStep(o, v) } })
+                                    .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
+                                                            removal: .move(edge: .trailing).combined(with: .opacity)))
+                            }
+                        }
+                    }
                     section("SPEDITI E CHIUSI", closed, empty: nil)
                 }
                 .padding(.horizontal, 16)
@@ -84,7 +105,8 @@ struct OrdersView: View {
 
     /// Una scheda: copertina tonda, cosa e a chi, importo in pastiglia, da dove prelevarlo.
     private func card(_ o: Order) -> some View {
-        let style = OrderStyle(o.status)
+        // spedito nell'app (Preso → Imballato → Spedito) ma su Discogs ancora da spedire
+        let style = OrderStyle(step(o) >= 3 && !OrderStyle.closed(o.status) ? "Shipped" : o.status)
         let first = o.items.first
         return HStack(spacing: 14) {
             AsyncImage(url: first?.release.thumbnail.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
@@ -153,6 +175,168 @@ extension Error {
     /// Una richiesta annullata (cambi scheda mentre carica): niente avviso.
     var isCancellation: Bool {
         self is CancellationError || (self as? URLError)?.code == .cancelled
+    }
+}
+
+/// Nessun ordine da spedire: un radar verde che gira, in ascolto su Discogs.
+struct RadarCard: View {
+    @State private var giro = false
+    @State private var ping = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle().fill(RadialGradient(colors: [Color(red: 0.04, green: 0.07, blue: 0.05), .black], center: .center,
+                                             startRadius: 0, endRadius: 75))
+                Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 1)
+                Circle().stroke(Theme.accent.opacity(0.18), lineWidth: 1).padding(25)
+                Circle().stroke(Theme.accent.opacity(0.18), lineWidth: 1).padding(50)
+                Rectangle().fill(Theme.accent.opacity(0.15)).frame(width: 1)
+                Rectangle().fill(Theme.accent.opacity(0.15)).frame(height: 1)
+                Circle()
+                    .fill(AngularGradient(colors: [Theme.glow.opacity(0.45), Theme.glow.opacity(0), .clear, .clear], center: .center))
+                    .rotationEffect(.degrees(giro ? 360 : 0))
+                    .animation(.linear(duration: 3.2).repeatForever(autoreverses: false), value: giro)
+                ZStack {
+                    Circle().stroke(Theme.glow, lineWidth: 1).frame(width: 24, height: 24)
+                        .scaleEffect(ping ? 1.6 : 0.3).opacity(ping ? 0 : 0.9)
+                        .animation(.easeOut(duration: 1.6).repeatForever(autoreverses: false), value: ping)
+                    Circle().fill(Theme.glow).frame(width: 8, height: 8).shadow(color: Theme.glow, radius: 6)
+                }
+                .offset(x: 30, y: -30)
+            }
+            .frame(width: 150, height: 150)
+            .clipShape(Circle())
+            Text("IN ASCOLTO SU DISCOGS").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.accent)
+            Text("Controllo ogni 3 minuti. Quando un disco si vende, suona e ti dico da quale scatola prenderlo.")
+                .font(.system(size: 13)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 22).padding(.horizontal, 16)
+        .background(Color(red: 0.04, green: 0.043, blue: 0.04), in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).stroke(Theme.accent.opacity(0.12), lineWidth: 1))
+        .onAppear { giro = true; ping = true }
+    }
+}
+
+/// Un ordine da evadere: NUOVO che lampeggia, bordo che respira, "Preleva da …" in grande,
+/// e i tre passi Preso → Imballato → Spedito. Su Spedito parte il furgoncino.
+struct OpenOrderCard: View {
+    let order: Order
+    let box: String?
+    let step: Int
+    let currency: String
+    let onOpen: () -> Void
+    let onStep: (Int) -> Void
+
+    @State private var respiro = false
+    @State private var furgone = false
+
+    private let labels = ["Preso", "Imballato", "Spedito"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button(action: onOpen) {
+                HStack(spacing: 12) {
+                    AsyncImage(url: order.items.first?.release.thumbnail.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                        .frame(width: 52, height: 52).clipShape(Circle())
+                        .overlay(Circle().stroke(Theme.accent, lineWidth: 1.5))
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text("NUOVO").font(Theme.mono(10, .heavy)).tracking(1.5)
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .foregroundStyle(Color.black).background(Theme.glow, in: Capsule())
+                                .opacity(respiro ? 1 : 0.45)
+                            Text("\(OrderStyle.date(order.created)) · \(order.buyer.username)")
+                                .font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
+                        }
+                        Text(order.items.first?.release.description ?? "Ordine \(order.id)")
+                            .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                        if order.items.count > 1 {
+                            Text("+ altri \(order.items.count - 1) dischi").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        }
+                    }
+                    Spacer(minLength: 4)
+                    if let t = order.total {
+                        Text(t.value, format: .currency(code: t.currency ?? currency))
+                            .font(.system(size: 15, weight: .bold))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .foregroundStyle(Theme.money).background(Theme.military, in: Capsule())
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if let box {
+                Label("Preleva da \(box)", systemImage: "shippingbox.fill")
+                    .font(.system(size: 15, weight: .heavy))
+                    .foregroundStyle(Color.black)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.panelHigh)
+                    Capsule().fill(Theme.accent).shadow(color: Theme.glow, radius: 4)
+                        .frame(width: g.size.width * CGFloat(min(step, 3)) / 3)
+                }
+            }
+            .frame(height: 4)
+            .animation(.spring(duration: 0.45), value: step)
+
+            HStack(spacing: 8) {
+                ForEach(0..<3, id: \.self) { k in
+                    let done = step > k
+                    let next = step == k
+                    Button {
+                        guard next else { Suoni.tocco(); return }
+                        if k < 2 {
+                            Suoni.seleziona()
+                            onStep(k + 1)
+                        } else {
+                            Suoni.carica()
+                            withAnimation(.easeIn(duration: 1.0)) { furgone = true }
+                            Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(1000))
+                                Suoni.online()
+                                onStep(3)
+                            }
+                        }
+                    } label: {
+                        Text((done ? "✓ " : "") + labels[k])
+                            .font(.system(size: 13, weight: .bold))
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .foregroundStyle(done ? Theme.money : (next ? Color.black : Theme.muted))
+                            .background(done ? Theme.military : (next ? Theme.accent : Theme.panelHigh),
+                                        in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(14)
+        .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .overlay(alignment: .bottomLeading) {
+            // il furgoncino che attraversa la scheda quando si spedisce
+            Image(systemName: "box.truck.fill")
+                .font(.system(size: 20))
+                .foregroundStyle(Theme.glow)
+                .shadow(color: Theme.glow, radius: 6)
+                .offset(x: furgone ? 420 : -40, y: -6)
+                .opacity(furgone ? 1 : 0)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                .stroke(Theme.glow.opacity(respiro ? 0.9 : 0.4), lineWidth: 1)
+        )
+        .shadow(color: Theme.glow.opacity(respiro ? 0.45 : 0.15), radius: respiro ? 14 : 6)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { respiro = true }
+        }
     }
 }
 
