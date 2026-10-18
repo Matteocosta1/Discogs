@@ -276,10 +276,11 @@ struct ListingEditor: View {
             d.noteText = note
             d.comments = text == generated.trimmingCharacters(in: .whitespacesAndNewlines) ? "" : text
             d.allowOffers = allowOffers
+            Suoni.carica()
             await seller.publish(d, status: status)
             try? context.save()
             if d.listingID != nil {
-                Suoni.riconosciuto()
+                Suoni.online()
                 dismiss()
             } else {
                 error = seller.lastError ?? (d.reason.isEmpty ? "Discogs non ha accettato l'annuncio" : d.reason)
@@ -298,7 +299,7 @@ struct ListingEditor: View {
                     d.noteText = note
                 }
                 try? context.save()
-                Suoni.riconosciuto()
+                Suoni.online()
                 onSaved?(after)
                 dismiss()
             } catch {

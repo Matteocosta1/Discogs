@@ -7,7 +7,10 @@ import UIKit
 ///   «scheda»        parte il riconoscimento ("sto guardando…")
 ///   «schedapronta»  disco riconosciuto
 ///   «apertura»      apertura dell'app (mp3 scelto da Alessandro)
-/// L'errore (non riconosciuto) è un doppio segnale basso generato al volo.
+///   «errore»        non riconosciuto (se manca: doppio segnale basso generato al volo)
+///   «carica»        Vendi o Bozza: l'annuncio sta partendo
+///   «pubblico»      Pubblica tutto: suona mentre pubblica, sfuma alla fine
+/// Suoni di RescopicSound (Pixabay) scelti da Alessandro: tick, scheda, errore, carica, pubblico.
 /// Si spengono in Console › Suoni dell'interfaccia.
 @MainActor
 enum Suoni {
@@ -36,10 +39,34 @@ enum Suoni {
         riproduci("schedapronta", volume: 0.8)
     }
 
+    /// Vendi / Bozza: parte l'annuncio.
+    static func carica() { riproduci("carica", volume: 0.6) }
+
+    /// L'annuncio è su Discogs.
+    static func online() { riproduci("schedapronta", volume: 0.8) }
+
+    /// Pubblica tutto: il suono gira mentre pubblica; fine() lo sfuma.
+    static func pubblico() {
+        guard attivi, let p = lettore("pubblico", volume: 0.6) else { return }
+        lettorePubblico?.stop()
+        p.numberOfLoops = -1
+        lettorePubblico = p
+        p.play()
+    }
+
+    static func fine() {
+        guard let p = lettorePubblico else { return }
+        p.setVolume(0, fadeDuration: 0.4)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { p.stop() }
+        lettorePubblico = nil
+        online()
+    }
+
     /// Non riconosciuto.
     static func errore() {
         guard attivi else { return }
         if let p = lettoreScheda, p.isPlaying { p.setVolume(0, fadeDuration: 0.18) }
+        if let p = lettore("errore", volume: 0.6) { tieni(p); p.play(); return }
         let dati = cacheErrore ?? generaErrore()
         cacheErrore = dati
         guard let p = try? AVAudioPlayer(data: dati) else { return }
@@ -51,6 +78,7 @@ enum Suoni {
     // MARK: - Lettori
 
     private static var lettoreScheda: AVAudioPlayer?
+    private static var lettorePubblico: AVAudioPlayer?
     private static var lettori: [AVAudioPlayer] = []
     private static var cacheErrore: Data?
 

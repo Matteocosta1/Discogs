@@ -143,8 +143,10 @@ struct DiscActions: View {
                         }
                     }
                     HStack(spacing: 8) {
-                        Button("Vendi") { run { await seller.sell(disc) } }.buttonStyle(SignalButtonStyle())
-                        Button("Bozza") { run { await seller.sell(disc, draft: true) } }.buttonStyle(SignalButtonStyle(filled: false))
+                        Button("Vendi") { run { Suoni.carica(); await seller.sell(disc); if disc.listingID != nil { Suoni.online() } } }
+                            .buttonStyle(SignalButtonStyle())
+                        Button("Bozza") { run { Suoni.carica(); await seller.sell(disc, draft: true); if disc.listingID != nil { Suoni.online() } } }
+                            .buttonStyle(SignalButtonStyle(filled: false))
                     }
                     Button { editor = EditorRequest(status: "For Sale") } label: {
                         Label("Modifica annuncio", systemImage: "slider.horizontal.3")
@@ -286,7 +288,9 @@ struct DiscActions: View {
             if vendiModo == "scheda" {
                 editor = EditorRequest(status: draft ? "Draft" : "For Sale")
             } else {
+                Suoni.carica()
                 await seller.sell(disc, draft: draft)
+                if disc.listingID != nil { Suoni.online() }
             }
         }
     }

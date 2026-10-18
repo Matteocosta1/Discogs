@@ -131,12 +131,13 @@ struct DraftsView: View {
     private func publishAll() async {
         publishing = true
         defer { publishing = false }
+        Suoni.pubblico()
         await seller.publishReady(ready)
         for l in shownDrafts {
             do { try await seller.draftToSale(listingID: l.id); moved(l) }
             catch { seller.lastError = error.localizedDescription }
         }
-        Suoni.riconosciuto()
+        Suoni.fine()
     }
 
     private func delete(_ l: Listing) async {
