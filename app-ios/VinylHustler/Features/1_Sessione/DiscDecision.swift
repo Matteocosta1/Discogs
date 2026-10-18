@@ -200,12 +200,23 @@ struct DiscActions: View {
             .presentationDetents([.medium, .large])
         }
         .alert("Numero della release Discogs", isPresented: $askRelease) {
-            TextField("discogs.com/release/NUMERO", text: $releaseText).keyboardType(.numberPad)
+            TextField("numero o link discogs.com/release/…", text: $releaseText)
+                .keyboardType(.default)                         // tastiera completa: numeri, lettere, link incollati
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
             Button("Conferma") {
-                if let id = Int(releaseText.filter(\.isNumber)) { run { await seller.assign(disc, releaseID: id) } }
+                if let id = Self.releaseID(releaseText) { run { await seller.assign(disc, releaseID: id) } }
             }
             Button("Annulla", role: .cancel) {}
         }
+    }
+
+    /// "1234567", "r1234567" o un link "discogs.com/release/1234567-Artista-Titolo" -> 1234567.
+    static func releaseID(_ text: String) -> Int? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tail = t.range(of: "release/").map { String(t[$0.upperBound...]) } ?? t
+        let digits = tail.drop { !$0.isNumber }.prefix { $0.isNumber }
+        return Int(digits).flatMap { $0 > 0 ? $0 : nil }
     }
 
     private var reason: some View {
