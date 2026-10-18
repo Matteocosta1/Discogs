@@ -9,6 +9,10 @@ import UIKit
 ///   «apertura»      apertura dell'app (mp3 scelto da Alessandro)
 ///   «carica»        Vendi o Bozza: l'annuncio sta partendo (nuovo, V39)
 ///   «pubblico»      Pubblica tutto: suona mentre pubblica, sfuma alla fine (nuovo, V39)
+///   «seleziona»     note veloci e − / + del prezzo nella scheda annuncio, spunte in Seleziona (nuovo)
+///   «nego»          Discogs rifiuta o non risponde (nuovo)
+///   «elaboro»       Statistiche: mentre fa i conti, sfuma quando sono pronte (nuovo)
+///   nuovo ordine con l'app aperta: il suono di disco pronto (prima era muto)
 /// L'errore (non riconosciuto) è un doppio segnale basso generato al volo.
 /// I due nuovi sono di RescopicSound (Pixabay), scelti da Alessandro; gli altri restano quelli di sempre.
 /// Si spengono in Console › Suoni dell'interfaccia.
@@ -62,6 +66,25 @@ enum Suoni {
         online()
     }
 
+    static func seleziona() { riproduci("seleziona", volume: 0.45) }
+    static func nego() { riproduci("nego", volume: 0.55) }
+    static func nuovoOrdine() { riproduci("schedapronta", volume: 0.8) }
+
+    /// Statistiche: il suono dei dati mentre fa i conti; pronto() lo sfuma.
+    static func elaboro() {
+        guard attivi, let p = lettore("elaboro", volume: 0.5) else { return }
+        lettoreElaboro?.stop()
+        lettoreElaboro = p
+        p.play()
+    }
+
+    static func pronto() {
+        guard let p = lettoreElaboro else { return }
+        p.setVolume(0, fadeDuration: 0.35)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { p.stop() }
+        lettoreElaboro = nil
+    }
+
     /// Non riconosciuto.
     static func errore() {
         guard attivi else { return }
@@ -78,6 +101,7 @@ enum Suoni {
 
     private static var lettoreScheda: AVAudioPlayer?
     private static var lettorePubblico: AVAudioPlayer?
+    private static var lettoreElaboro: AVAudioPlayer?
     private static var lettori: [AVAudioPlayer] = []
     private static var cacheErrore: Data?
 

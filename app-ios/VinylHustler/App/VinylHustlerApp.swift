@@ -54,6 +54,7 @@ struct RootView: View {
             withAnimation(.easeOut(duration: 0.5)) { splash = false }
         }
         .onChange(of: tab) { _, _ in Suoni.tocco() }
+        .onChange(of: seller.lastError) { _, e in if e != nil { Suoni.nego() } }
         .onAppear { if !(0...4).contains(tab) { tab = 0 } }
         .alert(seller.lastError ?? "", isPresented: Binding(get: { seller.lastError != nil },
                                                             set: { if !$0 { seller.lastError = nil } })) {}

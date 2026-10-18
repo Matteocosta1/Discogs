@@ -135,6 +135,10 @@ struct OrdersView: View {
         do {
             let page = try await seller.client.orders()
             await OrderWatcher.notifyNew(page.orders)
+            let before = Set(orders.map(\.id))
+            if !orders.isEmpty, page.orders.contains(where: { !before.contains($0.id) && !OrderStyle.closed($0.status) }) {
+                Suoni.nuovoOrdine()                      // è arrivato un ordine mentre guardi la pagina
+            }
             withAnimation(.snappy) { orders = page.orders }
             error = nil
         } catch {

@@ -158,6 +158,7 @@ struct ListingEditor: View {
     private func stepButton(_ icon: String, action: @escaping () -> Void) -> some View {
         Button {
             action()
+            Suoni.seleziona()
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } label: {
             Image(systemName: icon)
@@ -175,6 +176,7 @@ struct ListingEditor: View {
                 let on = tags.contains(t.it)
                 Button {
                     if on { tags.remove(t.it) } else { tags.insert(t.it) }
+                    Suoni.seleziona()
                     UISelectionFeedbackGenerator().selectionChanged()
                 } label: {
                     Text(t.it)
@@ -283,6 +285,7 @@ struct ListingEditor: View {
                 Suoni.online()
                 dismiss()
             } else {
+                if seller.lastError == nil { Suoni.nego() }   // l'avviso generale suona già da solo
                 error = seller.lastError ?? (d.reason.isEmpty ? "Discogs non ha accettato l'annuncio" : d.reason)
                 seller.lastError = nil
             }
@@ -303,6 +306,7 @@ struct ListingEditor: View {
                 onSaved?(after)
                 dismiss()
             } catch {
+                Suoni.nego()
                 self.error = error.localizedDescription
             }
         }

@@ -48,7 +48,8 @@ struct StatsView: View {
 
     private func load() async {
         loading = true
-        defer { loading = false }
+        Suoni.elaboro()
+        defer { loading = false; Suoni.pronto() }
         do {
             let first = try await seller.client.orders(page: 1)
             var all = first.orders

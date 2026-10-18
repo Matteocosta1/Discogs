@@ -223,6 +223,7 @@ struct WarehouseView: View {
         .onTapGesture {
             guard selecting else { return }              // fuori da Seleziona: titolo = Discogs, tasto a destra = scheda
             if isSelected { selected.remove(l.id) } else { selected.insert(l.id) }
+            Suoni.seleziona()
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
         .swipeActions(edge: .trailing) {
