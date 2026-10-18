@@ -52,7 +52,7 @@ struct DraftsView: View {
                     }
                     ForEach(Array(shownDrafts.enumerated()), id: \.element.id) { i, l in
                         DraftRow(listing: l, lit: lit.contains(l.id), currency: seller.currency, index: i,
-                                 onEdit: { Suoni.click(); editing = l }, onSell: { Suoni.click(); Task { await sell(l) } },
+                                 onEdit: { editing = l }, onSell: { Suoni.click(); Task { await sell(l) } },
                                  onDelete: { Suoni.click(); toDelete = l })
                             .transition(.asymmetric(insertion: .opacity, removal: .move(edge: .trailing).combined(with: .opacity)))
                     }
@@ -99,6 +99,7 @@ struct DraftsView: View {
             } message: {
                 Text("Vanno online subito su Discogs.")
             }
+            .onChange(of: editing?.id) { _, id in if id != nil { Suoni.apri() } }
             .sheet(item: $editing) { l in
                 ListingEditor(target: .listing(l.id)) { after in
                     if after.status == "Draft", let i = drafts.firstIndex(where: { $0.id == after.id }) {

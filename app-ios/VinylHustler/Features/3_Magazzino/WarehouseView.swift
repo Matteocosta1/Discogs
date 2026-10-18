@@ -111,7 +111,7 @@ struct WarehouseView: View {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            Button { Suoni.click(); showStats = true } label: { Image(systemName: "chart.bar.xaxis") }
+            Button { showStats = true } label: { Image(systemName: "chart.bar.xaxis") }
                 .accessibilityLabel("Statistiche")
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -155,6 +155,8 @@ struct WarehouseView: View {
                 Button("Cancella le bozze", role: .destructive) { Task { await deleteAll() } }
             }
             .alert(message ?? "", isPresented: showingMessage) {}
+            .onChange(of: showStats) { _, on in if on { Suoni.apri() } }
+            .onChange(of: editing?.id) { _, id in if id != nil { Suoni.apri() } }
             .sheet(isPresented: $showStats) { StatsView(listings: listings) }
             .sheet(item: $editing) { l in
                 ListingEditor(target: .listing(l.id)) { after in
@@ -218,7 +220,7 @@ struct WarehouseView: View {
         let draft = l.status == "Draft"
         let isSelected = selected.contains(l.id)
         return ListingRow(listing: l, disc: disc(for: l), selecting: selecting, isSelected: isSelected,
-                          currency: seller.currency, onEdit: { Suoni.click(); editing = l })
+                          currency: seller.currency, onEdit: { editing = l })
         .contentShape(Rectangle())
         .onTapGesture {
             guard selecting else { return }              // fuori da Seleziona: titolo = Discogs, tasto a destra = scheda

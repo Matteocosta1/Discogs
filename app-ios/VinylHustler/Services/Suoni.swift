@@ -4,7 +4,9 @@ import UIKit
 /// I suoni dell'interfaccia, gli stessi di JARVIS (file in Resources/Suoni):
 ///   «tick»          tocco su un tasto
 ///   «avvio»         l'app si accende / la fotocamera aggancia
-///   «scheda»        parte il riconoscimento ("sto guardando…")
+///   «cerco»         dopo lo scatto, mentre cerca il disco (RescopicSound "progress 02", scelto da Alessandro)
+///   «apri»          si apre una scheda accessoria: scheda annuncio, Versioni, Statistiche ("deny small")
+///   «click»         salvataggi, Vendi/Bozza, Pubblica e i tocchi che prima erano muti ("select small")
 ///   «schedapronta»  disco riconosciuto
 ///   «apertura»      apertura dell'app (mp3 scelto da Alessandro)
 /// Nei momenti che prima erano muti (Vendi, Pubblica, note veloci, errori di Discogs, nuovo ordine)
@@ -23,18 +25,29 @@ enum Suoni {
         if let p = lettore("apertura", volume: 0.8) { tieni(p); p.play() } else { avvio() }
     }
 
-    /// Parte il riconoscimento.
+    /// Parte il riconoscimento (dopo il click dello scatto): «cerco» gira finché non trova il disco.
     static func guardo() {
-        guard attivi, let p = lettore("scheda", volume: 0.75) else { return }
+        guard attivi, let p = lettore("cerco", volume: 0.6) ?? lettore("scheda", volume: 0.75) else { return }
         lettoreScheda?.stop()
+        p.numberOfLoops = -1
         lettoreScheda = p
         p.play()
     }
 
+    /// Ferma «cerco» sfumando.
+    private static func smettiDiCercare() {
+        guard let p = lettoreScheda, p.isPlaying else { return }
+        p.setVolume(0, fadeDuration: 0.18)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { p.stop() }
+    }
+
+    /// Si apre una scheda accessoria (scheda annuncio, Versioni, Statistiche).
+    static func apri() { riproduci("apri", volume: 0.5) }
+
     /// Disco riconosciuto: il suono del caricamento sfuma e parte quello di "pronto".
     static func riconosciuto() {
         guard attivi else { return }
-        if let p = lettoreScheda, p.isPlaying { p.setVolume(0, fadeDuration: 0.18) }
+        smettiDiCercare()
         riproduci("schedapronta", volume: 0.8)
     }
 
@@ -60,7 +73,7 @@ enum Suoni {
     /// Non riconosciuto.
     static func errore() {
         guard attivi else { return }
-        if let p = lettoreScheda, p.isPlaying { p.setVolume(0, fadeDuration: 0.18) }
+        smettiDiCercare()
         let dati = cacheErrore ?? generaErrore()
         cacheErrore = dati
         guard let p = try? AVAudioPlayer(data: dati) else { return }

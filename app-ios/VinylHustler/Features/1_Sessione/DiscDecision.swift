@@ -225,6 +225,8 @@ struct DiscActions: View {
         .disabled(busy)
         .opacity(busy ? 0.75 : 1)
         .overlay { if busy { ChargeSweep() } }          // si "carica" mentre lavora (prezzo, Discogs)
+        .onChange(of: editor?.id) { _, id in if id != nil { Suoni.apri() } }
+        .onChange(of: alternatives) { _, on in if on { Suoni.apri() } }
         .sheet(item: $editor) { req in
             if let lid = disc.listingID {
                 ListingEditor(target: .listing(lid))
