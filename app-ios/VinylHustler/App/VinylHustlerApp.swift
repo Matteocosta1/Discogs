@@ -26,7 +26,7 @@ struct VinylHustlerApp: App {
     }
 }
 
-/// Le 5 sezioni: Foto, Bozze, Magazzino, Ordini, Console.
+/// Le 5 sezioni: Foto, Bozze, Magazzino, Ordini, Settings.
 struct RootView: View {
     @Environment(Seller.self) private var seller
     @Environment(\.modelContext) private var context
@@ -67,7 +67,7 @@ struct RootView: View {
                 .badge(toCheck.count)
             WarehouseView().tabItem { Label("Magazzino", systemImage: "square.stack.3d.up") }.tag(2)
             OrdersView().tabItem { Label("Ordini", systemImage: "shippingbox") }.tag(3)
-            ConsoleView().tabItem { Label("Console", systemImage: "slider.horizontal.3") }.tag(4)
+            ConsoleView().tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
         }
     }
 }

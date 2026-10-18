@@ -129,7 +129,7 @@ struct ListingEditor: View {
             } header: {
                 Text("Descrizione")
             } footer: {
-                Text("Si scrive da sola con condizione, note e il testo fisso della Console. Puoi correggerla a mano: da lì in poi resta la tua, finché non tocchi Rigenera.")
+                Text("Si scrive da sola con condizione, note e il testo fisso di Settings. Puoi correggerla a mano: da lì in poi resta la tua, finché non tocchi Rigenera.")
             }
 
             Section {

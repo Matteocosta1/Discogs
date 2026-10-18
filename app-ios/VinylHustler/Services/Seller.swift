@@ -11,6 +11,10 @@ final class Seller {
     let client: DiscogsClient
     var username = ""
     var currency = "EUR"
+    /// La valuta impostata sull'account Discogs (quella in cui Discogs legge i prezzi degli annunci).
+    var discogsCurrency = "EUR"
+    /// Settings › Valuta: vuota = quella di Discogs.
+    static let currencies = ["EUR", "USD", "GBP", "CHF", "SEK", "JPY", "CAD", "AUD", "NZD", "MXN", "BRL", "ZAR"]
     private(set) var credentials: DiscogsCredentials? = CredentialStore.load()
     var isLoggedIn: Bool { credentials != nil }
     var rules: PriceRules = UserDefaults.standard.data(forKey: "rules").flatMap { try? JSONDecoder().decode(PriceRules.self, from: $0) } ?? PriceRules() {
@@ -40,8 +44,16 @@ final class Seller {
         do {
             let me = try await client.identity()
             username = me.username
-            currency = try await client.user(me.username).currAbbr ?? "EUR"
+            discogsCurrency = try await client.user(me.username).currAbbr ?? "EUR"
+            let chosen = UserDefaults.standard.string(forKey: "valuta") ?? ""
+            currency = chosen.isEmpty ? discogsCurrency : chosen
         } catch { lastError = error.localizedDescription }
+    }
+
+    /// Settings › Valuta. "" = usa quella dell'account Discogs.
+    func setCurrency(_ code: String) {
+        UserDefaults.standard.set(code, forKey: "valuta")
+        currency = code.isEmpty ? discogsCurrency : code
     }
 
     func logout() {

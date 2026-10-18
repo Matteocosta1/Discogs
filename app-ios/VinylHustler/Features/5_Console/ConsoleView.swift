@@ -1,7 +1,7 @@
 import SwiftData
 import SwiftUI
 
-/// 05 / CONSOLE — account Discogs, accesso AI, voce, contatore API, regole del prezzo.
+/// 05 / SETTINGS (prima "Console") — account, nome, valuta, accesso AI, voce, annunci, regole del prezzo.
 struct ConsoleView: View {
     @Environment(Seller.self) private var seller
     @Query private var discs: [Disc]
@@ -21,11 +21,7 @@ struct ConsoleView: View {
         @Bindable var seller = seller
         NavigationStack {
             Form {
-                Section("Account Discogs") {
-                    LabeledContent("Utente", value: seller.username.isEmpty ? "—" : seller.username)
-                    LabeledContent("Valuta", value: seller.currency)
-                    Button("Esci da Discogs", role: .destructive) { seller.logout() }
-                }
+                accountSection
                 Section("API Discogs · ultimo minuto") {
                     LabeledContent("Richieste", value: "\(apiUsed) / 60")
                     ProgressView(value: Double(apiUsed), total: 60).tint(apiUsed > 50 ? Theme.warn : Theme.accent)
@@ -60,13 +56,38 @@ struct ConsoleView: View {
                 }
             }
             .themedBackground()
-            .navigationTitle("Console")
+            .navigationTitle("Settings")
             .onReceive(timer) { _ in Task { apiUsed = await seller.apiUsedLastMinute() } }
             .task { aiSignedIn = await Backend.shared.accessToken() != nil }
         }
     }
 
     // Il corpo è diviso in pezzi: tutto insieme è troppo per il compilatore di Swift.
+    private var accountSection: some View {
+        Section {
+            HStack {
+                Text("Nome")
+                TextField("come ti chiami", text: $userName).multilineTextAlignment(.trailing)
+                    .foregroundStyle(Theme.glow)
+            }
+            LabeledContent("Account Discogs", value: seller.username.isEmpty ? "—" : seller.username)
+            Picker("Valuta", selection: Binding(get: { UserDefaults.standard.string(forKey: "valuta") ?? "" },
+                                                set: { seller.setCurrency($0) })) {
+                Text("Come su Discogs (\(seller.discogsCurrency))").tag("")
+                ForEach(Seller.currencies, id: \.self) { Text($0).tag($0) }
+            }
+            Button("Cambia account Discogs", role: .destructive) { seller.logout() }
+        } header: {
+            Text("Account")
+        } footer: {
+            Text(seller.currency == seller.discogsCurrency
+                 ? "Il nome è quello con cui ti saluta la voce. La valuta è quella dei prezzi: di solito conviene lasciarla come su Discogs."
+                 : "Attenzione: su Discogs vendi in \(seller.discogsCurrency). L'app calcola i prezzi in \(seller.currency), ma Discogs li legge nella sua valuta: cambiala anche nelle impostazioni di Discogs, altrimenti i prezzi saranno sbagliati.")
+                .font(.caption)
+                .foregroundStyle(seller.currency == seller.discogsCurrency ? Color.secondary : Theme.warn)
+        }
+    }
+
     private var voiceSection: some View {
         Section {
             Picker("Voce", selection: $voceModo) {
@@ -76,12 +97,6 @@ struct ConsoleView: View {
             }
             .pickerStyle(.segmented)
             .onChange(of: voceModo) { _, m in if m != "off" { voice = true } }
-            if voceModo != "off" {
-                HStack {
-                    Text("Ti chiama")
-                    TextField("il tuo nome", text: $userName).multilineTextAlignment(.trailing)
-                }
-            }
             if voceModo == "eleven" {
                 Toggle("Modello veloce (Flash)", isOn: $veloce)
             }

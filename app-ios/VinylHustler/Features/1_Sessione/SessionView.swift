@@ -2,7 +2,7 @@ import AuthenticationServices
 import SwiftData
 import SwiftUI
 
-/// 01 / SESSIONE — posizione, condizione, poi la fotocamera.
+/// 01 / FOTO — posizione, condizione, commenti, poi la fotocamera. Pagina ferma, senza scorrere.
 /// Nella fotocamera: uno scatto o un video, e i dischi vengono riconosciuti subito.
 /// I dischi riconosciuti vanno in Revisione.
 struct SessionView: View {
@@ -37,54 +37,76 @@ struct SessionView: View {
     }
 
 
+    @AppStorage("commentoSessione") private var commento = ""
+    @FocusState private var scrivo: Bool
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
+            // Una pagina sola, ferma: niente da scorrere. La fotocamera prende tutto lo spazio che resta.
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Foto").font(.system(size: 34, weight: .bold)).foregroundStyle(Theme.text)
+                    .padding(.top, 6)
+
+                block("Posizione", .posizione) {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             ForEach(kinds, id: \.self) { kind in kindChip(kind) }
                             Button {
                                 newKind = ""
                                 addingKind = true
                             } label: {
-                                Image(systemName: "plus").font(.system(size: 15, weight: .semibold))
-                                    .frame(width: 40, height: 34)
+                                Image(systemName: "plus").font(.system(size: 14, weight: .semibold))
+                                    .frame(width: 36, height: 30)
                                     .foregroundStyle(Theme.accent)
                                     .background(Theme.panelHigh, in: Capsule())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Aggiungi un contenitore")
                         }
-                        .padding(.vertical, 2)
                     }
                     HStack(spacing: 10) {
-                        Image(systemName: "archivebox.fill").foregroundStyle(Theme.accent)
-                        Text(placeKind).font(.system(size: 17, weight: .semibold))
-                        TextField("numero o nome", text: $placeName).font(.system(size: 17))
+                        Image(systemName: "archivebox.fill").font(.system(size: 14)).foregroundStyle(Theme.accent)
+                        Text(placeKind).font(.system(size: 16, weight: .semibold))
+                        TextField("numero o nome", text: $placeName).font(.system(size: 16))
                             .foregroundStyle(Theme.glow)
+                            .focused($scrivo)
                     }
-                } header: {
-                    InfoHeader(title: "Posizione") { info = .posizione }
                 }
 
-                Section {
+                block("Condizione", .condizione) {
                     gradeRow("Vinile", selection: $mediaRaw)
                     gradeRow("Copertina", selection: $sleeveRaw)
-                } header: {
-                    InfoHeader(title: "Condizione") { info = .condizione }
                 }
 
-                Section {
+                block("Commenti", .commenti) {
+                    TextField("Vale per tutti i dischi che fotografi (es. «Copertina con segni da scaffale»)",
+                              text: $commento, axis: .vertical)
+                        .font(.system(size: 15))
+                        .lineLimit(2...3)
+                        .focused($scrivo)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    InfoHeader(title: "Fotocamera") { info = .fotocamera }
                     cameraButton
                     if !aiReady { AISignInRow { aiReady = true } }
-                } header: {
-                    InfoHeader(title: "Fotocamera") { info = .fotocamera }
                 }
-
+                .frame(maxHeight: .infinity, alignment: .top)
             }
-            .themedBackground()
-            .navigationTitle("Foto")
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Theme.bg.ignoresSafeArea())
+            .ignoresSafeArea(.keyboard, edges: .bottom)       // la tastiera copre la fotocamera, non sposta la pagina
+            .contentShape(Rectangle())
+            .onTapGesture { scrivo = false }
+            .toolbar(.hidden, for: .navigationBar)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Fine") { scrivo = false }.tint(Theme.accent)
+                }
+            }
             .onAppear {                                  // contenitore scelto che non esiste più: si torna al primo
                 if !oldKindsRaw.isEmpty {
                     let extra = oldKindsRaw.split(separator: "|").map(String.init).filter { !Self.fixedKinds.contains($0) && !custom.contains($0) }
@@ -122,22 +144,41 @@ struct SessionView: View {
         }
     }
 
-    /// Il tasto che apre la fotocamera: un riquadro largo con il bagliore verde, solo il simbolo (spiegazioni nella (i)).
+    /// Una sezione: titolo con la (i) e il contenuto in una scheda grigia, compatta.
+    private func block<Content: View>(_ title: String, _ topic: InfoTopic, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            InfoHeader(title: title) { info = topic }
+            VStack(alignment: .leading, spacing: 10) { content() }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        }
+    }
+
+    /// Il tasto che apre la fotocamera: nero, pulito, con pochi dettagli verde Discosizer
+    /// (angoli del mirino, l'obiettivo, una spia). Riempie lo spazio che resta nella pagina.
     private var cameraButton: some View {
         Button { camera = true } label: {
             ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.black)
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(RadialGradient(colors: [Theme.military, Color(red: 0.043, green: 0.075, blue: 0.051)],
-                                         center: .center, startRadius: 0, endRadius: 170))
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Theme.accent.opacity(breathe ? 0.75 : 0.4), lineWidth: 1)
-                Image(systemName: "camera")
-                    .font(.system(size: 40, weight: .regular))
-                    .foregroundStyle(Theme.glow)
-                    .shadow(color: Theme.glow.opacity(breathe ? 0.8 : 0.3), radius: breathe ? 12 : 4)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                Angoli()
+                    .stroke(Theme.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .padding(18)
+                    .opacity(breathe ? 1 : 0.55)
+                VStack(spacing: 10) {
+                    Image(systemName: "camera")
+                        .font(.system(size: 34, weight: .light))
+                        .foregroundStyle(Theme.text)
+                    HStack(spacing: 6) {
+                        Circle().fill(Theme.accent).frame(width: 6, height: 6)
+                            .shadow(color: Theme.glow, radius: breathe ? 4 : 1)
+                        Text("APRI").font(Theme.mono(11, .bold)).tracking(2.5).foregroundStyle(Theme.accent)
+                    }
+                }
             }
-            .frame(height: 120)
-            .shadow(color: Theme.accent.opacity(breathe ? 0.3 : 0.12), radius: 20)
+            .frame(minHeight: 110, maxHeight: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -150,8 +191,8 @@ struct SessionView: View {
     /// Il tipo di contenitore come pastiglia: verde se scelto. Tenendolo premuto si toglie.
     private func kindChip(_ kind: String) -> some View {
         Button { placeKind = kind } label: {
-            Text(kind).font(.system(size: 15, weight: .semibold))
-                .padding(.horizontal, 14).padding(.vertical, 8)
+            Text(kind).font(.system(size: 14, weight: .semibold))
+                .padding(.horizontal, 12).padding(.vertical, 6)
                 .foregroundStyle(kind == placeKind ? Color.black : Theme.text)
                 .background(kind == placeKind ? Theme.accent : Theme.panelHigh, in: Capsule())
         }
@@ -176,8 +217,8 @@ struct SessionView: View {
 
     /// Una riga della condizione (come su Discogs: supporto e copertina): sei pastiglie, quella scelta in verde.
     private func gradeRow(_ title: String, selection: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.system(size: 14)).foregroundStyle(Theme.muted)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.system(size: 13)).foregroundStyle(Theme.muted)
             HStack(spacing: 4) {
                 ForEach(Grade.allCases) { g in
                     let on = selection.wrappedValue == g.rawValue
@@ -187,7 +228,7 @@ struct SessionView: View {
                     } label: {
                         Text(g.rawValue)
                             .font(.system(size: 13, weight: .semibold))
-                            .frame(maxWidth: .infinity, minHeight: 32)
+                            .frame(maxWidth: .infinity, minHeight: 28)
                             .foregroundStyle(on ? Color.black : Theme.text)
                             .background(on ? Theme.accent : Theme.panelHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
@@ -197,7 +238,19 @@ struct SessionView: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+    }
+}
+
+/// I quattro angoli del mirino, verdi: il solo dettaglio colorato del tasto fotocamera.
+struct Angoli: Shape {
+    func path(in r: CGRect) -> Path {
+        let l = min(r.width, r.height) * 0.16
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.minY + l)); p.addLine(to: CGPoint(x: r.minX, y: r.minY)); p.addLine(to: CGPoint(x: r.minX + l, y: r.minY))
+        p.move(to: CGPoint(x: r.maxX - l, y: r.minY)); p.addLine(to: CGPoint(x: r.maxX, y: r.minY)); p.addLine(to: CGPoint(x: r.maxX, y: r.minY + l))
+        p.move(to: CGPoint(x: r.maxX, y: r.maxY - l)); p.addLine(to: CGPoint(x: r.maxX, y: r.maxY)); p.addLine(to: CGPoint(x: r.maxX - l, y: r.maxY))
+        p.move(to: CGPoint(x: r.minX + l, y: r.maxY)); p.addLine(to: CGPoint(x: r.minX, y: r.maxY)); p.addLine(to: CGPoint(x: r.minX, y: r.maxY - l))
+        return p
     }
 }
 

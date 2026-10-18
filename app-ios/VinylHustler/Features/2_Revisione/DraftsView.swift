@@ -38,15 +38,6 @@ struct DraftsView: View {
         Group {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    if !shownDrafts.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("\(shownDrafts.count - lit.count) IN ATTESA")
-                                .font(Theme.mono(11, .bold)).tracking(1.5).foregroundStyle(Theme.warn)
-                                .contentTransition(.numericText())
-                            Text("Su Discogs ma nascoste ai compratori. Si accendono quando le metti in vendita.")
-                                .font(.system(size: 13)).foregroundStyle(Theme.muted)
-                        }
-                    }
                     ForEach(local) { disc in
                         DiscCard(disc: disc)
                     }
@@ -77,8 +68,8 @@ struct DraftsView: View {
                 if publishCount > 0 {
                     Button { askPublish = true } label: {
                         Text(publishing ? "Pubblico…" : "Pubblica \(publishCount)")
-                            .font(.system(size: 17, weight: .bold))
-                            .frame(maxWidth: .infinity, minHeight: 52)
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: 22)
                             .background(alignment: .leading) {
                                 // la barra si riempie man mano che pubblica
                                 GeometryReader { g in
@@ -89,9 +80,11 @@ struct DraftsView: View {
                             }
                     }
                     .buttonStyle(SignalButtonStyle())
-                    .shadow(color: Theme.accent.opacity(0.35), radius: 14)
+                    .controlSize(.small)                       // V51: più piccolo, in proporzione al resto
+                    .frame(width: 210)
+                    .shadow(color: Theme.accent.opacity(0.25), radius: 8)
                     .disabled(publishing)
-                    .padding(.horizontal)
+                    .frame(maxWidth: .infinity)
                     .padding(.bottom, 8)
                 }
             }

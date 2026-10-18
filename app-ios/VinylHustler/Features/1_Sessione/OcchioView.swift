@@ -46,7 +46,7 @@ struct OcchioView: View {
         VStack(spacing: 0) {
             ZStack {
                 Color.black
-                AnteprimaOcchio(sessione: motore.sessione)
+                AnteprimaOcchio(motore: motore)
                     .opacity(agganciato ? 1 : 0)
                     .animation(.easeOut(duration: 0.4), value: agganciato)
                 MirinoOcchio(agganciato: agganciato, scattando: registrando, analizzo: seller.working > 0,
@@ -299,17 +299,24 @@ struct OcchioView: View {
         withAnimation(.easeIn(duration: 0.45).delay(0.06)) { lampo = false }
         stato = "ANALISI"
         motore.scatta { dati in
-            let image = dati.flatMap { OcchioView.riduci($0) }.flatMap(UIImage.init(data:))
+          // il ritaglio (copertina raddrizzata, o il quadrato intorno al disco) si fa fuori dalla coda della fotocamera
+          DispatchQueue.global(qos: .userInitiated).async {
+            let ritaglio = dati.map { Ritaglio.disco($0) }
+            let image = ritaglio.flatMap { OcchioView.riduci($0.dati) }.flatMap(UIImage.init(data:))
+            let tipo = ritaglio?.tipo ?? .intera
             Task { @MainActor in
                 guard let image else { stato = "SCATTO NON RIUSCITO · RIPROVA"; return }
+                if tipo != .intera { stato = tipo == .copertina ? "COPERTINA RITAGLIATA" : "DISCO RITAGLIATO" }
                 if let target = attachTo {
                     seller.addPhoto(image, to: target, context: context)
                     attachTo = nil
                 } else {
                     seller.shoot([image], video: false, place: place, media: media, sleeve: sleeve, context: context)
                 }
-                stato = "INQUADRA UN DISCO"
+                try? await Task.sleep(for: .milliseconds(tipo == .intera ? 0 : 900))
+                if stato.hasSuffix("RITAGLIATA") || stato.hasSuffix("RITAGLIATO") || stato == "ANALISI" { stato = "INQUADRA UN DISCO" }
             }
+          }
         }
     }
 
@@ -495,18 +502,63 @@ struct MirinoOcchio: View {
 // MARK: - Anteprima della fotocamera
 
 struct AnteprimaOcchio: UIViewRepresentable {
-    let sessione: AVCaptureSession
+    let motore: MotoreOcchio
 
+    /// L'anteprima, con sopra il riquadro verde della copertina trovata (come "Scansiona documenti").
     final class Vista: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var anteprima: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+        private let forma = CAShapeLayer()
+        private var mancati = 0
+
+        func prepara() {
+            forma.strokeColor = UIColor(Theme.accent).cgColor
+            forma.fillColor = UIColor(Theme.accent).withAlphaComponent(0.10).cgColor
+            forma.lineWidth = 2.5
+            forma.lineJoin = .round
+            forma.shadowColor = UIColor(Theme.glow).cgColor
+            forma.shadowRadius = 6
+            forma.shadowOpacity = 0.8
+            forma.shadowOffset = .zero
+            forma.opacity = 0
+            layer.addSublayer(forma)
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            forma.frame = bounds
+        }
+
+        /// Angoli in coordinate della fotocamera (0…1); nil = in questo fotogramma non c'è.
+        func disegna(_ punti: [CGPoint]?) {
+            guard let punti, punti.count == 4 else {
+                mancati += 1
+                if mancati >= 3 { forma.opacity = 0 }        // sparisce solo se manca per un attimo (niente sfarfallio)
+                return
+            }
+            mancati = 0
+            let p = punti.map { anteprima.layerPointConverted(fromCaptureDevicePoint: $0) }
+            let percorso = UIBezierPath()
+            percorso.move(to: p[0])
+            for q in p.dropFirst() { percorso.addLine(to: q) }
+            percorso.close()
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.12)
+            forma.path = percorso.cgPath
+            forma.opacity = 1
+            CATransaction.commit()
+        }
     }
 
     func makeUIView(context: Context) -> Vista {
         let v = Vista()
         v.backgroundColor = .black
-        v.anteprima.session = sessione
+        v.anteprima.session = motore.sessione
         v.anteprima.videoGravity = .resizeAspectFill
+        v.prepara()
+        motore.suRiquadro = { [weak v] punti in
+            DispatchQueue.main.async { v?.disegna(punti) }
+        }
         return v
     }
 
@@ -515,10 +567,17 @@ struct AnteprimaOcchio: UIViewRepresentable {
 
 // MARK: - Motore della fotocamera: foto e video veri (lavora su una coda sua, fuori dal thread principale)
 
-final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate, @unchecked Sendable {
+final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate,
+                           AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     let sessione = AVCaptureSession()
     private let foto = AVCapturePhotoOutput()
     private let video = AVCaptureMovieFileOutput()
+    /// I fotogrammi dell'anteprima, per cercare la copertina dal vivo (riquadro verde nel mirino).
+    private let fotogrammi = AVCaptureVideoDataOutput()
+    private let codaRiquadro = DispatchQueue(label: "it.vinylhustler.app.riquadro")
+    private var ultimoRiquadro = Date.distantPast
+    /// Chi disegna il riquadro (l'anteprima). Riceve i 4 angoli in coordinate della fotocamera, o nil.
+    var suRiquadro: (@Sendable ([CGPoint]?) -> Void)?
     private let coda = DispatchQueue(label: "it.vinylhustler.app.occhio")
     private var configurata = false
     private var consegnaFoto: (@Sendable (Data?) -> Void)?
@@ -648,6 +707,9 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         guard sessione.canAddOutput(foto) else { sessione.commitConfiguration(); return false }
         sessione.addOutput(foto)
         if sessione.canAddOutput(video) { sessione.addOutput(video) }
+        fotogrammi.alwaysDiscardsLateVideoFrames = true
+        fotogrammi.setSampleBufferDelegate(self, queue: codaRiquadro)
+        if sessione.canAddOutput(fotogrammi) { sessione.addOutput(fotogrammi) }   // se non si può, niente riquadro: il resto funziona
         for output in [foto, video] as [AVCaptureOutput] {   // verticale, come tieni il telefono
             if let c = output.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
         }
@@ -687,12 +749,27 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         }
     }
 
+    /// Un fotogramma dell'anteprima: al massimo ~7 al secondo si cerca la copertina.
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        let ora = Date()
+        guard ora.timeIntervalSince(ultimoRiquadro) > 0.14, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        ultimoRiquadro = ora
+        suRiquadro?(Ritaglio.riquadro(in: buffer))
+    }
+
     /// Video vero, senza audio. Si ferma con fermaVideo() o da solo dopo `max` secondi.
     func registra(max: Double, _ fine: @escaping @Sendable (URL?) -> Void) {
         coda.async {
             guard self.sessione.isRunning, !self.video.isRecording,
                   self.sessione.outputs.contains(self.video) else { fine(nil); return }
             self.consegnaVideo = fine
+            // video e fotogrammi insieme non vanno d'accordo su tutti gli iPhone: durante il REC niente riquadro
+            if self.sessione.outputs.contains(self.fotogrammi) {
+                self.sessione.beginConfiguration()
+                self.sessione.removeOutput(self.fotogrammi)
+                self.sessione.commitConfiguration()
+            }
+            self.suRiquadro?(nil)
             self.preset(.high)                              // il video a qualità video (file leggero)
             self.video.maxRecordedDuration = CMTime(seconds: max, preferredTimescale: 600)
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mov")
@@ -711,6 +788,11 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         let ok = error == nil || finito == true
         coda.async {
             self.preset(.photo)                             // finito il REC si torna alla qualità foto piena
+            if !self.sessione.outputs.contains(self.fotogrammi), self.sessione.canAddOutput(self.fotogrammi) {
+                self.sessione.beginConfiguration()
+                self.sessione.addOutput(self.fotogrammi)
+                self.sessione.commitConfiguration()
+            }
             let f = self.consegnaVideo
             self.consegnaVideo = nil
             f?(ok ? url : nil)

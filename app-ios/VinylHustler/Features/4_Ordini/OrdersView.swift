@@ -35,7 +35,7 @@ struct OrdersView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     HStack {
-                        stat("\(open.count)", "da evadere", highlight: !open.isEmpty)
+                        stat("\(open.count)", "aperti", highlight: !open.isEmpty)
                         stat("\(closed.count)", "spediti")
                         stat(cashed.formatted(.currency(code: seller.currency).precision(.fractionLength(2))), "incassato", highlight: true, money: true)
                     }
@@ -45,7 +45,6 @@ struct OrdersView: View {
                     if open.isEmpty && !loading {
                         // niente ordini da spedire: una riga sola, con l'ora dell'ultimo controllo
                         HStack(spacing: 10) {
-                            MiniRadar()                       // piccolo: dice solo "sto controllando"
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Nessun ordine da spedire").font(.system(size: 15, weight: .semibold))
                                 Text(checkedAt.map { "Controllato alle \($0.formatted(date: .omitted, time: .shortened)) · ricontrollo ogni 3 minuti" }
@@ -58,7 +57,7 @@ struct OrdersView: View {
                         .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
                     } else {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("DA EVADERE").font(.system(size: 13)).foregroundStyle(Theme.muted).padding(.leading, 16)
+                            Text("APERTI").font(.system(size: 13)).foregroundStyle(Theme.muted).padding(.leading, 16)
                             ForEach(open) { o in
                                 OpenOrderCard(order: o, box: box(for: o), step: step(o), currency: seller.currency,
                                               onOpen: { Suoni.tocco(); detail = o },

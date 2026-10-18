@@ -26,13 +26,14 @@ struct InfoHeader: View {
 
 /// Le spiegazioni della Sessione.
 enum InfoTopic: String, Identifiable {
-    case posizione, condizione, fotocamera
+    case posizione, condizione, commenti, fotocamera
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .posizione: "Posizione"
         case .condizione: "Condizione"
+        case .commenti: "Commenti"
         case .fotocamera: "Fotocamera"
         }
     }
@@ -94,10 +95,30 @@ enum InfoTopic: String, Identifiable {
                     "Se cambi la condizione a metà di un blocco, i dischi già fotografati restano con quella di prima: cambia solo per i prossimi.",
                 ]),
             ]
+        case .commenti:
+            return [
+                ("Cos'è", [
+                    "È il testo che i compratori leggono nell'annuncio, sotto la condizione. Su Discogs si chiama «Comments».",
+                    "Quello che scrivi qui vale per TUTTI i dischi che fotografi dopo, finché non lo cambi: così non lo ripeti disco per disco.",
+                ]),
+                ("Esempi", [
+                    "• «Copertina con leggeri segni da scaffale.»",
+                    "• «Prima stampa, con inserto originale.»",
+                    "• «Disco lavato a ultrasuoni.»",
+                ]),
+                ("Come finisce nell'annuncio", [
+                    "L'app scrive da sola la descrizione: condizione, le tue note e il testo fisso di Settings. Questo commento entra lì dentro.",
+                    "Puoi sempre cambiarlo disco per disco: tocca il disco in Bozze o in Magazzino e apri la scheda annuncio.",
+                ]),
+                ("Attenzione", [
+                    "Vale per i dischi che fotografi dopo. Quelli già fotografati tengono il loro.",
+                    "Lascialo vuoto se non serve.",
+                ]),
+            ]
         case .fotocamera:
             return [
                 ("Prima di aprirla", [
-                    "Controlla Posizione e Condizione qui sopra: valgono per tutto quello che fotografi.",
+                    "Controlla Posizione, Condizione e Commenti qui sopra: valgono per tutto quello che fotografi.",
                     "Poi tocca il tasto con la fotocamera.",
                 ]),
                 ("Foto = 1 disco", [
@@ -106,6 +127,11 @@ enum InfoTopic: String, Identifiable {
                     "• il retro, dove c'è il codice a barre (il modo più veloce e sicuro);",
                     "• l'etichetta al centro del vinile.",
                     "Se non lo riconosce, tocca «Altra foto» e fotografa un altro lato.",
+                ]),
+                ("Il riquadro verde", [
+                    "Quando la fotocamera vede la copertina la contorna in verde, come quando l'iPhone scansiona un documento.",
+                    "Allo scatto la foto viene ritagliata e raddrizzata da sola: all'AI arriva solo il disco, senza tavolo e mani. Riconosce meglio.",
+                    "Con l'etichetta o il disco senza copertina ritaglia il quadrato intorno al cerchio. Se non è sicuro, tiene la foto intera.",
                 ]),
                 ("Video = più dischi", [
                     "Tocca REC e passa i dischi davanti al telefono, uno dopo l'altro, lasciando a ognuno un paio di secondi.",
@@ -121,7 +147,7 @@ enum InfoTopic: String, Identifiable {
                     "• «Elimina» (rosso, in fondo): lo togli.",
                     "Se chiudi la fotocamera senza decidere, il disco ti aspetta nella pagina Bozze.",
                     "Poi decidi subito: Vendi (va online) oppure Bozza (sta su Discogs ma nascosto, lo pubblichi quando vuoi).",
-                    "Prezzo, condizioni, posizione e descrizione si cambiano quando vuoi: tocca il prezzo del disco, oppure il disco in Magazzino o in Bozze. Se preferisci controllare tutto prima di mettere online: Console › Annunci › Vendi › Prima la scheda.",
+                    "Prezzo, condizioni, posizione e descrizione si cambiano quando vuoi: tocca il prezzo del disco, oppure il disco in Magazzino o in Bozze. Se preferisci controllare tutto prima di mettere online: Settings › Annunci › Vendi › Prima la scheda.",
                 ]),
                 ("Consigli", [
                     "• Luce buona, niente riflessi sulla plastica.",

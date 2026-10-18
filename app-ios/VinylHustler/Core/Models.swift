@@ -79,6 +79,8 @@ final class Disc {
         price = nil
         listingID = nil
         allowOffers = UserDefaults.standard.object(forKey: "offerteDefault") as? Bool ?? true
+        // Foto › Commenti: il testo della sessione vale per tutti i dischi fotografati da lì in poi
+        noteText = (UserDefaults.standard.string(forKey: "commentoSessione") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var status: DiscStatus {
