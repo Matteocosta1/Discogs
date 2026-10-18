@@ -209,7 +209,8 @@ struct OcchioView: View {
             motore.avvia { ok in c.resume(returning: ok) }
         }
         guard pronto else {
-            stato = "FOTOCAMERA NON DISPONIBILE"
+            let motivo = motore.motivo
+            stato = motivo.isEmpty ? "FOTOCAMERA NON DISPONIBILE" : "FOTOCAMERA NON DISPONIBILE · \(motivo)"
             return
         }
         agganciato = true
@@ -438,10 +439,11 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
 
     func avvia(pronto: @escaping @Sendable (Bool) -> Void) {
         coda.async {
+            self.osserva()
             if !self.configurata {
                 // prima la fotocamera migliore a qualità foto piena; se non parte, quella semplice come prima della V22
                 self.configurata = self.configura(migliore: true) || self.configura(migliore: false)
-                guard self.configurata else { pronto(false); return }
+                guard self.configurata else { self.motivo = "CONFIGURAZIONE"; pronto(false); return }
             }
             // a volte la fotocamera è ancora occupata (un'altra app, la chiusura di prima): si riprova un paio di volte
             for tentativo in 0..<3 where !self.sessione.isRunning {
@@ -452,11 +454,38 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
                 self.semplice = true                              // ultima prova: configurazione semplice
                 if self.configura(migliore: false) { self.sessione.startRunning() }
             }
+            if !self.sessione.isRunning, self.motivo.isEmpty { self.motivo = "NON PARTE" }
+            if self.sessione.isRunning { self.motivo = "" }
             pronto(self.sessione.isRunning)
         }
     }
 
     private var semplice = false
+    /// Perché la fotocamera non è partita (si mostra sotto il mirino, per capire il problema).
+    private(set) var motivo = ""
+    private var osservatori: [NSObjectProtocol] = []
+
+    private func osserva() {
+        guard osservatori.isEmpty else { return }
+        let nc = NotificationCenter.default
+        osservatori.append(nc.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: sessione, queue: nil) { [weak self] n in
+            let e = n.userInfo?[AVCaptureSessionErrorKey] as? NSError
+            self?.motivo = "ERRORE \(e?.code ?? 0)"
+        })
+        osservatori.append(nc.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: sessione, queue: nil) { [weak self] n in
+            let raw = (n.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber)?.intValue ?? 0
+            let testo: String
+            switch AVCaptureSession.InterruptionReason(rawValue: raw) {
+            case .videoDeviceInUseByAnotherClient: testo = "USATA DA UN'ALTRA APP"
+            case .videoDeviceNotAvailableWithMultipleForegroundApps: testo = "CHIUDI SPLIT VIEW"
+            case .videoDeviceNotAvailableDueToSystemPressure: testo = "TELEFONO TROPPO CALDO"
+            case .videoDeviceNotAvailableInBackground: testo = "APP IN SECONDO PIANO"
+            case .audioDeviceInUseByAnotherClient: testo = "AUDIO OCCUPATO"
+            default: testo = "INTERROTTA (\(raw))"
+            }
+            self?.motivo = testo
+        })
+    }
 
     /// Monta la sessione. migliore = fotocamera virtuale (macro automatica) a qualità foto piena;
     /// altrimenti grandangolo normale a qualità .high, come nelle prime versioni.
