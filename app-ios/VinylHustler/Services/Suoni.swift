@@ -7,10 +7,10 @@ import UIKit
 ///   «scheda»        parte il riconoscimento ("sto guardando…")
 ///   «schedapronta»  disco riconosciuto
 ///   «apertura»      apertura dell'app (mp3 scelto da Alessandro)
-///   «errore»        non riconosciuto (se manca: doppio segnale basso generato al volo)
-///   «carica»        Vendi o Bozza: l'annuncio sta partendo
-///   «pubblico»      Pubblica tutto: suona mentre pubblica, sfuma alla fine
-/// Suoni di RescopicSound (Pixabay) scelti da Alessandro: tick, scheda, errore, carica, pubblico.
+///   «carica»        Vendi o Bozza: l'annuncio sta partendo (nuovo, V39)
+///   «pubblico»      Pubblica tutto: suona mentre pubblica, sfuma alla fine (nuovo, V39)
+/// L'errore (non riconosciuto) è un doppio segnale basso generato al volo.
+/// I due nuovi sono di RescopicSound (Pixabay), scelti da Alessandro; gli altri restano quelli di sempre.
 /// Si spengono in Console › Suoni dell'interfaccia.
 @MainActor
 enum Suoni {
@@ -66,7 +66,6 @@ enum Suoni {
     static func errore() {
         guard attivi else { return }
         if let p = lettoreScheda, p.isPlaying { p.setVolume(0, fadeDuration: 0.18) }
-        if let p = lettore("errore", volume: 0.6) { tieni(p); p.play(); return }
         let dati = cacheErrore ?? generaErrore()
         cacheErrore = dati
         guard let p = try? AVAudioPlayer(data: dati) else { return }
