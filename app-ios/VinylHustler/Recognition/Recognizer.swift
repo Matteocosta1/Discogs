@@ -124,9 +124,9 @@ struct Recognizer {
         return []
     }
 
-    static func candidates(_ results: [SearchResult]) -> [Candidate] {
-        results.prefix(6).map { r in
-            let extra = [r.label?.first, r.country, r.year].compactMap { $0 }.filter { !$0.isEmpty }
+    static func candidates(_ results: [SearchResult], limit: Int = 6) -> [Candidate] {
+        results.prefix(limit).map { r in
+            let extra = [r.label?.first, r.catno, r.country, r.year].compactMap { $0 }.filter { !$0.isEmpty }
             let title = extra.isEmpty ? r.title : "\(r.title) (\(extra.joined(separator: ", ")))"
             return Candidate(id: r.id, title: title, coverURL: r.coverImage ?? r.thumb)
         }

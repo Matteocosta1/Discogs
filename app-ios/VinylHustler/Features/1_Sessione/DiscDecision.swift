@@ -160,7 +160,7 @@ struct DiscActions: View {
                         if !disc.candidates.isEmpty {
                             Button("Proposte") { alternatives = true }.buttonStyle(SignalButtonStyle(filled: onRetake == nil))
                         }
-                        Button("N° release") { releaseText = ""; askRelease = true }.buttonStyle(SignalButtonStyle(filled: false))
+                        Button("Cerca") { releaseText = ""; askRelease = true }.buttonStyle(SignalButtonStyle(filled: false))
                         Button("Rifai", role: .destructive) { seller.discard(disc) }
                             .buttonStyle(SignalButtonStyle(filled: false))
                     }
@@ -202,24 +202,39 @@ struct DiscActions: View {
             }
             .presentationDetents([.medium, .large])
         }
-        .alert("Numero della release Discogs", isPresented: $askRelease) {
-            TextField("numero o link discogs.com/release/…", text: $releaseText)
+        .alert("Cerca il disco su Discogs", isPresented: $askRelease) {
+            TextField("release, catalogo, barcode, artista, titolo…", text: $releaseText)
                 .keyboardType(.default)                         // tastiera completa: numeri, lettere, link incollati
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-            Button("Conferma") {
-                if let id = Self.releaseID(releaseText) { run { await seller.assign(disc, releaseID: id) } }
+            Button("Cerca") {
+                let text = releaseText
+                if let id = Self.releaseID(text) {
+                    run { await seller.assign(disc, releaseID: id) }            // numero o link: va dritto
+                } else {
+                    run {                                                        // tutto il resto: ricerca su Discogs
+                        if await seller.searchManual(disc, text: text) { alternatives = true }
+                    }
+                }
             }
             Button("Annulla", role: .cancel) {}
+        } message: {
+            Text("Numero o link della release, oppure quello che leggi sul disco: numero di catalogo, barcode, etichetta, artista, titolo, anno.")
         }
     }
 
-    /// "1234567", "r1234567" o un link "discogs.com/release/1234567-Artista-Titolo" -> 1234567.
+    /// Un numero di release: "1234567", "r1234567", "[r1234567]" o un link "discogs.com/release/1234567-Artista-Titolo".
+    /// Tutto il resto (catalogo, barcode da 10+ cifre, nomi) non è una release: si cerca su Discogs.
     static func releaseID(_ text: String) -> Int? {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let tail = t.range(of: "release/").map { String(t[$0.upperBound...]) } ?? t
-        let digits = tail.drop { !$0.isNumber }.prefix { $0.isNumber }
-        return Int(digits).flatMap { $0 > 0 ? $0 : nil }
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let r = t.range(of: "release/") {
+            let digits = t[r.upperBound...].prefix { $0.isNumber }
+            return Int(digits).flatMap { $0 > 0 ? $0 : nil }
+        }
+        let bare = t.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        let core = bare.hasPrefix("r") ? String(bare.dropFirst()) : bare
+        guard (1...9).contains(core.count), core.allSatisfy(\.isNumber) else { return nil }
+        return Int(core).flatMap { $0 > 0 ? $0 : nil }
     }
 
     /// Release sbagliata? Si riscrive il numero (anche dopo averlo inserito), finché il disco non è su Discogs.
@@ -228,7 +243,7 @@ struct DiscActions: View {
             releaseText = disc.releaseID.map(String.init) ?? ""
             askRelease = true
         } label: {
-            Label("Cambia release", systemImage: "pencil")
+            Label("Cambia release o cerca", systemImage: "pencil")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Theme.accent)
                 .frame(maxWidth: .infinity)

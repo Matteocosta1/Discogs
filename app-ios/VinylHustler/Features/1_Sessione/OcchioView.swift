@@ -439,33 +439,51 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
     func avvia(pronto: @escaping @Sendable (Bool) -> Void) {
         coda.async {
             if !self.configurata {
-                self.sessione.beginConfiguration()
-                // Qualità FOTO piena del telefono (come l'app Fotocamera). Il REC passa a .high solo mentre registra.
-                self.sessione.sessionPreset = self.sessione.canSetSessionPreset(.photo) ? .photo : .high
-                guard let cam = Self.fotocameraMigliore(),
-                      let ingresso = try? AVCaptureDeviceInput(device: cam),
-                      self.sessione.canAddInput(ingresso),
-                      self.sessione.canAddOutput(self.foto) else {
-                    self.sessione.commitConfiguration()
-                    pronto(false)
-                    return
-                }
-                self.sessione.addInput(ingresso)
-                self.sessione.addOutput(self.foto)
-                if self.sessione.canAddOutput(self.video) { self.sessione.addOutput(self.video) }
-                for output in [self.foto, self.video] as [AVCaptureOutput] {   // verticale, come tieni il telefono
-                    if let c = output.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
-                }
-                self.foto.maxPhotoQualityPrioritization = .quality   // elaborazione Apple piena (Deep Fusion / HDR)
-                self.sessione.commitConfiguration()
-                self.massimaRisoluzione(cam)
-                self.preparaMessaAFuoco(cam)
-                self.cam = cam
-                self.configurata = true
+                // prima la fotocamera migliore a qualità foto piena; se non parte, quella semplice come prima della V22
+                self.configurata = self.configura(migliore: true) || self.configura(migliore: false)
+                guard self.configurata else { pronto(false); return }
             }
-            if !self.sessione.isRunning { self.sessione.startRunning() }
+            // a volte la fotocamera è ancora occupata (un'altra app, la chiusura di prima): si riprova un paio di volte
+            for tentativo in 0..<3 where !self.sessione.isRunning {
+                if tentativo > 0 { Thread.sleep(forTimeInterval: 0.4) }
+                self.sessione.startRunning()
+            }
+            if !self.sessione.isRunning, self.semplice == false {
+                self.semplice = true                              // ultima prova: configurazione semplice
+                if self.configura(migliore: false) { self.sessione.startRunning() }
+            }
             pronto(self.sessione.isRunning)
         }
+    }
+
+    private var semplice = false
+
+    /// Monta la sessione. migliore = fotocamera virtuale (macro automatica) a qualità foto piena;
+    /// altrimenti grandangolo normale a qualità .high, come nelle prime versioni.
+    private func configura(migliore: Bool) -> Bool {
+        sessione.beginConfiguration()
+        sessione.inputs.forEach { sessione.removeInput($0) }
+        sessione.outputs.forEach { sessione.removeOutput($0) }
+        let preset: AVCaptureSession.Preset = migliore && sessione.canSetSessionPreset(.photo) ? .photo : .high
+        sessione.sessionPreset = preset
+        let device = migliore ? Self.fotocameraMigliore()
+                              : AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        guard let cam = device, let ingresso = try? AVCaptureDeviceInput(device: cam),
+              sessione.canAddInput(ingresso) else { sessione.commitConfiguration(); return false }
+        sessione.addInput(ingresso)
+        guard sessione.canAddOutput(foto) else { sessione.commitConfiguration(); return false }
+        sessione.addOutput(foto)
+        if sessione.canAddOutput(video) { sessione.addOutput(video) }
+        for output in [foto, video] as [AVCaptureOutput] {   // verticale, come tieni il telefono
+            if let c = output.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
+        }
+        foto.maxPhotoQualityPrioritization = .quality      // elaborazione Apple piena (Deep Fusion / HDR)
+        sessione.commitConfiguration()
+        massimaRisoluzione(cam)
+        preparaMessaAFuoco(cam)
+        self.cam = cam
+        semplice = !migliore
+        return true
     }
 
     func ferma() {

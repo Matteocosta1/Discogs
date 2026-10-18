@@ -216,6 +216,34 @@ final class Seller {
         }
     }
 
+    /// CERCA A MANO: quello che l'utente legge sul disco (catalogo, barcode, artista, titolo…) -> le release trovate
+    /// diventano le proposte da scegliere. false se Discogs non trova niente.
+    func searchManual(_ disc: Disc, text: String) async -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count >= 2 else { return false }
+        let digits = t.filter(\.isNumber)
+        var tries: [[String: String]] = []
+        if digits.count >= 10, digits.count == t.filter({ !$0.isWhitespace && $0 != "-" }).count {
+            tries.append(["barcode": digits])                      // solo cifre, lungo: è un barcode
+        }
+        if !t.contains(" ") { tries.append(["catno": t]) }          // una parola sola: probabilmente il catalogo
+        tries.append(["q": t])                                       // tutto insieme: artista, titolo, etichetta, anno…
+        var found: [Candidate] = []
+        for params in tries {
+            guard let res = try? await client.search(params) else { continue }
+            for c in Recognizer.candidates(Array(res.prefix(15)), limit: 15) where !found.contains(where: { $0.id == c.id }) {
+                found.append(c)
+            }
+            if found.count >= 15 { break }
+        }
+        guard !found.isEmpty else {
+            lastError = "Nessun disco trovato su Discogs per \"\(t)\""
+            return false
+        }
+        disc.candidates = found
+        return true
+    }
+
     /// NO, È QUEST'ALTRO: una delle alternative proposte.
     func pick(_ disc: Disc, candidate: Candidate) async {
         disc.releaseID = candidate.id
