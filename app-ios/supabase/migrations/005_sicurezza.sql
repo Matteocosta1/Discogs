@@ -26,7 +26,7 @@ create table if not exists public.disc_memory_votes (
 alter table public.disc_memory_votes enable row level security;
 create index if not exists disc_memory_votes_user on public.disc_memory_votes (user_id);
 
-drop function if exists public.learn_disc(text, text, bigint, integer, text, text);
+-- (la versione vecchia di learn_disc a 6 parametri resta, chiusa: non la chiama più nessuno)
 create or replace function public.learn_disc(p_user uuid, p_kind text, p_key text, p_dhash bigint, p_release integer,
                                              p_title text, p_cover text)
 returns void language plpgsql set search_path = public as $$
@@ -47,9 +47,6 @@ begin
   end if;
 end $$;
 revoke all on function public.learn_disc(uuid, text, text, bigint, integer, text, text) from public, anon, authenticated;
-
--- le conferme già fatte restano (1 riga oggi)
-update public.disc_memory set confirmations = greatest(confirmations, 1);
 
 -- 4. Funzione di sistema: non chiamabile dall'esterno.
 revoke execute on function public.rls_auto_enable() from public, anon, authenticated;

@@ -12,7 +12,7 @@ function json(body: unknown, status = 200) {
 }
 /** "Miles Davis - Kind Of Blue" -> "miles davis kind of blue" */
 function norm(s: string): string {
-  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 }
 /** impronta esadecimale (16 cifre) -> bigint con segno, come lo vuole Postgres */
 function toBig(hex: string): string | null {
