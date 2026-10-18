@@ -20,6 +20,7 @@ struct WarehouseView: View {
     @State private var askPlace = false
     @State private var newPlace = "Scatola 1"
     @State private var editing: Listing?                // scheda annuncio aperta
+    @State private var showStats = false
     /// Annunci (online e bozze) senza posizione.
     private var noPlaceCount: Int {
         listings.filter { ($0.location ?? "").trimmingCharacters(in: .whitespaces).isEmpty }.count
@@ -110,6 +111,10 @@ struct WarehouseView: View {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
+            Button { showStats = true } label: { Image(systemName: "chart.bar.xaxis") }
+                .accessibilityLabel("Statistiche")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Button("Verifica su Discogs", systemImage: "arrow.triangle.2.circlepath") { Task { await sync() } }
                 Button("Posizione a chi non ce l'ha (\(noPlaceCount))", systemImage: "archivebox") {
@@ -150,6 +155,7 @@ struct WarehouseView: View {
                 Button("Cancella le bozze", role: .destructive) { Task { await deleteAll() } }
             }
             .alert(message ?? "", isPresented: showingMessage) {}
+            .sheet(isPresented: $showStats) { StatsView(listings: listings) }
             .sheet(item: $editing) { l in
                 ListingEditor(target: .listing(l.id)) { after in
                     if after.status == "For Sale" || after.status == "Draft",

@@ -221,13 +221,7 @@ final class Seller {
     func searchManual(_ disc: Disc, text: String) async -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.count >= 2 else { return false }
-        let digits = t.filter(\.isNumber)
-        var tries: [[String: String]] = []
-        if digits.count >= 10, digits.count == t.filter({ !$0.isWhitespace && $0 != "-" }).count {
-            tries.append(["barcode": digits])                      // solo cifre, lungo: è un barcode
-        }
-        if !t.contains(" ") { tries.append(["catno": t]) }          // una parola sola: probabilmente il catalogo
-        tries.append(["q": t])                                       // tutto insieme: artista, titolo, etichetta, anno…
+        let tries = Self.manualTries(t)
         var found: [Candidate] = []
         for params in tries {
             guard let res = try? await client.search(params) else { continue }
@@ -242,6 +236,18 @@ final class Seller {
         }
         disc.candidates = found
         return true
+    }
+
+    /// Le ricerche da provare su Discogs per un testo scritto a mano, in ordine.
+    nonisolated static func manualTries(_ t: String) -> [[String: String]] {
+        let digits = t.filter(\.isNumber)
+        var tries: [[String: String]] = []
+        if digits.count >= 10, digits.count == t.filter({ !$0.isWhitespace && $0 != "-" }).count {
+            tries.append(["barcode": digits])                      // solo cifre, lungo: è un barcode
+        }
+        if !t.contains(" ") { tries.append(["catno": t]) }          // una parola sola: probabilmente il catalogo
+        tries.append(["q": t])                                       // tutto insieme: artista, titolo, etichetta, anno…
+        return tries
     }
 
     /// NO, È QUEST'ALTRO: una delle alternative proposte.

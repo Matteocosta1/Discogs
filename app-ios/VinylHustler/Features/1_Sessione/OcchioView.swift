@@ -38,6 +38,9 @@ struct OcchioView: View {
     private var seen: [Disc] {
         all.filter { $0.createdAt >= openedAt && $0.status != .tolto && !$0.parked }
     }
+    private static func done(_ d: Disc) -> Bool { d.status == .inVendita || d.status == .bozza }
+    private var onlineCount: Int { seen.filter { $0.status == .inVendita }.count }
+    private var draftCount: Int { seen.filter { $0.status == .bozza }.count }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -93,6 +96,14 @@ struct OcchioView: View {
                 Text("VINYL HUSTLER").font(Theme.mono(14, .bold)).tracking(4)
                 Text("\(place) · \(media == sleeve ? media.rawValue : "\(media.rawValue)/\(sleeve.rawValue)")".uppercased())
                     .font(Theme.mono(9, .semibold)).tracking(1.5).opacity(0.8)
+                if !seen.isEmpty {
+                    // contatore della serie: quanti dischi da quando hai aperto la fotocamera
+                    Text("SERIE \(seen.count) · ONLINE \(onlineCount) · BOZZE \(draftCount)")
+                        .font(Theme.mono(10, .bold)).tracking(1.5)
+                        .contentTransition(.numericText())
+                        .animation(.snappy, value: "\(seen.count)-\(onlineCount)-\(draftCount)")
+                        .padding(.top, 2)
+                }
             }
             .foregroundStyle(tinta)
             .shadow(color: tinta.opacity(0.6), radius: 6)
@@ -141,9 +152,9 @@ struct OcchioView: View {
             Spacer()
             Button { scatta() } label: {
                 ZStack {
-                    Circle().stroke(tinta, lineWidth: 4).frame(width: 82, height: 82)
-                    Circle().fill(tinta).frame(width: 66, height: 66)
-                    Image(systemName: "camera.fill").font(.system(size: 22, weight: .bold)).foregroundStyle(Color.black)
+                    Circle().stroke(tinta, lineWidth: 3).frame(width: 74, height: 74)
+                    Circle().fill(tinta).frame(width: 58, height: 58)
+                    Image(systemName: "camera.fill").font(.system(size: 19, weight: .bold)).foregroundStyle(Color.black)
                 }
                 .contentShape(Circle())
                 .shadow(color: tinta.opacity(0.6), radius: 10)
@@ -172,27 +183,59 @@ struct OcchioView: View {
         }
     }
 
-    /// I dischi riconosciuti, sotto la fotocamera: sì / no, poi vendita.
+    /// Sotto la fotocamera, compatti (il mirino prende il resto dello schermo):
+    ///   · i dischi da decidere, uno accanto all'altro (il più nuovo a sinistra);
+    ///   · una fila sottile con quelli già messi su Discogs in questa serie.
     @ViewBuilder private var results: some View {
         if !seen.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 10) {
-                    ForEach(seen) { disc in
-                        // tasti bassi, e la scheda scorre in verticale: Elimina si raggiunge sempre
-                        ScrollView(.vertical, showsIndicators: false) {
-                            DiscRow(disc: disc, onRetake: { attachTo = disc })
-                                .controlSize(.small)
+            VStack(alignment: .leading, spacing: 6) {
+                let pending = seen.filter { !Self.done($0) }
+                let doneOnes = seen.filter(Self.done)
+                if !pending.isEmpty {
+                    ScrollViewReader { proxy in
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 10) {
+                                ForEach(pending) { disc in
+                                    // tasti bassi, e la scheda scorre in verticale: Elimina si raggiunge sempre
+                                    ScrollView(.vertical, showsIndicators: false) {
+                                        DiscRow(disc: disc, onRetake: { attachTo = disc })
+                                            .controlSize(.small)
+                                    }
+                                    .frame(width: 320)
+                                    .id(disc.id)
+                                    .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
+                                                            removal: .scale(scale: 0.6).combined(with: .opacity)))
+                                }
+                            }
+                            .animation(.spring(duration: 0.45, bounce: 0.25), value: pending.map(\.id))
+                            .padding(.horizontal, 12)
                         }
-                        .frame(width: 320)
-                            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
-                                                    removal: .opacity))
+                        // disco nuovo: la striscia torna all'inizio, dove compare
+                        .onChange(of: seen.first?.id) { _, id in
+                            guard let id else { return }
+                            withAnimation(.snappy) { proxy.scrollTo(id, anchor: .leading) }
+                        }
                     }
+                    .frame(height: 210)
                 }
-                .animation(.spring(duration: 0.45, bounce: 0.25), value: seen.map(\.id))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                if !doneOnes.isEmpty {
+                    Text("GIÀ SU DISCOGS · \(doneOnes.count)")
+                        .font(Theme.mono(9, .semibold)).tracking(2).foregroundStyle(Theme.muted)
+                        .padding(.horizontal, 14)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 6) {
+                            ForEach(doneOnes) { disc in
+                                DoneCard(disc: disc)
+                                    .transition(.scale(scale: 0.4).combined(with: .opacity))
+                            }
+                        }
+                        .animation(.spring(duration: 0.5, bounce: 0.35), value: doneOnes.map(\.id))
+                        .padding(.horizontal, 12)
+                    }
+                    .frame(height: 50)
+                }
             }
-            .frame(height: 330)
+            .padding(.vertical, 10)
             .background(Theme.bg)
         }
     }
@@ -589,5 +632,42 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
             self.consegnaVideo = nil
             f?(ok ? url : nil)
         }
+    }
+}
+
+/// Un disco della serie già messo su Discogs: piccolo e in fila, con la spunta, per lasciare spazio al prossimo.
+struct DoneCard: View {
+    @Environment(Seller.self) private var seller
+    let disc: Disc
+
+    var body: some View {
+        HStack(spacing: 8) {
+            AsyncImage(url: disc.coverURL) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                .frame(width: 30, height: 30)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Theme.money, lineWidth: 1.5))
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.black, Theme.money)
+                        .offset(x: 3, y: 3)
+                }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(disc.releaseTitle).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                Group {
+                    if disc.status == .bozza {
+                        Text("Bozza").foregroundStyle(Theme.warn)
+                    } else if let p = disc.price {
+                        Text(p, format: .currency(code: seller.currency)).foregroundStyle(Theme.money)
+                    } else {
+                        Text("Online").foregroundStyle(Theme.money)
+                    }
+                }
+                .font(.system(size: 11, weight: .bold))
+            }
+        }
+        .padding(.horizontal, 9)
+        .frame(width: 150, height: 50, alignment: .leading)
+        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
