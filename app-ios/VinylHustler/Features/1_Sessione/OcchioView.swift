@@ -211,6 +211,15 @@ struct OcchioView: View {
         guard pronto else {
             let motivo = motore.motivo
             stato = motivo.isEmpty ? "FOTOCAMERA NON DISPONIBILE" : "FOTOCAMERA NON DISPONIBILE · \(motivo)"
+            // appena si libera (l'altra app lascia la fotocamera) si aggancia da sola, per un minuto
+            for _ in 0..<60 {
+                try? await Task.sleep(for: .seconds(1))
+                if motore.sessione.isRunning { break }
+            }
+            guard motore.sessione.isRunning else { return }
+            agganciato = true
+            Suoni.avvio()
+            stato = "INQUADRA UN DISCO"
             return
         }
         agganciato = true
@@ -472,12 +481,20 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
             let e = n.userInfo?[AVCaptureSessionErrorKey] as? NSError
             self?.motivo = "ERRORE \(e?.code ?? 0)"
         })
+        // finita l'interruzione (l'altra app ha lasciato la fotocamera) si riparte da soli
+        osservatori.append(nc.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: sessione, queue: nil) { [weak self] _ in
+            guard let self else { return }
+            self.coda.async {
+                if !self.sessione.isRunning { self.sessione.startRunning() }
+                if self.sessione.isRunning { self.motivo = "" }
+            }
+        })
         osservatori.append(nc.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: sessione, queue: nil) { [weak self] n in
             let raw = (n.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber)?.intValue ?? 0
             let testo: String
             switch AVCaptureSession.InterruptionReason(rawValue: raw) {
             case .videoDeviceInUseByAnotherClient: testo = "USATA DA UN'ALTRA APP"
-            case .videoDeviceNotAvailableWithMultipleForegroundApps: testo = "CHIUDI SPLIT VIEW"
+            case .videoDeviceNotAvailableWithMultipleForegroundApps: testo = "CHIUDI VIDEO O FINESTRE MOBILI"
             case .videoDeviceNotAvailableDueToSystemPressure: testo = "TELEFONO TROPPO CALDO"
             case .videoDeviceNotAvailableInBackground: testo = "APP IN SECONDO PIANO"
             case .audioDeviceInUseByAnotherClient: testo = "AUDIO OCCUPATO"
@@ -493,6 +510,8 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         sessione.beginConfiguration()
         sessione.inputs.forEach { sessione.removeInput($0) }
         sessione.outputs.forEach { sessione.removeOutput($0) }
+        // la fotocamera funziona anche quando un'altra app è in primo piano insieme (video PiP, chiamata, finestra mobile)
+        if sessione.isMultitaskingCameraAccessSupported { sessione.isMultitaskingCameraAccessEnabled = true }
         let preset: AVCaptureSession.Preset = migliore && sessione.canSetSessionPreset(.photo) ? .photo : .high
         sessione.sessionPreset = preset
         let device = migliore ? Self.fotocameraMigliore()
