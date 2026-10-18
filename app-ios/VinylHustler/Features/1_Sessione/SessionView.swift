@@ -122,26 +122,28 @@ struct SessionView: View {
         }
     }
 
-    /// Il tasto che apre la fotocamera: solo il simbolo, grande e al centro. Le spiegazioni stanno nella (i).
+    /// Il tasto che apre la fotocamera: un riquadro largo con il bagliore verde, solo il simbolo (spiegazioni nella (i)).
     private var cameraButton: some View {
         Button { camera = true } label: {
             ZStack {
-                Circle().fill(Color.black).frame(width: 84, height: 84)
-                    .overlay(Circle().stroke(Theme.accent, lineWidth: 2))
-                    .shadow(color: Theme.glow.opacity(breathe ? 0.75 : 0.25), radius: breathe ? 18 : 6)
-                Circle().stroke(Theme.glow.opacity(breathe ? 0 : 0.5), lineWidth: 1)
-                    .frame(width: 84, height: 84)
-                    .scaleEffect(breathe ? 1.35 : 1)
-                Image(systemName: "camera.fill").font(.system(size: 30, weight: .semibold)).foregroundStyle(Theme.glow)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(RadialGradient(colors: [Theme.military, Color(red: 0.043, green: 0.075, blue: 0.051)],
+                                         center: .center, startRadius: 0, endRadius: 170))
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Theme.accent.opacity(breathe ? 0.75 : 0.4), lineWidth: 1)
+                Image(systemName: "camera")
+                    .font(.system(size: 40, weight: .regular))
+                    .foregroundStyle(Theme.glow)
+                    .shadow(color: Theme.glow.opacity(breathe ? 0.8 : 0.3), radius: breathe ? 12 : 4)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
+            .frame(height: 120)
+            .shadow(color: Theme.accent.opacity(breathe ? 0.3 : 0.12), radius: 20)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Apri la fotocamera")
         .onAppear {
-            withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false)) { breathe = true }
+            withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) { breathe = true }
         }
     }
 
@@ -172,16 +174,28 @@ struct SessionView: View {
         placeName = ""
     }
 
-    /// Una riga della condizione (come su Discogs: supporto e copertina), senza icone.
+    /// Una riga della condizione (come su Discogs: supporto e copertina): sei pastiglie, quella scelta in verde.
     private func gradeRow(_ title: String, selection: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
-            Picker(title, selection: selection) {
-                ForEach(Grade.allCases) { Text($0.rawValue).tag($0.rawValue) }
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 14)).foregroundStyle(Theme.muted)
+            HStack(spacing: 4) {
+                ForEach(Grade.allCases) { g in
+                    let on = selection.wrappedValue == g.rawValue
+                    Button {
+                        selection.wrappedValue = g.rawValue
+                        Suoni.tocco()
+                    } label: {
+                        Text(g.rawValue)
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                            .foregroundStyle(on ? Color.black : Theme.text)
+                            .background(on ? Theme.accent : Theme.panelHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .animation(.snappy(duration: 0.2), value: on)
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
         }
         .padding(.vertical, 4)
     }

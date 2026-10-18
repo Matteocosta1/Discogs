@@ -74,7 +74,7 @@ struct HUDLabel: View {
 
     var body: some View {
         Text(title.uppercased())
-            .font(.system(size: 13))
+            .font(Theme.mono(12, .bold)).tracking(1.5)
             .foregroundStyle(Theme.muted)
     }
 }

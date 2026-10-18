@@ -11,7 +11,7 @@ struct InfoHeader: View {
             HUDLabel(title: title)
             Button(action: action) {
                 Image(systemName: "info.circle")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
