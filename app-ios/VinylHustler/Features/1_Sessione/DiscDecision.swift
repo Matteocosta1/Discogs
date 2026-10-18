@@ -130,6 +130,7 @@ struct DiscActions: View {
                         Button("Versioni") { alternatives = true }
                             .buttonStyle(SignalButtonStyle(filled: false))
                     }
+                    changeRelease
                 }
             case .pronto:
                 VStack(alignment: .leading, spacing: 8) {
@@ -147,6 +148,7 @@ struct DiscActions: View {
                         Button("Vendi") { run { await seller.sell(disc) } }.buttonStyle(SignalButtonStyle())
                         Button("Bozza") { run { await seller.sell(disc, draft: true) } }.buttonStyle(SignalButtonStyle(filled: false))
                     }
+                    changeRelease
                 }
             case .daControllare:
                 VStack(alignment: .leading, spacing: 8) {
@@ -158,7 +160,7 @@ struct DiscActions: View {
                         if !disc.candidates.isEmpty {
                             Button("Proposte") { alternatives = true }.buttonStyle(SignalButtonStyle(filled: onRetake == nil))
                         }
-                        Button("N° release") { askRelease = true }.buttonStyle(SignalButtonStyle(filled: false))
+                        Button("N° release") { releaseText = ""; askRelease = true }.buttonStyle(SignalButtonStyle(filled: false))
                         Button("Rifai", role: .destructive) { seller.discard(disc) }
                             .buttonStyle(SignalButtonStyle(filled: false))
                     }
@@ -168,6 +170,7 @@ struct DiscActions: View {
                     reason
                     Button("Togli", role: .destructive) { run { await seller.remove(disc) } }
                         .buttonStyle(SignalButtonStyle(filled: false))
+                    changeRelease
                 }
             case .inVendita, .bozza:
                 HStack {
@@ -217,6 +220,21 @@ struct DiscActions: View {
         let tail = t.range(of: "release/").map { String(t[$0.upperBound...]) } ?? t
         let digits = tail.drop { !$0.isNumber }.prefix { $0.isNumber }
         return Int(digits).flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    /// Release sbagliata? Si riscrive il numero (anche dopo averlo inserito), finché il disco non è su Discogs.
+    private var changeRelease: some View {
+        Button {
+            releaseText = disc.releaseID.map(String.init) ?? ""
+            askRelease = true
+        } label: {
+            Label("Cambia release", systemImage: "pencil")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
     }
 
     private var reason: some View {
