@@ -225,6 +225,7 @@ struct DraftRow: View {
                     .buttonStyle(.plain).accessibilityLabel("Modifica l'annuncio")
                     Button(action: onSell) {
                         Text("Vendi").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
+                            .lineLimit(1).fixedSize()          // V54: mai "V…", anche sugli schermi più stretti
                             .padding(.horizontal, 12).frame(height: 30)
                             .overlay(Capsule().stroke(Theme.accent, lineWidth: 1))
                     }
@@ -232,6 +233,7 @@ struct DraftRow: View {
                     .disabled(lit)
                 }
             }
+            .fixedSize()                                    // i tasti non si stringono mai: si accorcia il titolo
         }
         .padding(12)
         .background(lit ? Color(red: 0.086, green: 0.125, blue: 0.102) : Theme.panel,
