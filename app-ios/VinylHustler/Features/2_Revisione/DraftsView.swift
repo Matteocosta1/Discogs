@@ -164,7 +164,7 @@ struct DraftsView: View {
     }
 }
 
-/// Una bozza: "dorme" (copertina spenta, lucina rossa di standby).
+/// Una bozza: "dorme" (copertina spenta, lucina rossa ferma).
 /// Toccando Vendi si accende: bordo verde, copertina a colori, un riflesso di luce e le scintille.
 /// Titolo = apre su Discogs; tasto verde tondo = scheda annuncio; cestino = elimina.
 struct DraftRow: View {
@@ -176,8 +176,6 @@ struct DraftRow: View {
     let onSell: () -> Void
     let onDelete: () -> Void
 
-    @State private var shown = false
-    @State private var standby = false
     @State private var sheen = false
 
     var body: some View {
@@ -203,10 +201,9 @@ struct DraftRow: View {
                     Text([ListingRow.short(listing.condition), ListingRow.short(listing.sleeveCondition)].filter { !$0.isEmpty }.joined(separator: " / "))
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.glow)
                     if !lit {
+                        // V52: lucina ferma (quella che lampeggiava faceva ondeggiare le righe)
                         Circle().fill(Theme.warn).frame(width: 6, height: 6)
                             .shadow(color: Theme.warn, radius: 3)
-                            .opacity(standby ? 1 : 0.25)
-                            .animation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true), value: standby)
                     }
                 }
             }
@@ -259,12 +256,7 @@ struct DraftRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay { if lit { SparkBurst() } }
         .shadow(color: Theme.glow.opacity(lit ? 0.35 : 0), radius: 14)
-        .opacity(shown ? 1 : 0)
-        .offset(y: shown ? 0 : 22)
-        .onAppear {
-            withAnimation(.spring(duration: 0.5, bounce: 0.25).delay(Double(index) * 0.07)) { shown = true }
-            standby = true
-        }
+        // V52: niente più entrata a molla: le righe restano ferme mentre scorri
     }
 }
 
