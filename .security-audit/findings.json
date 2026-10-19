@@ -1,0 +1,361 @@
+{
+ "schema": "security-audit-register/1",
+ "project": "Vinyl Hustler (app iOS + funzioni Supabase)",
+ "approver": "Product Owner",
+ "gate": {
+  "blocking": [
+   "Critical",
+   "High"
+  ],
+  "medium": "fix-or-accept",
+  "maxAcceptDays": 90,
+  "criticalAcceptable": false
+ },
+ "nextId": 8,
+ "runs": [
+  {
+   "id": "R1",
+   "date": "2026-10-19",
+   "commit": "0bcd9e7",
+   "type": "full",
+   "coverage": "Reduced",
+   "tools": [],
+   "agent": "Claude (claude-opus-5-5)",
+   "gate": "failed"
+  }
+ ],
+ "findings": [
+  {
+   "id": "SEC-001",
+   "title": "Token personale Discogs dentro l'app compilata",
+   "severity": "High",
+   "confidence": "Confirmed",
+   "owasp": "A07:2025",
+   "cwe": "CWE-798",
+   "llm": null,
+   "locations": [
+    {
+     "file": "app-ios/Config/Info.plist",
+     "line": 8,
+     "symbol": "DISCOGS_PERSONAL_TOKEN",
+     "fingerprint": "2ebe0ab37bdc1035",
+     "fpInput": "CWE-798|app-ios/Config/Info.plist|DISCOGS_PERSONAL_TOKEN|<string>$(DISCOGS_PERSONAL_TOKEN)</string>",
+     "resolved": false
+    },
+    {
+     "file": "app-ios/VinylHustler/App/VinylHustlerApp.swift",
+     "line": 99,
+     "symbol": "hasMacToken",
+     "fingerprint": "2efa4706cde33c76",
+     "fpInput": "CWE-798|app-ios/VinylHustler/App/VinylHustlerApp.swift|hasMacToken|seller.connect(.personalToken(AppConfig.discogsPersonalToken))",
+     "resolved": false
+    }
+   ],
+   "sources": [
+    "ai-review"
+   ],
+   "evidence": "Secrets.xcconfig (sul Mac) riempie DISCOGS_PERSONAL_TOKEN e l'Info.plist lo copia in chiaro dentro ogni build, Debug e Release.",
+   "impact": "Chiunque riceva un file dell'app (TestFlight, ad hoc) può leggere il token e controllare l'account venditore Discogs: annunci, prezzi, ordini, indirizzi dei compratori. Oggi l'app è solo sui due telefoni del team: diventa Critical appena si distribuisce.",
+   "fix": "Togliere la chiave DISCOGS_PERSONAL_TOKEN dall'Info.plist delle build Release (o del tutto) e usare solo 'Accedi con Discogs' (OAuth) o il token incollato a mano, salvato nel Portachiavi.",
+   "compliance": [],
+   "status": "Open",
+   "owner": null,
+   "firstSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7",
+    "date": "2026-10-19"
+   },
+   "lastSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7"
+   },
+   "rootCause": null,
+   "fixNote": null,
+   "fixCommit": null,
+   "verification": null,
+   "secret": null,
+   "falsePositive": null,
+   "acceptedRisk": null,
+   "ticket": null
+  },
+  {
+   "id": "SEC-002",
+   "title": "Tetti mensili AI e voce superabili con richieste in parallelo",
+   "severity": "Medium",
+   "confidence": "Confirmed",
+   "owasp": "A06:2025",
+   "cwe": "CWE-362",
+   "llm": null,
+   "locations": [
+    {
+     "file": "app-ios/supabase/functions/ai-cover/index.ts",
+     "line": 83,
+     "symbol": "cap check",
+     "fingerprint": "8d7389a23093e2b8",
+     "fpInput": "CWE-362|app-ios/supabase/functions/ai-cover/index.ts|cap check|if (Number(usage?.ai_cost_eur ?? 0) >= Number(profile?.ai_monthly_cap_eur ?? 3))",
+     "resolved": false
+    },
+    {
+     "file": "app-ios/supabase/functions/voce/index.ts",
+     "line": 95,
+     "symbol": "cap check",
+     "fingerprint": "1e4586e9d49a21b1",
+     "fpInput": "CWE-362|app-ios/supabase/functions/voce/index.ts|cap check|if (Number(usage?.voice_chars ?? 0) + text.length > Number(profile?.voice_monthly_chars ?? 20000))",
+     "resolved": false
+    }
+   ],
+   "sources": [
+    "ai-review"
+   ],
+   "evidence": "Il consumo si legge prima e si somma solo dopo la chiamata ad Anthropic/ElevenLabs: N richieste partite insieme vedono tutte lo stesso consumo vecchio.",
+   "impact": "Un utente con l'app può spendere oltre il tetto (crediti Anthropic ed ElevenLabs di Matteo) mandando molte richieste insieme.",
+   "fix": "Una funzione SQL che controlla e prenota il budget in un solo passo (update ... where consumo + stima <= tetto returning), chiamata prima del fornitore; più un limite di richieste al minuto per utente.",
+   "compliance": [],
+   "status": "Open",
+   "owner": null,
+   "firstSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7",
+    "date": "2026-10-19"
+   },
+   "lastSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7"
+   },
+   "rootCause": null,
+   "fixNote": null,
+   "fixCommit": null,
+   "verification": null,
+   "secret": null,
+   "falsePositive": null,
+   "acceptedRisk": null,
+   "ticket": null
+  },
+  {
+   "id": "SEC-003",
+   "title": "Memoria condivisa: titolo e copertina scritti da qualunque utente e mostrati a tutti",
+   "severity": "Medium",
+   "confidence": "Confirmed",
+   "owasp": "A08:2025",
+   "cwe": "CWE-345",
+   "llm": "LLM04",
+   "locations": [
+    {
+     "file": "app-ios/supabase/functions/memoria/index.ts",
+     "line": 57,
+     "symbol": "learn",
+     "fingerprint": "241d7010c8f0cbfc",
+     "fpInput": "CWE-345|app-ios/supabase/functions/memoria/index.ts|learn|const cover = body.cover ? String(body.cover).slice(0, 500) : null;",
+     "resolved": false
+    }
+   ],
+   "sources": [
+    "ai-review"
+   ],
+   "evidence": "learn accetta release_id, title e cover (URL qualsiasi) dal telefono; lookup li restituisce agli altri utenti, che caricano l'immagine da quell'URL.",
+   "impact": "Con l'app distribuita, chiunque può 'insegnare' dischi sbagliati, titoli offensivi o copertine da un server suo (vede IP e orari di chi apre la scheda). Oggi gli utenti sono 2.",
+   "fix": "Sul server ricavare titolo e copertina dalla release Discogs (o accettare solo URL https di i.discogs.com / st.discogs.com) e fidarsi di un abbinamento solo dopo 2+ conferme di persone diverse.",
+   "compliance": [],
+   "status": "Open",
+   "owner": null,
+   "firstSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7",
+    "date": "2026-10-19"
+   },
+   "lastSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7"
+   },
+   "rootCause": null,
+   "fixNote": null,
+   "fixCommit": null,
+   "verification": null,
+   "secret": null,
+   "falsePositive": null,
+   "acceptedRisk": null,
+   "ticket": null
+  },
+  {
+   "id": "SEC-004",
+   "title": "download() manda le credenziali Discogs a qualunque indirizzo",
+   "severity": "Low",
+   "confidence": "Confirmed",
+   "owasp": "A01:2025",
+   "cwe": "CWE-201",
+   "llm": null,
+   "locations": [
+    {
+     "file": "app-ios/VinylHustler/Discogs/DiscogsClient.swift",
+     "line": 240,
+     "symbol": "download",
+     "fingerprint": "fb3b6ae47b84de1c",
+     "fpInput": "CWE-201|app-ios/VinylHustler/Discogs/DiscogsClient.swift|download|req.setValue(credentials.authorizationHeader(), forHTTPHeaderField: \"Authorization\")",
+     "resolved": false
+    }
+   ],
+   "sources": [
+    "ai-review"
+   ],
+   "evidence": "La funzione mette l'intestazione Authorization su qualsiasi URL ricevuto. Oggi nessuno la chiama.",
+   "impact": "Se in futuro le si passa un URL non di Discogs (es. una copertina dalla memoria condivisa), il token dell'utente finisce a quel server.",
+   "fix": "Toglierla, oppure mandare l'intestazione solo se l'host è api.discogs.com / *.discogs.com.",
+   "compliance": [],
+   "status": "Open",
+   "owner": null,
+   "firstSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7",
+    "date": "2026-10-19"
+   },
+   "lastSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7"
+   },
+   "rootCause": null,
+   "fixNote": null,
+   "fixCommit": null,
+   "verification": null,
+   "secret": null,
+   "falsePositive": null,
+   "acceptedRisk": null,
+   "ticket": null
+  },
+  {
+   "id": "SEC-005",
+   "title": "ai-cover: corpo della richiesta e foto non validati",
+   "severity": "Low",
+   "confidence": "Confirmed",
+   "owasp": "A10:2025",
+   "cwe": "CWE-20",
+   "llm": null,
+   "locations": [
+    {
+     "file": "app-ios/supabase/functions/ai-cover/index.ts",
+     "line": 89,
+     "symbol": "req.json",
+     "fingerprint": "102da5615e9e3824",
+     "fpInput": "CWE-20|app-ios/supabase/functions/ai-cover/index.ts|req.json|const body = await req.json();",
+     "resolved": false
+    }
+   ],
+   "sources": [
+    "ai-review"
+   ],
+   "evidence": "req.json() senza catch (errore 500 con corpo non valido); le foto non sono controllate come stringhe base64 né per dimensione.",
+   "impact": "Richieste malformate producono errori 500 e chiamate inutili al fornitore; nessuna fuga di dati.",
+   "fix": "req.json().catch(() => ({})), accettare solo stringhe base64 sotto ~5 MB ciascuna.",
+   "compliance": [],
+   "status": "Open",
+   "owner": null,
+   "firstSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7",
+    "date": "2026-10-19"
+   },
+   "lastSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7"
+   },
+   "rootCause": null,
+   "fixNote": null,
+   "fixCommit": null,
+   "verification": null,
+   "secret": null,
+   "falsePositive": null,
+   "acceptedRisk": null,
+   "ticket": null
+  },
+  {
+   "id": "SEC-006",
+   "title": "Tabelle con permessi di base ancora concessi ad anon/authenticated",
+   "severity": "Info",
+   "confidence": "Confirmed",
+   "owasp": "A02:2025",
+   "cwe": "CWE-732",
+   "llm": null,
+   "locations": [
+    {
+     "file": "app-ios/supabase/migrations/001_schema.sql",
+     "line": 50,
+     "symbol": "grants",
+     "fingerprint": "589480a5c18f5b62",
+     "fpInput": "CWE-732|app-ios/supabase/migrations/001_schema.sql|grants|alter table public.profiles enable row level security;",
+     "resolved": false
+    }
+   ],
+   "sources": [
+    "ai-review"
+   ],
+   "evidence": "RLS è attiva ovunque e blocca le scritture (solo policy di lettura propria), ma i GRANT predefiniti restano.",
+   "impact": "Nessun rischio oggi; se un giorno si disattiva RLS per errore, le tabelle diventano scrivibili.",
+   "fix": "revoke insert, update, delete on all tables in schema public from anon, authenticated; (e select da anon).",
+   "compliance": [],
+   "status": "Open",
+   "owner": null,
+   "firstSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7",
+    "date": "2026-10-19"
+   },
+   "lastSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7"
+   },
+   "rootCause": null,
+   "fixNote": null,
+   "fixCommit": null,
+   "verification": null,
+   "secret": null,
+   "falsePositive": null,
+   "acceptedRisk": null,
+   "ticket": null
+  },
+  {
+   "id": "SEC-007",
+   "title": "Indirizzo del compratore copiato negli appunti condivisi",
+   "severity": "Info",
+   "confidence": "Confirmed",
+   "owasp": "A04:2025",
+   "cwe": "CWE-200",
+   "llm": null,
+   "locations": [
+    {
+     "file": "app-ios/VinylHustler/Features/4_Ordini/OrdersView.swift",
+     "line": 408,
+     "symbol": "copy address",
+     "fingerprint": "da42dfc42f43ffa0",
+     "fpInput": "CWE-200|app-ios/VinylHustler/Features/4_Ordini/OrdersView.swift|copy address|UIPasteboard.general.string = address",
+     "resolved": false
+    }
+   ],
+   "sources": [
+    "ai-review"
+   ],
+   "evidence": "Gli appunti si sincronizzano sugli altri dispositivi Apple e restano finché non si copia altro.",
+   "impact": "Dati personali del compratore leggibili da altre app/dispositivi più a lungo del necessario.",
+   "fix": "UIPasteboard.general.setItems([[UTType.plainText.identifier: address]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])",
+   "compliance": [],
+   "status": "Open",
+   "owner": null,
+   "firstSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7",
+    "date": "2026-10-19"
+   },
+   "lastSeen": {
+    "run": "R1",
+    "commit": "0bcd9e7"
+   },
+   "rootCause": null,
+   "fixNote": null,
+   "fixCommit": null,
+   "verification": null,
+   "secret": null,
+   "falsePositive": null,
+   "acceptedRisk": null,
+   "ticket": null
+  }
+ ],
+ "triageDismissals": []
+}

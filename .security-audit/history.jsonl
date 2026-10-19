@@ -1,0 +1,7 @@
+{"date": "2026-10-19", "run": "R1", "id": "SEC-001", "event": "created", "severity": "High"}
+{"date": "2026-10-19", "run": "R1", "id": "SEC-002", "event": "created", "severity": "Medium"}
+{"date": "2026-10-19", "run": "R1", "id": "SEC-003", "event": "created", "severity": "Medium"}
+{"date": "2026-10-19", "run": "R1", "id": "SEC-004", "event": "created", "severity": "Low"}
+{"date": "2026-10-19", "run": "R1", "id": "SEC-005", "event": "created", "severity": "Low"}
+{"date": "2026-10-19", "run": "R1", "id": "SEC-006", "event": "created", "severity": "Info"}
+{"date": "2026-10-19", "run": "R1", "id": "SEC-007", "event": "created", "severity": "Info"}
