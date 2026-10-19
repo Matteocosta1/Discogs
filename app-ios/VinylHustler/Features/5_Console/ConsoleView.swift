@@ -57,7 +57,7 @@ struct ConsoleView: View {
                 }
             }
             .themedBackground()
-            .navigationTitle("Settings")
+            .senzaTitolo("Settings")
             .onReceive(timer) { _ in Task { apiUsed = await seller.apiUsedLastMinute() } }
             .task { aiSignedIn = await Backend.shared.accessToken() != nil }
         }

@@ -21,7 +21,6 @@ struct SessionView: View {
     @State private var addingKind = false
     @State private var newKind = ""
     @State private var camera = false
-    @State private var breathe = false
     @State private var aiReady = true
     @State private var info: InfoTopic?
 
@@ -45,7 +44,6 @@ struct SessionView: View {
             // Una pagina sola, ferma: niente da scorrere. La fotocamera prende tutto lo spazio che resta.
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Foto").font(.system(size: 34, weight: .bold)).foregroundStyle(Theme.text)
                     Spacer()
                     // la versione installata: per confrontare a colpo d'occhio due telefoni
                     Text(AppVersione.nome).font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.muted)
@@ -164,6 +162,7 @@ struct SessionView: View {
     /// (angoli del mirino, l'obiettivo, una spia). Riempie lo spazio che resta nella pagina.
     private var cameraButton: some View {
         Button { camera = true } label: {
+            Pulsa(periodo: 3.6) { respiro in
             ZStack {
                 RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.black)
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -171,26 +170,24 @@ struct SessionView: View {
                 Angoli()
                     .stroke(Theme.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .padding(18)
-                    .opacity(breathe ? 1 : 0.55)
+                    .opacity(0.55 + 0.45 * respiro)
                 VStack(spacing: 10) {
                     Image(systemName: "camera")
                         .font(.system(size: 34, weight: .light))
                         .foregroundStyle(Theme.text)
                     HStack(spacing: 6) {
                         Circle().fill(Theme.accent).frame(width: 6, height: 6)
-                            .shadow(color: Theme.glow, radius: breathe ? 4 : 1)
+                            .shadow(color: Theme.glow, radius: 1 + 3 * respiro)
                         Text("APRI").font(Theme.mono(11, .bold)).tracking(2.5).foregroundStyle(Theme.accent)
                     }
                 }
             }
             .frame(minHeight: 110, maxHeight: .infinity)
             .contentShape(Rectangle())
+            }
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Apri la fotocamera")
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) { breathe = true }
-        }
     }
 
     /// Il tipo di contenitore come pastiglia: verde se scelto. Tenendolo premuto si toglie.

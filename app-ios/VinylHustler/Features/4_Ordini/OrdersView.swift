@@ -81,7 +81,7 @@ struct OrdersView: View {
                 .padding(.bottom, 24)
             }
             .background(Theme.bg)
-            .navigationTitle("Ordini")
+            .senzaTitolo("Ordini")
             .refreshable { await Task { await load() }.value }   // Task a parte: il gesto non la interrompe
             .overlay { if loading && orders.isEmpty { ProgressView("Leggo gli ordini…").tint(Theme.accent) } }
             .task { await Task { await load() }.value; await OrderWatcher.requestPermission() }
@@ -254,7 +254,7 @@ struct OpenOrderCard: View {
     let onOpen: () -> Void
     let onStep: (Int) -> Void
 
-    @State private var respiro = false
+    private let respiro = true             // V55: luce ferma (l'animazione infinita faceva ondeggiare la scheda)
     @State private var furgone = false
 
     private let labels = ["Preso", "Imballato", "Spedito"]
@@ -359,9 +359,6 @@ struct OpenOrderCard: View {
                 .stroke(Theme.glow.opacity(respiro ? 0.9 : 0.4), lineWidth: 1)
         )
         .shadow(color: Theme.glow.opacity(respiro ? 0.45 : 0.15), radius: respiro ? 14 : 6)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { respiro = true }
-        }
     }
 }
 

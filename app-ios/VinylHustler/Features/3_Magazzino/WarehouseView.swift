@@ -93,7 +93,7 @@ struct WarehouseView: View {
     private func chrome<V: View>(_ content: V) -> some View {
         content
             .themedBackground()
-            .navigationTitle("Magazzino")
+            .senzaTitolo("Magazzino")
             .searchable(text: $search, prompt: "Cerca nel magazzino")
             .refreshable { await Task { await sync() }.value }
             .overlay { if loading { ProgressView("Leggo Discogs…").tint(Theme.accent) } }

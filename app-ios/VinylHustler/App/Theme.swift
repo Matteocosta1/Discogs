@@ -84,12 +84,12 @@ struct HUDLabel: View {
 struct VinylMark: View {
     var size: CGFloat = 120
     var spinning = false
-    @State private var angle = 0.0
 
     var body: some View {
         ZStack {
-            disc
-                .rotationEffect(.degrees(angle))
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !spinning)) { t in
+                disc.rotationEffect(.degrees(spinning ? t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 5) / 5 * 360 : 0))
+            }
             Circle()
                 .trim(from: 0.06, to: 0.14)
                 .stroke(Color.white.opacity(0.10), lineWidth: size * 0.22)
@@ -97,10 +97,6 @@ struct VinylMark: View {
                 .blur(radius: size * 0.02)
         }
         .frame(width: size, height: size)
-        .onAppear {
-            guard spinning else { return }
-            withAnimation(.linear(duration: 5).repeatForever(autoreverses: false)) { angle = 360 }
-        }
     }
 
     private var disc: some View {
@@ -229,5 +225,30 @@ struct HustlerTag: View {
             .shadow(color: Theme.glow.opacity(0.55), radius: size * 0.22)
             .shadow(color: Theme.accent.opacity(0.35), radius: size * 0.6)
             .accessibilityLabel("Vinyl Hustler")
+    }
+}
+
+extension View {
+    /// Pagina principale senza il titolo grande (V55): il nome della sezione è già nella barra in basso.
+    /// Il titolo resta per il tasto "indietro" e per VoiceOver, ma non si vede.
+    func senzaTitolo(_ nome: String) -> some View {
+        self.navigationTitle(nome)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1) } }
+    }
+}
+
+/// Un valore che va e viene (0…1) col tempo, disegnato fotogramma per fotogramma.
+/// Al posto di withAnimation(...repeatForever): quella trascina anche la posizione della vista,
+/// che così sale e scende all'infinito (era il "su e giù" delle Bozze).
+struct Pulsa<Content: View>: View {
+    var periodo: Double = 1.8
+    @ViewBuilder var content: (Double) -> Content
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { t in
+            let x = t.date.timeIntervalSinceReferenceDate / periodo
+            content((1 - cos(x * 2 * .pi)) / 2)
+        }
     }
 }

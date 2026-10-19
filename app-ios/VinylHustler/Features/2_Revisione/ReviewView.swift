@@ -63,7 +63,7 @@ struct ReviewView: View {
                 .padding()
             }
             .background(Theme.bg)
-            .navigationTitle("Revisione")
+            .senzaTitolo("Revisione")
             .searchable(text: $search, prompt: "Titolo, artista, scatola…")
         }
     }
