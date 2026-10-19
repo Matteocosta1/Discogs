@@ -14,3 +14,7 @@ SUPABASE_ANON_KEY = sb_publishable_q_SMWAIgB3YgZPJRDHbHWQ_tg-muv8d
 DISCOGS_PERSONAL_TOKEN =
 
 #include? "../Secrets.xcconfig"
+
+// V56 (sicurezza): nelle versioni Release (Archive -> TestFlight / App Store) il token personale NON entra mai,
+// anche se è scritto in Secrets.xcconfig. Resta solo nelle prove con ▶ (Debug) sui telefoni del team.
+DISCOGS_PERSONAL_TOKEN[config=Release] =

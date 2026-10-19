@@ -405,7 +405,9 @@ private struct OrderDetail: View {
                     Section("SPEDIRE A") {
                         Text(address).font(.system(size: 15)).textSelection(.enabled)
                         Button(copied ? "Copiato" : "Copia l'indirizzo", systemImage: copied ? "checkmark" : "doc.on.doc") {
-                            UIPasteboard.general.string = address
+                            // V56: solo su questo telefono (non sugli altri dispositivi Apple) e per 10 minuti
+                            UIPasteboard.general.setItems([["public.utf8-plain-text": address]],
+                                                          options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])
                             Suoni.tocco()
                             copied = true
                         }

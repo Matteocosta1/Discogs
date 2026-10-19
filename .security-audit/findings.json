@@ -58,7 +58,7 @@
    "impact": "Chiunque riceva un file dell'app (TestFlight, ad hoc) può leggere il token e controllare l'account venditore Discogs: annunci, prezzi, ordini, indirizzi dei compratori. Oggi l'app è solo sui due telefoni del team: diventa Critical appena si distribuisce.",
    "fix": "Togliere la chiave DISCOGS_PERSONAL_TOKEN dall'Info.plist delle build Release (o del tutto) e usare solo 'Accedi con Discogs' (OAuth) o il token incollato a mano, salvato nel Portachiavi.",
    "compliance": [],
-   "status": "Open",
+   "status": "Fixed",
    "owner": null,
    "firstSeen": {
     "run": "R1",
@@ -69,9 +69,9 @@
     "run": "R1",
     "commit": "0bcd9e7"
    },
-   "rootCause": null,
-   "fixNote": null,
-   "fixCommit": null,
+   "rootCause": "Il token del Mac passava da Secrets.xcconfig all'Info.plist di ogni build, anche Release.",
+   "fixNote": "Base.xcconfig: DISCOGS_PERSONAL_TOKEN[config=Release] vuoto; AppConfig restituisce \"\" fuori da DEBUG.",
+   "fixCommit": "V56",
    "verification": null,
    "secret": null,
    "falsePositive": null,
@@ -111,7 +111,7 @@
    "impact": "Un utente con l'app può spendere oltre il tetto (crediti Anthropic ed ElevenLabs di Matteo) mandando molte richieste insieme.",
    "fix": "Una funzione SQL che controlla e prenota il budget in un solo passo (update ... where consumo + stima <= tetto returning), chiamata prima del fornitore; più un limite di richieste al minuto per utente.",
    "compliance": [],
-   "status": "Open",
+   "status": "Fixed",
    "owner": null,
    "firstSeen": {
     "run": "R1",
@@ -123,8 +123,8 @@
     "commit": "0bcd9e7"
    },
    "rootCause": null,
-   "fixNote": null,
-   "fixCommit": null,
+   "fixNote": "Budget prenotato in un solo passo (reserve_ai / reserve_voice) prima di chiamare il fornitore; rimborso se fallisce.",
+   "fixCommit": "V56",
    "verification": null,
    "secret": null,
    "falsePositive": null,
@@ -156,7 +156,7 @@
    "impact": "Con l'app distribuita, chiunque può 'insegnare' dischi sbagliati, titoli offensivi o copertine da un server suo (vede IP e orari di chi apre la scheda). Oggi gli utenti sono 2.",
    "fix": "Sul server ricavare titolo e copertina dalla release Discogs (o accettare solo URL https di i.discogs.com / st.discogs.com) e fidarsi di un abbinamento solo dopo 2+ conferme di persone diverse.",
    "compliance": [],
-   "status": "Open",
+   "status": "Fixed",
    "owner": null,
    "firstSeen": {
     "run": "R1",
@@ -168,8 +168,8 @@
     "commit": "0bcd9e7"
    },
    "rootCause": null,
-   "fixNote": null,
-   "fixCommit": null,
+   "fixNote": "Titolo calcolato dal server da Discogs; copertina solo da *.discogs.com; titolo/copertina non più sovrascritti; agli altri solo abbinamenti con 2+ persone.",
+   "fixCommit": "V56",
    "verification": null,
    "secret": null,
    "falsePositive": null,
@@ -201,7 +201,7 @@
    "impact": "Se in futuro le si passa un URL non di Discogs (es. una copertina dalla memoria condivisa), il token dell'utente finisce a quel server.",
    "fix": "Toglierla, oppure mandare l'intestazione solo se l'host è api.discogs.com / *.discogs.com.",
    "compliance": [],
-   "status": "Open",
+   "status": "Fixed",
    "owner": null,
    "firstSeen": {
     "run": "R1",
@@ -213,8 +213,8 @@
     "commit": "0bcd9e7"
    },
    "rootCause": null,
-   "fixNote": null,
-   "fixCommit": null,
+   "fixNote": "Tolta DiscogsClient.download(url).",
+   "fixCommit": "V56",
    "verification": null,
    "secret": null,
    "falsePositive": null,
@@ -246,7 +246,7 @@
    "impact": "Richieste malformate producono errori 500 e chiamate inutili al fornitore; nessuna fuga di dati.",
    "fix": "req.json().catch(() => ({})), accettare solo stringhe base64 sotto ~5 MB ciascuna.",
    "compliance": [],
-   "status": "Open",
+   "status": "Fixed",
    "owner": null,
    "firstSeen": {
     "run": "R1",
@@ -258,8 +258,8 @@
     "commit": "0bcd9e7"
    },
    "rootCause": null,
-   "fixNote": null,
-   "fixCommit": null,
+   "fixNote": "req.json().catch; foto solo base64 valide e <= ~5 MB.",
+   "fixCommit": "V56",
    "verification": null,
    "secret": null,
    "falsePositive": null,
@@ -291,7 +291,7 @@
    "impact": "Nessun rischio oggi; se un giorno si disattiva RLS per errore, le tabelle diventano scrivibili.",
    "fix": "revoke insert, update, delete on all tables in schema public from anon, authenticated; (e select da anon).",
    "compliance": [],
-   "status": "Open",
+   "status": "Fixed",
    "owner": null,
    "firstSeen": {
     "run": "R1",
@@ -303,8 +303,8 @@
     "commit": "0bcd9e7"
    },
    "rootCause": null,
-   "fixNote": null,
-   "fixCommit": null,
+   "fixNote": "Revocati insert/update/delete/truncate da anon e authenticated; select da anon.",
+   "fixCommit": "V56",
    "verification": null,
    "secret": null,
    "falsePositive": null,
@@ -336,7 +336,7 @@
    "impact": "Dati personali del compratore leggibili da altre app/dispositivi più a lungo del necessario.",
    "fix": "UIPasteboard.general.setItems([[UTType.plainText.identifier: address]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])",
    "compliance": [],
-   "status": "Open",
+   "status": "Fixed",
    "owner": null,
    "firstSeen": {
     "run": "R1",
@@ -348,8 +348,8 @@
     "commit": "0bcd9e7"
    },
    "rootCause": null,
-   "fixNote": null,
-   "fixCommit": null,
+   "fixNote": "Appunti solo locali e per 10 minuti.",
+   "fixCommit": "V56",
    "verification": null,
    "secret": null,
    "falsePositive": null,

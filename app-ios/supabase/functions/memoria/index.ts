@@ -6,6 +6,29 @@
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const MAX_DIST = 6;                 // bit diversi su 64 per dire "è la stessa foto/copertina"
+const MIN_PEOPLE = 2;               // V56: agli altri si propone un abbinamento solo se l'hanno confermato 2+ persone
+
+/** V56: titolo dalla scheda Discogs (non da quello che manda il telefono): "Artista - Titolo (etichetta, paese, anno)". */
+async function discogsTitle(release: number): Promise<string | null> {
+  try {
+    const r = await fetch(`https://api.discogs.com/releases/${release}`, {
+      headers: { "User-Agent": "VinylHustler/0.1 +memoria" }, signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const artist = String(d.artists_sort ?? (d.artists ?? []).map((a: { name: string }) => a.name).join(", ")).trim();
+    const extra = [d.labels?.[0]?.name, d.country, d.year || null].filter((x) => x).join(", ");
+    const t = [artist, String(d.title ?? "").trim()].filter((x) => x).join(" - ");
+    return t ? (extra ? `${t} (${extra})` : t).slice(0, 300) : null;
+  } catch {
+    return null;
+  }
+}
+/** V56: solo copertine servite da Discogs. */
+function discogsCover(v: unknown): string | null {
+  const s = String(v ?? "").slice(0, 500);
+  return /^https:\/\/(i|img|st)\.discogs\.com\//.test(s) ? s : null;
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -33,17 +56,15 @@ Deno.serve(async (req) => {
     const out: { photo?: unknown; reads: Record<string, unknown> } = { reads: {} };
     const big = typeof body.dhash === "string" ? toBig(body.dhash) : null;
     if (big) {
-      const { data } = await admin.rpc("lookup_dhash", { p_dhash: big, p_max: MAX_DIST });
+      const { data } = await admin.rpc("lookup_dhash_safe", { p_dhash: big, p_max: MAX_DIST, p_user: auth.user.id, p_min: MIN_PEOPLE });
       if (data?.[0]) out.photo = data[0];
     }
     const reads: string[] = Array.isArray(body.reads) ? body.reads.slice(0, 20).map(String) : [];
     const keys = [...new Set(reads.map(norm).filter((k) => k.length >= 3))];
     if (keys.length) {
-      const { data } = await admin.from("disc_memory")
-        .select("key, release_id, title, cover_url, confirmations")
-        .eq("kind", "read").in("key", keys).order("confirmations", { ascending: false });
+      const { data } = await admin.rpc("lookup_reads_safe", { p_keys: keys, p_user: auth.user.id, p_min: MIN_PEOPLE });
       for (const r of reads) {
-        const hit = (data ?? []).find((d) => d.key === norm(r));   // il più confermato per quella lettura
+        const hit = (data ?? []).find((d: { key: string }) => d.key === norm(r));   // il più confermato per quella lettura
         if (hit) out.reads[r] = hit;
       }
     }
@@ -53,8 +74,8 @@ Deno.serve(async (req) => {
   if (body.task === "learn") {
     const release = Number(body.release_id);
     if (!Number.isInteger(release) || release <= 0) return json({ error: "release mancante" }, 400);
-    const title = body.title ? String(body.title).slice(0, 300) : null;
-    const cover = body.cover ? String(body.cover).slice(0, 500) : null;
+    const title = await discogsTitle(release);       // V56: dal server, non dal telefono
+    const cover = discogsCover(body.cover);
     const big = typeof body.dhash === "string" ? toBig(body.dhash) : null;
     if (big) {
       await admin.rpc("learn_disc", { p_user: auth.user.id, p_kind: "dhash", p_key: body.dhash.toLowerCase(), p_dhash: big,

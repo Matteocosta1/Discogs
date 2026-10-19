@@ -15,7 +15,14 @@ enum AppConfig {
     static var discogsConsumerSecret: String { info("DISCOGS_CONSUMER_SECRET") }
 
     /// Solo uso interno: token personale messo in Secrets.xcconfig (vuoto nelle versioni da distribuire).
-    static var discogsPersonalToken: String { info("DISCOGS_PERSONAL_TOKEN") }
+    /// V56: nelle build Release è sempre vuoto (doppia sicurezza, oltre a Base.xcconfig).
+    static var discogsPersonalToken: String {
+        #if DEBUG
+        return info("DISCOGS_PERSONAL_TOKEN")
+        #else
+        return ""
+        #endif
+    }
 
     // Supabase: solo URL e chiave pubblica (anon). La chiave di Anthropic sta SOLO sul server.
     static var supabaseURL: URL? { URL(string: info("SUPABASE_URL")) }

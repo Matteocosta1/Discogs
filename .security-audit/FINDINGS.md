@@ -1,6 +1,6 @@
 # Registro sicurezza · Vinyl Hustler
 
-Run R1 · commit 0bcd9e7 · 2026-10-19 · Gate: **NON SUPERATO** (1 High aperto) · Copertura: **Ridotta** (nessuno scanner: solo revisione manuale + controlli Supabase)
+Run R1 · commit 0bcd9e7 · 2026-10-19 · Gate: **NON SUPERATO** (1 High aperto) → V56: tutti segnati **Fixed**, da verificare con security-verify · Copertura: **Ridotta** (nessuno scanner: solo revisione manuale + controlli Supabase)
 
 | ID | Gravità | Certezza | Titolo | Dove |
 |---|---|---|---|---|

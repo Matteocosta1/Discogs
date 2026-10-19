@@ -88,13 +88,10 @@ Deno.serve(async (req) => {
   const hitMp3 = await admin.storage.from("voce").download(`${name}.mp3`);
   if (hitMp3.data) return new Response(hitMp3.data, { headers: { "Content-Type": "audio/mpeg", "X-Voce": "condivisa" } });
 
-  // tetto del mese: solo per le frasi nuove
-  const month = new Date().toISOString().slice(0, 7) + "-01";
-  const { data: usage } = await admin.from("usage_monthly").select("voice_chars")
-    .eq("user_id", auth.user.id).eq("month", month).maybeSingle();
-  if (Number(usage?.voice_chars ?? 0) + text.length > Number(profile?.voice_monthly_chars ?? 20000)) {
-    return json({ error: "tetto voce del mese raggiunto" }, 402);
-  }
+  // tetto del mese: solo per le frasi nuove. V56: i caratteri si prenotano in un solo passo (niente sforamenti in parallelo)
+  const { data: ok } = await admin.rpc("reserve_voice", { p_user: auth.user.id, p_chars: text.length,
+                                                          p_cap: Number(profile?.voice_monthly_chars ?? 20000) });
+  if (ok !== true) return json({ error: "tetto voce del mese raggiunto" }, 402);
 
   const stream = body.stream === true;
   const url = stream
@@ -107,9 +104,9 @@ Deno.serve(async (req) => {
   });
   if (!res.ok || !res.body) {
     console.error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    await admin.rpc("add_voice_usage", { p_user: auth.user.id, p_chars: -text.length });   // restituisce la prenotazione
     return json({ error: "voce non disponibile" }, 502);
   }
-  await admin.rpc("add_voice_usage", { p_user: auth.user.id, p_chars: text.length });
 
   // una copia va all'app, l'altra si salva per tutti (finita la frase)
   const [toApp, toStore] = res.body.tee();

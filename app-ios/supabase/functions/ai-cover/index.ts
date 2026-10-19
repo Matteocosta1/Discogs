@@ -29,6 +29,7 @@ const PRICES: Record<string, [number, number]> = {
   "claude-opus-5-5": [4, 20],
 };
 const MAX_PHOTOS = 8;
+const MAX_PHOTO_CHARS = 7_000_000;          // base64 di circa 5 MB
 
 const SCAN_SCHEMA = {
   type: "object",
@@ -81,19 +82,17 @@ Deno.serve(async (req) => {
   const user = auth?.user;
   if (!user) return json({ error: "accesso richiesto" }, 401);
 
-  // 2. Tetto di spesa del mese
-  const month = new Date().toISOString().slice(0, 7) + "-01";
+  // 2. Tetto di spesa del mese (V56: il budget si prenota prima di ogni chiamata, vedi scan())
   const { data: profile } = await admin.from("profiles").select("ai_monthly_cap_eur").eq("id", user.id).single();
-  const { data: usage } = await admin.from("usage_monthly").select("ai_cost_eur")
-    .eq("user_id", user.id).eq("month", month).maybeSingle();
-  if (Number(usage?.ai_cost_eur ?? 0) >= Number(profile?.ai_monthly_cap_eur ?? 3)) {
-    return json({ error: "tetto AI del mese raggiunto" }, 402);
-  }
+  const cap = Number(profile?.ai_monthly_cap_eur ?? 3);
 
   // 3. Richiesta a Claude: ogni immagine con il suo numero, poi le istruzioni
-  const body = await req.json();
-  if (body.task !== "scan") return json({ error: "compito sconosciuto: aggiorna l'app" }, 400);
-  const photos: string[] = (body.photos ?? []).slice(0, MAX_PHOTOS);
+  const body = await req.json().catch(() => null);
+  if (!body || body.task !== "scan") return json({ error: "compito sconosciuto: aggiorna l'app" }, 400);
+  // V56: solo foto vere (stringhe base64, al massimo ~5 MB l'una)
+  const photos: string[] = (Array.isArray(body.photos) ? body.photos : [])
+    .filter((p: unknown) => typeof p === "string" && p.length > 100 && p.length <= MAX_PHOTO_CHARS && /^[A-Za-z0-9+/=]+$/.test(p))
+    .slice(0, MAX_PHOTOS);
   if (photos.length === 0) return json({ records: [], cost: 0 });
   const content: unknown[] = [];
   photos.forEach((data, i) => {
@@ -106,6 +105,11 @@ Deno.serve(async (req) => {
   type Scan = { records: Record<string, unknown>[]; cost: number; ms: number; model: string; error?: string };
   async function scan(model: string): Promise<Scan> {
     const t0 = Date.now();
+    // V56: prenota il costo massimo possibile; se il tetto non lo permette, niente chiamata.
+    const [pin0, pout0] = PRICES[model] ?? [5, 25];
+    const reserved = ((photos.length * 1800 + 800) * pin0 + 4000 * pout0) / 1e6;
+    const { data: ok } = await admin.rpc("reserve_ai", { p_user: user!.id, p_cost: reserved, p_cap: cap });
+    if (ok !== true) return { records: [], cost: 0, ms: 0, model, error: "budget" };
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -120,7 +124,10 @@ Deno.serve(async (req) => {
         output_config: { format: { type: "json_schema", schema: SCAN_SCHEMA }, effort: "low" },
       }),
     });
-    if (!res.ok) return { records: [], cost: 0, ms: Date.now() - t0, model, error: `Anthropic ${res.status}: ${await res.text()}` };
+    if (!res.ok) {
+      await admin.rpc("adjust_ai", { p_user: user!.id, p_delta: -reserved, p_call: false });   // restituisce la prenotazione
+      return { records: [], cost: 0, ms: Date.now() - t0, model, error: `Anthropic ${res.status}: ${await res.text()}` };
+    }
     const msg = await res.json();
     const [pin, pout] = PRICES[model] ?? [5, 25];
     const cost = (msg.usage.input_tokens * pin + msg.usage.output_tokens * pout) / 1e6;
@@ -128,7 +135,7 @@ Deno.serve(async (req) => {
       user_id: user!.id, task: "scan", model, input_tokens: msg.usage.input_tokens,
       output_tokens: msg.usage.output_tokens, cost_eur: cost,
     });
-    await admin.rpc("add_ai_usage", { p_user: user!.id, p_cost: cost });
+    await admin.rpc("adjust_ai", { p_user: user!.id, p_delta: cost - reserved, p_call: true });   // costo vero
     const text = (msg.content ?? []).find((b: { type: string }) => b.type === "text")?.text ?? "{}";
     let records: Record<string, unknown>[] = [];
     try {
@@ -162,6 +169,7 @@ Deno.serve(async (req) => {
   } else {
     chosen = await scan(SONNET);
   }
+  if (chosen.error === "budget") return json({ error: "tetto AI del mese raggiunto" }, 402);
   if (chosen.error && chosen.records.length === 0) {
     console.error(chosen.error);                       // il dettaglio resta nei log, all'app solo il messaggio
     return json({ error: "AI non disponibile, riprova tra poco" }, 502);

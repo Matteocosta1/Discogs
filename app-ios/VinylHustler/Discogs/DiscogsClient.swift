@@ -236,14 +236,5 @@ final class DiscogsClient: @unchecked Sendable {
         ])
     }
 
-    /// Scarica un'immagine di Discogs (conta nel limite, come le altre richieste).
-    func download(_ url: String) async throws -> Data {
-        guard let u = URL(string: url), let credentials else { throw DiscogsError.notLoggedIn }
-        var req = URLRequest(url: u, timeoutInterval: 30)
-        req.setValue(AppConfig.userAgent, forHTTPHeaderField: "User-Agent")
-        req.setValue(credentials.authorizationHeader(), forHTTPHeaderField: "Authorization")
-        await limiter.waitTurn()
-        let (data, _) = try await URLSession.shared.data(for: req)
-        return data
-    }
+    // V56: tolta download(url): mandava le credenziali Discogs a qualunque indirizzo (non la usava nessuno).
 }
