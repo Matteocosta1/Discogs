@@ -21,6 +21,7 @@ struct ConsoleView: View {
         @Bindable var seller = seller
         NavigationStack {
             Form {
+                Section { LabeledContent("Versione dell'app", value: AppVersione.nome) }
                 accountSection
                 Section("API Discogs · ultimo minuto") {
                     LabeledContent("Richieste", value: "\(apiUsed) / 60")

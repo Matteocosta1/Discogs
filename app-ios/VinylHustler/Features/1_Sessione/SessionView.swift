@@ -44,8 +44,13 @@ struct SessionView: View {
         NavigationStack {
             // Una pagina sola, ferma: niente da scorrere. La fotocamera prende tutto lo spazio che resta.
             VStack(alignment: .leading, spacing: 12) {
-                Text("Foto").font(.system(size: 34, weight: .bold)).foregroundStyle(Theme.text)
-                    .padding(.top, 6)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Foto").font(.system(size: 34, weight: .bold)).foregroundStyle(Theme.text)
+                    Spacer()
+                    // la versione installata: per confrontare a colpo d'occhio due telefoni
+                    Text(AppVersione.nome).font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.muted)
+                }
+                .padding(.top, 6)
 
                 block("Posizione", .posizione) {
                     ScrollView(.horizontal, showsIndicators: false) {
