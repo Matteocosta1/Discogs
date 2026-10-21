@@ -128,11 +128,6 @@ enum InfoTopic: String, Identifiable {
                     "• l'etichetta al centro del vinile.",
                     "Se non lo riconosce, tocca «Altra foto» e fotografa un altro lato.",
                 ]),
-                ("Il riquadro verde", [
-                    "Quando la fotocamera vede la copertina la contorna in verde, come quando l'iPhone scansiona un documento.",
-                    "Allo scatto la foto viene ritagliata e raddrizzata da sola: all'AI arriva solo il disco, senza tavolo e mani. Riconosce meglio.",
-                    "Con l'etichetta o il disco senza copertina ritaglia il quadrato intorno al cerchio. Se non è sicuro, tiene la foto intera.",
-                ]),
                 ("Video = più dischi", [
                     "Tocca REC e passa i dischi davanti al telefono, uno dopo l'altro, lasciando a ognuno un paio di secondi.",
                     "Il video dura al massimo 20 secondi. Alla fine li riconosce tutti insieme.",

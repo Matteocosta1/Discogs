@@ -299,22 +299,18 @@ struct OcchioView: View {
         withAnimation(.easeIn(duration: 0.45).delay(0.06)) { lampo = false }
         stato = "ANALISI"
         motore.scatta { dati in
-          // il ritaglio (copertina raddrizzata, o il quadrato intorno al disco) si fa fuori dalla coda della fotocamera
+          // V57: foto intera, alla qualità piena (niente più ritaglio automatico)
           DispatchQueue.global(qos: .userInitiated).async {
-            let ritaglio = dati.map { Ritaglio.disco($0) }
-            let image = ritaglio.flatMap { OcchioView.riduci($0.dati) }.flatMap(UIImage.init(data:))
-            let tipo = ritaglio?.tipo ?? .intera
+            let image = dati.flatMap { OcchioView.riduci($0) }.flatMap(UIImage.init(data:))
             Task { @MainActor in
                 guard let image else { stato = "SCATTO NON RIUSCITO · RIPROVA"; return }
-                if tipo != .intera { stato = tipo == .copertina ? "COPERTINA RITAGLIATA" : "DISCO RITAGLIATO" }
                 if let target = attachTo {
                     seller.addPhoto(image, to: target, context: context)
                     attachTo = nil
                 } else {
                     seller.shoot([image], video: false, place: place, media: media, sleeve: sleeve, context: context)
                 }
-                try? await Task.sleep(for: .milliseconds(tipo == .intera ? 0 : 900))
-                if stato.hasSuffix("RITAGLIATA") || stato.hasSuffix("RITAGLIATO") || stato == "ANALISI" { stato = "INQUADRA UN DISCO" }
+                if stato == "ANALISI" { stato = "INQUADRA UN DISCO" }
             }
           }
         }
@@ -707,9 +703,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         guard sessione.canAddOutput(foto) else { sessione.commitConfiguration(); return false }
         sessione.addOutput(foto)
         if sessione.canAddOutput(video) { sessione.addOutput(video) }
-        fotogrammi.alwaysDiscardsLateVideoFrames = true
-        fotogrammi.setSampleBufferDelegate(self, queue: codaRiquadro)
-        if sessione.canAddOutput(fotogrammi) { sessione.addOutput(fotogrammi) }   // se non si può, niente riquadro: il resto funziona
+        // V57: tolto il riquadro verde dal vivo (inventava rombi e forme che saltavano): niente analisi dei fotogrammi
         for output in [foto, video] as [AVCaptureOutput] {   // verticale, come tieni il telefono
             if let c = output.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
         }
@@ -788,11 +782,6 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         let ok = error == nil || finito == true
         coda.async {
             self.preset(.photo)                             // finito il REC si torna alla qualità foto piena
-            if !self.sessione.outputs.contains(self.fotogrammi), self.sessione.canAddOutput(self.fotogrammi) {
-                self.sessione.beginConfiguration()
-                self.sessione.addOutput(self.fotogrammi)
-                self.sessione.commitConfiguration()
-            }
             let f = self.consegnaVideo
             self.consegnaVideo = nil
             f?(ok ? url : nil)
