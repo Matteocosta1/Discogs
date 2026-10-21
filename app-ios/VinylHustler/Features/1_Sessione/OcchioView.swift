@@ -205,13 +205,11 @@ struct OcchioView: View {
     }
 
     /// Sotto la fotocamera, compatti (il mirino prende il resto dello schermo):
-    ///   · i dischi da decidere, uno accanto all'altro (il più nuovo a sinistra);
-    ///   · una fila sottile con quelli già messi su Discogs in questa serie.
+    ///   · i dischi da decidere, uno accanto all'altro (il più nuovo a sinistra); deciso Vendi o Bozza, spariscono.
     @ViewBuilder private var results: some View {
-        if !seen.isEmpty {
+        if seen.contains(where: { !Self.done($0) }) {
             VStack(alignment: .leading, spacing: 6) {
                 let pending = seen.filter { !Self.done($0) }
-                let doneOnes = seen.filter(Self.done)
                 if !pending.isEmpty {
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -239,22 +237,7 @@ struct OcchioView: View {
                     }
                     .frame(height: 210)
                 }
-                if !doneOnes.isEmpty {
-                    Text("GIÀ SU DISCOGS · \(doneOnes.count)")
-                        .font(Theme.mono(9, .semibold)).tracking(2).foregroundStyle(Theme.muted)
-                        .padding(.horizontal, 14)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 6) {
-                            ForEach(doneOnes) { disc in
-                                DoneCard(disc: disc)
-                                    .transition(.scale(scale: 0.4).combined(with: .opacity))
-                            }
-                        }
-                        .animation(.spring(duration: 0.5, bounce: 0.35), value: doneOnes.map(\.id))
-                        .padding(.horizontal, 12)
-                    }
-                    .frame(height: 50)
-                }
+                // V58: deciso Vendi o Bozza, il disco sparisce da qui (niente più fila di quelli già su Discogs)
             }
             .padding(.vertical, 10)
             .background(Theme.bg)
