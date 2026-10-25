@@ -33,6 +33,10 @@ struct OcchioView: View {
     @State private var preparo = false
     @State private var attachTo: Disc?              // "Altra foto": il prossimo scatto va a questo disco
     @State private var preso = false                // disco appena riconosciuto: il mirino fa "LOCK"
+    // V59: ASCOLTA — il lettore delle tracce del disco riconosciuto (piccolo in basso, grande tirandolo su)
+    private let ascolto = Ascolto.shared
+    @State private var lettoreAperto = false
+    @State private var trascina: CGFloat = 0
 
     private let tinta = Theme.accent
 
@@ -41,6 +45,17 @@ struct OcchioView: View {
         all.filter { $0.createdAt >= openedAt && $0.status != .tolto && !$0.parked }
     }
     private static func done(_ d: Disc) -> Bool { d.status == .inVendita || d.status == .bozza }
+
+    /// V59: il disco riconosciuto più recente, ancora da decidere: è quello del riquadro in alto e del lettore.
+    private var attuale: Disc? {
+        seen.first { ($0.status == .daConfermare || $0.status == .pronto) && $0.releaseID != nil }
+    }
+    private var schedaAttuale: Release? { attuale?.releaseID.flatMap { seller.schede[$0] } }
+    private var versioneAttuale: String {
+        guard let d = attuale, d.candidates.count > 1,
+              let i = d.candidates.firstIndex(where: { $0.id == d.releaseID }) else { return "" }
+        return "\(i + 1) / \(d.candidates.count)"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -84,9 +99,23 @@ struct OcchioView: View {
             results
         }
         .background(Color.black.ignoresSafeArea())
+        .overlay { lettoreGrande }
         .statusBarHidden()
         .task { await prepara() }
-        .onDisappear { motore.ferma() }
+        .onDisappear {
+            motore.ferma()
+            ascolto.chiudi()
+        }
+        // V59: disco riconosciuto (o cambiato con Versioni): la sua scheda Discogs per il riquadro e le tracce.
+        // Deciso Vendi o Bozza (nessun disco attuale): il lettore si ferma e sparisce.
+        .task(id: attuale?.releaseID) {
+            guard let rid = attuale?.releaseID else {
+                lettoreAperto = false
+                ascolto.chiudi()
+                return
+            }
+            if let r = await seller.scheda(rid) { await ascolto.prepara(r) }
+        }
         // app in secondo piano (per esempio si torna a una videochiamata): la fotocamera si libera subito,
         // così una videochiamata o un'altra app la riavranno; tornando qui si riaccende da sola
         .onChange(of: fase) { _, nuova in
@@ -121,6 +150,7 @@ struct OcchioView: View {
 
     private var topBar: some View {
         HStack(alignment: .top) {
+          VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("VINYL HUSTLER").font(Theme.mono(14, .bold)).tracking(4)
                 Text("\(place) · \(media == sleeve ? media.rawValue : "\(media.rawValue)/\(sleeve.rawValue)")".uppercased())
@@ -128,6 +158,14 @@ struct OcchioView: View {
             }
             .foregroundStyle(tinta)
             .shadow(color: tinta.opacity(0.6), radius: 6)
+            // V59: il riquadro del disco riconosciuto, sotto la scritta (come il Satellite di JARVIS)
+            if let r = schedaAttuale {
+                PannelloDisco(release: r, versione: versioneAttuale)
+                    .id(r.id)
+                    .transition(.scale(scale: 0.3, anchor: .topLeading).combined(with: .opacity))
+            }
+          }
+          .animation(.spring(duration: 0.4, bounce: 0.2), value: schedaAttuale?.id)
             Spacer()
             roundButton(voice ? "speaker.wave.2.fill" : "speaker.slash.fill", label: voice ? "Voce attiva" : "Voce spenta") {
                 voice.toggle()
@@ -235,12 +273,65 @@ struct OcchioView: View {
                             withAnimation(.snappy) { proxy.scrollTo(id, anchor: .leading) }
                         }
                     }
-                    .frame(height: 210)
+                    .frame(height: 244)                         // V59: c'è anche il prezzo sopra i tasti
+                }
+                // V59: il lettore piccolo delle tracce del disco: si tira su (o si tocca) per aprire quello grande
+                if attuale != nil && (ascolto.cercando || !ascolto.brani.isEmpty) {
+                    LettorePiccolo(ascolto: ascolto) { apriLettore() }
+                        .padding(.horizontal, 12)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 // V58: deciso Vendi o Bozza, il disco sparisce da qui (niente più fila di quelli già su Discogs)
             }
             .padding(.vertical, 10)
             .background(Theme.bg)
+        }
+    }
+
+    // MARK: Il lettore grande (V59)
+
+    /// Sale dal basso come la tendina PROTOCOLLI di JARVIS (ma al contrario): si chiude tirandolo giù
+    /// dalla maniglia o toccando fuori.
+    private var lettoreGrande: some View {
+        GeometryReader { g in
+            let H = min(g.size.height * 0.86, 760)
+            let y = lettoreAperto ? max(0, trascina) : H + 40
+            ZStack(alignment: .bottom) {
+                Color.black.opacity(lettoreAperto ? 0.55 * Double(1 - min(1, trascina / H)) : 0)
+                    .ignoresSafeArea()
+                    .onTapGesture { chiudiLettore() }
+                    .allowsHitTesting(lettoreAperto)
+                LettoreGrande(ascolto: ascolto, release: schedaAttuale,
+                              trascinando: { dy in trascina = max(0, dy) },
+                              rilasciato: { dy in
+                                  if dy > 90 { chiudiLettore() } else { withAnimation(.spring(duration: 0.35)) { trascina = 0 } }
+                              })
+                    .frame(height: H)
+                    .frame(maxWidth: 560)
+                    .background(
+                        UnevenRoundedRectangle(topLeadingRadius: 34, topTrailingRadius: 34)
+                            .fill(Color(hex: 0x060D08).opacity(0.97))
+                            .overlay(UnevenRoundedRectangle(topLeadingRadius: 34, topTrailingRadius: 34)
+                                .stroke(Theme.glow.opacity(0.3), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.6), radius: 25, y: -12)
+                            .ignoresSafeArea(edges: .bottom)
+                    )
+                    .offset(y: y)
+            }
+            .frame(width: g.size.width, height: g.size.height, alignment: .bottom)
+        }
+        .allowsHitTesting(lettoreAperto)
+    }
+
+    private func apriLettore() {
+        trascina = 0
+        withAnimation(.spring(duration: 0.42, bounce: 0.15)) { lettoreAperto = true }
+    }
+
+    private func chiudiLettore() {
+        withAnimation(.spring(duration: 0.38)) {
+            lettoreAperto = false
+            trascina = 0
         }
     }
 

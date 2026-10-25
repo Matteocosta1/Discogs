@@ -21,6 +21,11 @@ final class Seller {
         didSet { UserDefaults.standard.set(try? JSONEncoder().encode(rules), forKey: "rules") }
     }
     var working = 0                      // dischi in riconoscimento adesso
+    /// Le schede Discogs già lette (per il riquadro in alto e il lettore): release id -> scheda.
+    var schede: [Int: Release] = [:]
+    /// V59: il prezzo si calcola appena il disco è riconosciuto, prima di Vendi o Bozza.
+    var prezzoInCorso: Set<UUID> = []
+    var prezzoMancante: Set<UUID> = []
     var lastError: String?
 
     private let queue = SerialQueue()
@@ -168,6 +173,7 @@ final class Seller {
             disc.status = .daConfermare
             disc.reason = ""
             Task { await loadVersions(disc) }
+            Task { await anteprimaPrezzo(disc) }             // V59: il prezzo subito, prima di decidere
         } else {
             disc.status = .daControllare
             disc.reason = found.read.isEmpty ? "Non trovato su Discogs" : "Letto \"\(found.read)\", ma non trovato su Discogs"
@@ -278,6 +284,41 @@ final class Seller {
             disc.candidates.insert(Candidate(id: releaseID, title: "Release \(releaseID)"), at: 0)
         }
         await accept(disc)
+    }
+
+    /// La scheda Discogs di una release (una volta sola: poi resta qui; le richieste passano dalla cache).
+    func scheda(_ id: Int) async -> Release? {
+        if let r = schede[id] { return r }
+        guard let r = try? await client.release(id, currency: currency) else { return nil }
+        schede[id] = r
+        return r
+    }
+
+    /// V59: appena riconosciuto, il prezzo con la regola di sempre, senza cambiare stato: il venditore lo vede
+    /// sulla scheda e poi decide Vendi o Bozza. Vendi / Bozza lo ricalcolano (stesse risposte, già in cache).
+    func anteprimaPrezzo(_ disc: Disc) async {
+        guard let rid = disc.releaseID, disc.status == .daConfermare else { return }
+        prezzoInCorso.insert(disc.id)
+        prezzoMancante.remove(disc.id)
+        defer { prezzoInCorso.remove(disc.id) }
+        do {
+            let suggestions = try await client.priceSuggestions(rid)
+            guard let suggested = suggestions[disc.media.discogs]?.value, let release = await scheda(rid) else {
+                prezzoMancante.insert(disc.id)
+                return
+            }
+            let stats = try await client.stats(rid, currency: currency)
+            let market = MarketData(want: release.community?.want ?? 0, have: release.community?.have ?? 0,
+                                    numForSale: stats.numForSale ?? 0, lowestPrice: stats.lowestPrice?.value,
+                                    lowestCurrency: stats.lowestPrice?.currency ?? currency, formats: release.formatsText)
+            let (p, calc) = PriceEngine.compute(suggested: suggested, market: market, grade: disc.media,
+                                                currency: currency, rules: rules)
+            guard disc.releaseID == rid, disc.status == .daConfermare else { return }   // nel frattempo ha deciso
+            disc.price = NSDecimalNumber(decimal: p).doubleValue
+            disc.priceCalculation = calc
+        } catch {
+            prezzoMancante.insert(disc.id)
+        }
     }
 
     /// Prezzo con la regola di sempre.

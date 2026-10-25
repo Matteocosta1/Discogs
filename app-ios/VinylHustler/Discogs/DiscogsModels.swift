@@ -74,6 +74,27 @@ struct NamedRef: Codable, Hashable {
     var catno: String?
 }
 
+/// Un brano della tracklist ("type_" = track / heading / index: si tengono solo i track).
+struct ReleaseTrack: Codable, Hashable {
+    var position: String?
+    var title: String?
+    var duration: String?
+    var type_: String?
+}
+
+/// Un video collegato alla scheda Discogs (quasi sempre YouTube).
+struct ReleaseVideo: Codable, Hashable {
+    var uri: String?
+    var title: String?
+    var duration: Int?
+}
+
+/// Barcode, matrice… (si usa il Barcode per trovare l'album giusto su Apple Music).
+struct ReleaseIdentifier: Codable, Hashable {
+    var type: String?
+    var value: String?
+}
+
 struct Community: Codable, Hashable {
     var want: Int?
     var have: Int?
@@ -92,6 +113,9 @@ struct Release: Codable, Hashable {
     var year: Int?
     var blockedFromSale: Bool?
     var masterId: Int?              // l'album "madre": da qui si trovano tutte le stampe
+    var tracklist: [ReleaseTrack]?
+    var videos: [ReleaseVideo]?
+    var identifiers: [ReleaseIdentifier]?
 
     var artist: String { artistsSort ?? artists?.map(\.name).joined(separator: ", ") ?? "" }
 
@@ -107,6 +131,20 @@ struct Release: Codable, Hashable {
         (formats ?? []).map { f in
             ([f.name ?? ""] + (f.descriptions ?? []) + [f.text ?? ""]).filter { !$0.isEmpty }.joined(separator: ", ")
         }.joined(separator: "; ")
+    }
+
+    /// Il codice a barre (solo cifre), se Discogs ce l'ha.
+    var barcode: String? {
+        (identifiers ?? []).filter { ($0.type ?? "").lowercased() == "barcode" }
+            .map { ($0.value ?? "").filter(\.isNumber) }
+            .first { (12...13).contains($0.count) }
+    }
+
+    /// Il formato in breve per il riquadro in alto: "LP · ALBUM · MONO".
+    var formatoBreve: String {
+        guard let f = formats?.first else { return "" }
+        let parti = (f.descriptions ?? []).prefix(3)
+        return (parti.isEmpty ? [f.name ?? ""] : Array(parti)).filter { !$0.isEmpty }.joined(separator: " · ").uppercased()
     }
 
     /// Immagini con la principale per prima.

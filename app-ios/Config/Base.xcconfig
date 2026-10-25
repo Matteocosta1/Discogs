@@ -13,6 +13,9 @@ SUPABASE_ANON_KEY = sb_publishable_q_SMWAIgB3YgZPJRDHbHWQ_tg-muv8d
 // Mai riempirlo in una versione da distribuire.
 DISCOGS_PERSONAL_TOKEN =
 
+// V59: la frase che l'iPhone mostra la prima volta che chiede di usare Apple Music (per i brani interi)
+INFOPLIST_KEY_NSAppleMusicUsageDescription = Vinyl Hustler usa Apple Music per farti ascoltare per intero i brani del disco riconosciuto, con il tuo abbonamento.
+
 #include? "../Secrets.xcconfig"
 
 // V56 (sicurezza): nelle versioni Release (Archive -> TestFlight / App Store) il token personale NON entra mai,

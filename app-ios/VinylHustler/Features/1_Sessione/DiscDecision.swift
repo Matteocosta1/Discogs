@@ -143,6 +143,7 @@ struct DiscActions: View {
                 // Nella fotocamera (compact): tutti in fila, il cestino è in alto a destra.
                 let layout = compact ? AnyLayout(HStackLayout(spacing: 6)) : AnyLayout(VStackLayout(spacing: 8))
                 VStack(spacing: 8) {
+                  prezzoSubito                          // V59: prima il prezzo, poi si decide
                   layout {
                     // Vendi: conferma, calcola il prezzo e lo mette subito online su Discogs
                     Button("Vendi") { decide(draft: false) }
@@ -291,6 +292,26 @@ struct DiscActions: View {
     }
 
     /// Release sbagliata? Si riscrive il numero (anche dopo averlo inserito), finché il disco non è su Discogs.
+    /// V59: il prezzo calcolato appena riconosciuto, sopra Vendi / Bozza / Versioni.
+    @ViewBuilder private var prezzoSubito: some View {
+        HStack(alignment: .lastTextBaseline) {
+            Text("Prezzo").font(.system(size: 15)).foregroundStyle(Theme.muted)
+            Spacer()
+            if let p = disc.price {
+                Text(p, format: .currency(code: seller.currency))
+                    .font(.system(size: compact ? 24 : 28, weight: .bold))
+                    .foregroundStyle(Theme.glow)
+                    .shadow(color: Theme.glow.opacity(0.35), radius: 8)
+                    .contentTransition(.numericText(value: p))
+            } else if seller.prezzoInCorso.contains(disc.id) {
+                ProgressView().tint(Theme.accent).controlSize(.small)
+            } else {
+                Text(seller.prezzoMancante.contains(disc.id) ? "non disponibile" : "…")
+                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.muted)
+            }
+        }
+    }
+
     private var changeRelease: some View {
         Button {
             releaseText = disc.releaseID.map(String.init) ?? ""
