@@ -56,9 +56,11 @@ func morbido(_ x: Double) -> Double {
 /// che scorre. Tutto guidato da TimelineView, quindi non tocca la disposizione della pagina.
 struct SfondoHUD: View {
     @Environment(\.accessibilityReduceMotion) private var fermo
+    /// Le pagine delle sezioni non guardate restano vive nel TabView: lì lo sfondo si ferma (batteria).
+    @State private var visibile = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: fermo)) { ctx in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: fermo || !visibile)) { ctx in
             let t = fermo ? 0 : ctx.date.timeIntervalSinceReferenceDate
             Canvas { gc, size in
                 // il bagliore in alto che respira (9 s)
@@ -80,6 +82,8 @@ struct SfondoHUD: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .onAppear { visibile = true }
+        .onDisappear { visibile = false }
     }
 }
 

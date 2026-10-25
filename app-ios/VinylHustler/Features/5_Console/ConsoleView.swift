@@ -10,7 +10,8 @@ struct ConsoleView: View {
     @Query private var discs: [Disc]
     @State private var apiUsed = 0
     @State private var aiSignedIn = false
-    @State private var stampa = Date.distantPast
+    @State private var stampaDa = Date.distantPast
+    @State private var stampaFinita = true
     @AppStorage("voice") private var voice = true
     @AppStorage("userName") private var userName = ""
     @AppStorage("voiceID") private var voiceID = Voice.systemChoice
@@ -53,8 +54,8 @@ struct ConsoleView: View {
                 .padding(.vertical, 12)
                 // la pagina si stampa dall'alto, una volta, quando si apre
                 .mask {
-                    TimelineView(.animation(minimumInterval: 1 / 60, paused: Date().timeIntervalSince(stampa) > 1)) { ctx in
-                        let x = min(1, max(0, ctx.date.timeIntervalSince(stampa) / 0.9))
+                    TimelineView(.animation(minimumInterval: 1 / 60, paused: stampaFinita)) { ctx in
+                        let x = stampaFinita ? 1 : min(1, max(0, ctx.date.timeIntervalSince(stampaDa) / 0.9))
                         let p = 1 - pow(1 - x, 2.2)
                         GeometryReader { g in
                             VStack(spacing: 0) {
@@ -70,11 +71,13 @@ struct ConsoleView: View {
             .onReceive(timer) { _ in Task { apiUsed = await seller.apiUsedLastMinute() } }
             .task { aiSignedIn = await Backend.shared.accessToken() != nil }
             .onAppear {
-                stampa = Date()
+                stampaDa = Date()
+                stampaFinita = false
                 Suoni.chatCarica()
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(900))
                     Suoni.chatPronta()
+                    stampaFinita = true
                 }
             }
         }

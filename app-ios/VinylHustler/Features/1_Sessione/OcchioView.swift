@@ -147,9 +147,12 @@ struct OcchioView: View {
         // V60: il caricamento HUD segue il lavoro vero: parte col primo disco in riconoscimento,
         // arriva al 100% quando l'ultimo ha la risposta, poi sparisce
         .onChange(of: seller.working) { old, new in
-            if new > old && analisiDa == nil {
-                analisiFine = nil
-                withAnimation(.easeOut(duration: 0.2)) { analisiDa = Date() }
+            if new > old {
+                // anche se stava sparendo (un secondo scatto subito dopo): riparte da capo
+                if analisiDa == nil || analisiFine != nil {
+                    analisiFine = nil
+                    withAnimation(.easeOut(duration: 0.2)) { analisiDa = Date() }
+                }
             } else if new == 0 && analisiDa != nil && analisiFine == nil {
                 let fine = Date()
                 analisiFine = fine
