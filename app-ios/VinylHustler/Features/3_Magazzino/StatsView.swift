@@ -266,12 +266,19 @@ struct GraficoVendite: View {
     let da: Date?
     /// Secondi dopo `da` in cui il grafico è finito.
     static let fine = 1.5
+    @State private var finito = false
 
     var body: some View {
-        let fermo = da.map { Date().timeIntervalSince($0) > GraficoVendite.fine + 0.05 } ?? true
-        TimelineView(.animation(minimumInterval: 1 / 60, paused: fermo)) { ctx in
+        TimelineView(.animation(minimumInterval: 1 / 60, paused: finito || da == nil)) { ctx in
             let k = avanzamento(ctx.date)
             Canvas { gc, size in disegna(gc, size, k) }
+        }
+        .task(id: da) {
+            finito = false
+            guard let da else { return }
+            let resta = GraficoVendite.fine + 0.05 - Date().timeIntervalSince(da)
+            if resta > 0 { try? await Task.sleep(for: .milliseconds(Int(resta * 1000))) }
+            if !Task.isCancelled { finito = true }
         }
         .accessibilityLabel("Grafico delle vendite degli ultimi 30 giorni: \(conti.reduce(0, +)) dischi venduti")
     }

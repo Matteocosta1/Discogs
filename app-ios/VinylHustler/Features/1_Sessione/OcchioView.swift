@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import ImageIO
 import SwiftData
 import SwiftUI
@@ -7,8 +8,8 @@ import UniformTypeIdentifiers
 
 /// OCCHIO — la fotocamera di Vinyl Hustler, come gli occhi di JARVIS.
 ///   · tocchi lo scatto: una foto, e il disco viene riconosciuto subito (e te lo dice a voce);
-///   · tocchi REC: un video vero (fino a 20 secondi). Passi i dischi davanti al telefono, tocchi di nuovo
-///     per fermare: li riconosce tutti, uno per uno.
+///   · tocchi REC (V60, dal vivo): passi i dischi davanti al telefono; ogni copertina che sta ferma un attimo
+///     si aggancia con il suo ologramma alla JARVIS e viene riconosciuta subito (fino a 20 secondi; tocchi di nuovo per fermare).
 /// Sotto il mirino compaiono i dischi riconosciuti: sì, è questo / no, e poi se metterlo in vendita.
 struct OcchioView: View {
     let place: String
@@ -40,6 +41,8 @@ struct OcchioView: View {
     // V60: il caricamento HUD mentre analizza (anelli, barra con la percentuale, fasi): quando parte e quando finisce
     @State private var analisiDa: Date?
     @State private var analisiFine: Date?
+    // V60 · proposta 11: il REC dal vivo con gli ologrammi
+    @State private var rec = RECVivo()
 
     private let tinta = Theme.accent
 
@@ -64,14 +67,18 @@ struct OcchioView: View {
         VStack(spacing: 0) {
             ZStack {
                 Color.black
-                AnteprimaOcchio(motore: motore)
+                AnteprimaOcchio(motore: motore, rec: rec)
                     .opacity(agganciato ? 1 : 0)
                     .animation(.easeOut(duration: 0.4), value: agganciato)
                 MirinoOcchio(agganciato: agganciato, scattando: registrando, analizzo: seller.working > 0,
                              preso: preso, tinta: tinta)
                     .allowsHitTesting(false)
+                // V60: gli ologrammi del REC sopra le copertine agganciate
+                if registrando || !rec.tracce.isEmpty {
+                    HologrammiREC(rec: rec, dischi: seen)
+                }
                 // V60: mentre riconosce, al centro del mirino il caricamento alla JARVIS
-                if let da = analisiDa {
+                if let da = analisiDa, !registrando {           // durante il REC parlano gli ologrammi
                     HUDAnalisi(da: da, fine: analisiFine)
                         .allowsHitTesting(false)
                         .transition(.opacity)
@@ -80,7 +87,18 @@ struct OcchioView: View {
                 VStack(spacing: 10) {
                     topBar
                     Spacer()
-                    if registrando { recBadge }
+                    if registrando {
+                        HStack(spacing: 8) {
+                            recBadge
+                            Text(rec.agganciati == 1 ? "1 DISCO" : "\(rec.agganciati) DISCHI")
+                                .font(Theme.mono(10, .bold)).tracking(1.5)
+                                .foregroundStyle(Theme.glow)
+                                .padding(.horizontal, 9).padding(.vertical, 5)
+                                .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.glow.opacity(0.5), lineWidth: 1))
+                                .monospacedDigit()
+                        }
+                    }
                     if let attachTo {
                         HStack(spacing: 8) {
                             Image(systemName: "plus.viewfinder")
@@ -138,11 +156,15 @@ struct OcchioView: View {
                     }
                 }
             case .background:
+                if registrando { fermaREC() }
                 agganciato = false
                 motore.ferma()                      // ferma anche un video in corso: il file arriva lo stesso
             default:
                 break                               // tendina, Centro di Controllo: la fotocamera resta accesa
             }
+        }
+        .onChange(of: rec.daFotografare) { _, id in
+            if let id { fotografa(id) }
         }
         // V60: il caricamento HUD segue il lavoro vero: parte col primo disco in riconoscimento,
         // arriva al 100% quando l'ultimo ha la risposta, poi sparisce
@@ -202,7 +224,7 @@ struct OcchioView: View {
             }
             roundButton("xmark", label: "Chiudi") {
                 Suoni.testa()
-                if registrando { motore.fermaVideo() }
+                if registrando { fermaREC() }
                 close()
             }
         }
@@ -254,7 +276,7 @@ struct OcchioView: View {
             .opacity(registrando ? 0.3 : 1)
             .accessibilityLabel("Scatta una foto")
             Spacer()
-            Button { registrando ? motore.fermaVideo() : registra() } label: {
+            Button { registrando ? fermaREC() : registra() } label: {
                 ZStack {
                     Circle().stroke(Color.white.opacity(0.9), lineWidth: 3).frame(width: 62, height: 62)
                     if registrando {
@@ -426,27 +448,53 @@ struct OcchioView: View {
         }
     }
 
+    /// V60 · REC dal vivo: niente file video; le copertine si agganciano mentre si filma e ognuna è riconosciuta
+    /// subito con il suo fotogramma (come uno scatto). Si ferma toccando di nuovo REC o dopo 20 secondi.
     private func registra() {
         guard agganciato, !registrando else { return }
         Suoni.tocco()
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-        inizioVideo = Date()
+        let inizio = Date()
+        inizioVideo = inizio
         registrando = true
         stato = "PASSA I DISCHI DAVANTI · TOCCA PER FERMARE"
-        motore.registra(max: OcchioView.maxVideo) { url in
+        rec.inizia()
+        motore.avviaScansione()
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(OcchioView.maxVideo))
+            if registrando && inizioVideo == inizio { fermaREC() }
+        }
+    }
+
+    private func fermaREC() {
+        guard registrando else { return }
+        registrando = false
+        motore.fermaScansione()
+        rec.ferma()
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        let n = rec.agganciati
+        if n > 0 { Suoni.fatto() }
+        let fine = n == 0 ? "NESSUN DISCO AGGANCIATO · RIPROVA" : (n == 1 ? "1 DISCO TROVATO" : "\(n) DISCHI TROVATI")
+        stato = fine
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(2200))
+            if !registrando {
+                rec.pulisci()
+                if stato == fine { stato = "INQUADRA UN DISCO" }
+            }
+        }
+    }
+
+    /// Una copertina si è agganciata: il suo fotogramma va al riconoscimento (un disco nuovo, come uno scatto).
+    private func fotografa(_ id: UUID) {
+        Suoni.tocco()
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let posto = place, m = media, s = sleeve
+        motore.chiediFotogramma { foto in
             Task { @MainActor in
-                registrando = false
-                UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-                guard let url else { stato = "VIDEO NON RIUSCITO · RIPROVA"; return }
-                Suoni.fatto()                               // V60: video finito
-                preparo = true
-                stato = "ANALISI DEL VIDEO"
-                let frames = await OcchioView.fotogrammi(url)
-                preparo = false
-                if !frames.isEmpty {
-                    seller.shoot(frames, video: true, place: place, media: media, sleeve: sleeve, context: context)
-                }
-                stato = "INQUADRA UN DISCO"
+                guard let foto else { rec.fotografata(id, disco: nil); return }
+                let d = seller.shoot([foto], video: false, place: posto, media: m, sleeve: s, context: context)
+                rec.fotografata(id, disco: d.id)
             }
         }
     }
@@ -689,6 +737,7 @@ struct MirinoOcchio: View {
 
 struct AnteprimaOcchio: UIViewRepresentable {
     let motore: MotoreOcchio
+    let rec: RECVivo
 
     /// L'anteprima, con sopra il riquadro verde della copertina trovata (come "Scansiona documenti").
     final class Vista: UIView {
@@ -745,6 +794,14 @@ struct AnteprimaOcchio: UIViewRepresentable {
         motore.suRiquadro = { [weak v] punti in
             DispatchQueue.main.async { v?.disegna(punti) }
         }
+        // V60 · REC dal vivo: le copertine dalla fotocamera ai punti dell'anteprima, poi al tracker
+        let tracker = rec
+        motore.suCopertine = { [weak v, weak tracker] quadri in
+            Task { @MainActor in
+                guard let v, let tracker else { return }
+                tracker.aggiorna(quadri.map { q in q.map { v.anteprima.layerPointConverted(fromCaptureDevicePoint: $0) } })
+            }
+        }
         return v
     }
 
@@ -764,6 +821,12 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
     private var ultimoRiquadro = Date.distantPast
     /// Chi disegna il riquadro (l'anteprima). Riceve i 4 angoli in coordinate della fotocamera, o nil.
     var suRiquadro: (@Sendable ([CGPoint]?) -> Void)?
+    /// V60 · REC dal vivo: le copertine di ogni fotogramma (coordinate della fotocamera).
+    var suCopertine: (@Sendable ([[CGPoint]]) -> Void)?
+    /// Usate solo sulla coda dei fotogrammi (codaRiquadro).
+    private var scansione = false
+    private var vogliaFotogramma: (@Sendable (UIImage?) -> Void)?
+    private let contestoImmagini = CIContext()
     private let coda = DispatchQueue(label: "it.vinylhustler.app.occhio")
     private var configurata = false
     private var consegnaFoto: (@Sendable (Data?) -> Void)?
@@ -933,12 +996,60 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         }
     }
 
-    /// Un fotogramma dell'anteprima: al massimo ~7 al secondo si cerca la copertina.
+    /// V60 · REC dal vivo: si accendono i fotogrammi dell'anteprima (niente file video).
+    func avviaScansione() {
+        coda.async {
+            guard self.sessione.isRunning else { return }
+            if !self.sessione.outputs.contains(self.fotogrammi) {
+                self.sessione.beginConfiguration()
+                self.fotogrammi.alwaysDiscardsLateVideoFrames = true
+                self.fotogrammi.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+                self.fotogrammi.setSampleBufferDelegate(self, queue: self.codaRiquadro)
+                if self.sessione.canAddOutput(self.fotogrammi) { self.sessione.addOutput(self.fotogrammi) }
+                self.sessione.commitConfiguration()
+            }
+            self.codaRiquadro.async { self.scansione = true }
+        }
+    }
+
+    func fermaScansione() {
+        codaRiquadro.async {
+            self.scansione = false
+            let f = self.vogliaFotogramma
+            self.vogliaFotogramma = nil
+            f?(nil)
+        }
+        coda.async {
+            if self.sessione.outputs.contains(self.fotogrammi) {
+                self.sessione.beginConfiguration()
+                self.sessione.removeOutput(self.fotogrammi)
+                self.sessione.commitConfiguration()
+            }
+        }
+    }
+
+    /// Il prossimo fotogramma, in verticale, per riconoscere la copertina appena agganciata.
+    func chiediFotogramma(_ f: @escaping @Sendable (UIImage?) -> Void) {
+        codaRiquadro.async {
+            guard self.scansione else { f(nil); return }
+            self.vogliaFotogramma = f
+        }
+    }
+
+    /// Un fotogramma dell'anteprima (durante il REC): ~8 volte al secondo si cercano le copertine.
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard scansione, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        if let f = vogliaFotogramma {
+            vogliaFotogramma = nil
+            let immagine = CIImage(cvPixelBuffer: buffer)
+            let foto = contestoImmagini.createCGImage(immagine, from: immagine.extent)
+                .map { UIImage(cgImage: $0, scale: 1, orientation: .right) }
+            f(foto)
+        }
         let ora = Date()
-        guard ora.timeIntervalSince(ultimoRiquadro) > 0.14, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        guard ora.timeIntervalSince(ultimoRiquadro) > 0.12 else { return }
         ultimoRiquadro = ora
-        suRiquadro?(Ritaglio.riquadro(in: buffer))
+        suCopertine?(CopertineVive.trova(in: buffer))
     }
 
     /// Video vero, senza audio. Si ferma con fermaVideo() o da solo dopo `max` secondi.

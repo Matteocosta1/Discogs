@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import UIKit
 
 /// 03 / MAGAZZINO — l'inventario vero su Discogs, nello stesso ordine della pagina Discogs (dal più recente).
 /// Filtro Tutti / Online / Bozze, posizione fisica di ogni disco, bozze da eliminare una per una

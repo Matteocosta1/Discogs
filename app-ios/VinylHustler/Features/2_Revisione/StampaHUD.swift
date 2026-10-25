@@ -9,12 +9,14 @@ struct StampaRiga: ViewModifier {
     let da: Date?
     var ritardo: Double = 0
     var durata: Double = 0.32
+    /// Finita la stampa il TimelineView si ferma (non gira per niente).
+    @State private var finito = false
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if let da {
             let fine = ritardo + durata + 0.05
-            TimelineView(.animation(minimumInterval: 1 / 60, paused: Date().timeIntervalSince(da) > fine)) { ctx in
+            TimelineView(.animation(minimumInterval: 1 / 60, paused: finito)) { ctx in
                 let passato = max(ctx.date.timeIntervalSince(da), Date().timeIntervalSince(da))
                 let f = morbido((passato - ritardo) / durata)
                 content
@@ -35,6 +37,12 @@ struct StampaRiga: ViewModifier {
                         .allowsHitTesting(false)
                     }
             }
+            .task(id: da) {
+                finito = false
+                let resta = fine - Date().timeIntervalSince(da)
+                if resta > 0 { try? await Task.sleep(for: .milliseconds(Int(resta * 1000))) }
+                if !Task.isCancelled { finito = true }
+            }
         } else {
             content
         }
@@ -46,11 +54,12 @@ struct StampaRiga: ViewModifier {
 struct RitiroRiga: ViewModifier {
     let da: Date?
     var durata: Double = 0.52
+    @State private var finito = false
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if let da {
-            TimelineView(.animation(minimumInterval: 1 / 60, paused: Date().timeIntervalSince(da) > durata + 0.05)) { ctx in
+            TimelineView(.animation(minimumInterval: 1 / 60, paused: finito)) { ctx in
                 let passato = max(ctx.date.timeIntervalSince(da), Date().timeIntervalSince(da))
                 let v = morbido(passato / durata)
                 content
@@ -70,6 +79,12 @@ struct RitiroRiga: ViewModifier {
                         }
                         .allowsHitTesting(false)
                     }
+            }
+            .task(id: da) {
+                finito = false
+                let resta = (durata + 0.05) - Date().timeIntervalSince(da)
+                if resta > 0 { try? await Task.sleep(for: .milliseconds(Int(resta * 1000))) }
+                if !Task.isCancelled { finito = true }
             }
         } else {
             content
@@ -94,13 +109,20 @@ struct NumeroConta: View {
     var ritardo: Double = 0
     var durata: Double = 0.9
     let formato: (Double) -> String
+    @State private var finito = false
 
     var body: some View {
         if let da {
-            TimelineView(.animation(minimumInterval: 1 / 30, paused: Date().timeIntervalSince(da) > ritardo + durata + 0.05)) { ctx in
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: finito)) { ctx in
                 let passato = max(ctx.date.timeIntervalSince(da), Date().timeIntervalSince(da))
                 let k = morbido((passato - ritardo) / durata)
                 Text(formato(partenza + (valore - partenza) * k))
+            }
+            .task(id: da) {
+                finito = false
+                let resta = (ritardo + durata + 0.05) - Date().timeIntervalSince(da)
+                if resta > 0 { try? await Task.sleep(for: .milliseconds(Int(resta * 1000))) }
+                if !Task.isCancelled { finito = true }
             }
         } else {
             Text(formato(valore))

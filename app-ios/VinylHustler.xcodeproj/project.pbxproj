@@ -354,7 +354,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Vinyl Hustler";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Per fotografare fronte e retro dei dischi da mettere in vendita.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Per fotografare e riconoscere i dischi da mettere in vendita e per leggere il codice a barre delle ricevute di spedizione.";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Per scegliere foto di dischi già scattate.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -390,7 +390,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Vinyl Hustler";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Per fotografare fronte e retro dei dischi da mettere in vendita.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Per fotografare e riconoscere i dischi da mettere in vendita e per leggere il codice a barre delle ricevute di spedizione.";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Per scegliere foto di dischi già scattate.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
