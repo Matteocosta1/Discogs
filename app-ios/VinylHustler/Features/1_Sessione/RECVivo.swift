@@ -11,6 +11,7 @@ final class RECVivo {
     struct Traccia: Identifiable {
         let id = UUID()
         var angoli: [CGPoint]           // nei punti dell'anteprima, smussati fotogramma dopo fotogramma
+        var angoliCamera: [CGPoint]     // gli stessi, in coordinate della fotocamera (0…1): servono a ritagliare la copertina
         var centro: CGPoint
         var visti = 1
         var ultimo: Date
@@ -48,11 +49,13 @@ final class RECVivo {
     }
 
     /// Un fotogramma: le copertine trovate (4 angoli ciascuna, nei punti dell'anteprima).
-    func aggiorna(_ quadri: [[CGPoint]]) {
+    /// `camera`: gli stessi quadri in coordinate della fotocamera (stesso ordine).
+    func aggiorna(_ quadri: [[CGPoint]], camera: [[CGPoint]]) {
         guard attivo else { return }
         let ora = Date()
         var libere = Array(tracce.indices)
-        for q in quadri where q.count == 4 {
+        for (indice, q) in quadri.enumerated() where q.count == 4 {
+            let qc = indice < camera.count ? camera[indice] : []
             let c = RECVivo.centro(q)
             var migliore: Int?
             var distanza: CGFloat = 110
@@ -71,15 +74,16 @@ final class RECVivo {
                 }
                 t.angoli = nuovi
                 t.centro = RECVivo.centro(nuovi)
+                if qc.count == 4 { t.angoliCamera = qc }
                 t.visti += 1
                 t.ultimo = ora
                 tracce[i] = t
             } else {
-                tracce.append(Traccia(angoli: q, centro: c, ultimo: ora, fermoDa: ora))
+                tracce.append(Traccia(angoli: q, angoliCamera: qc, centro: c, ultimo: ora, fermoDa: ora))
             }
         }
-        // uscita dall'inquadratura: dopo 0,7 s senza vederla la traccia sparisce
-        tracce.removeAll { ora.timeIntervalSince($0.ultimo) > 0.7 }
+        // uscita dall'inquadratura: dopo 1 s senza vederla la traccia sparisce
+        tracce.removeAll { ora.timeIntervalSince($0.ultimo) > 1.0 }
         // aggancio: vista in almeno 3 fotogrammi e ferma da 0,45 s; una alla volta
         if daFotografare == nil,
            let i = tracce.firstIndex(where: { $0.agganciato == nil && $0.visti >= 3 && ora.timeIntervalSince($0.fermoDa) >= 0.45 }) {
@@ -88,6 +92,11 @@ final class RECVivo {
             agganciati += 1
             daFotografare = tracce[i].id
         }
+    }
+
+    /// Gli angoli (coordinate della fotocamera) della copertina da fotografare.
+    func angoliCamera(_ id: UUID) -> [CGPoint] {
+        tracce.first(where: { $0.id == id })?.angoliCamera ?? []
     }
 
     /// Il fotogramma è partito per il riconoscimento (o non c'era: disco nil).
@@ -115,9 +124,9 @@ struct HologrammiREC: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
             let tracce = rec.tracce
-            let cartellini = cartellini(per: tracce)
+            let schede = cartellini(per: tracce)
             Canvas { gc, _ in
-                for t in tracce { disegna(gc, t, cartellini[t.id], ora: ctx.date) }
+                for t in tracce { disegna(gc, t, schede[t.id], ora: ctx.date) }
             }
         }
         .allowsHitTesting(false)
@@ -165,8 +174,9 @@ struct HologrammiREC: View {
         gc.opacity = luce
         // 1 · angoli che agganciano la copertina (si stringono sul disco)
         let scala = CGFloat(1.28 - 0.28 * morbido(tt / 320))
-        gc.addFilter(.shadow(color: verde(0.9), radius: 6))
-        angoli(&gc, q, scala: scala, alfa: 0.95)
+        var luminoso = gc
+        luminoso.addFilter(.shadow(color: verde(0.9), radius: 6))
+        angoli(&luminoso, q, scala: scala, alfa: 0.95)
         // 2 · il fascio di luce e 3 · il vinile a fil di ferro sopra il bordo alto
         let alto = CGPoint(x: (q[0].x + q[1].x) / 2, y: (q[0].y + q[1].y) / 2)
         let latoAlto = hypot(q[1].x - q[0].x, q[1].y - q[0].y)
@@ -219,8 +229,8 @@ struct HologrammiREC: View {
         let a = morbido((tt - 250) / 260)
         let mescola: Double = c.analisi ? 0.55 : 0
         let colore: Color = c.errore ? Theme.warn : Theme.glow
-        let t1 = gc.resolve(Text(Glifi.rimescola(c.riga1, mescola)).font(Theme.mono(10, .bold)).foregroundColor(Color(hex: 0xEAFFEA)))
-        let t2 = gc.resolve(Text(Glifi.rimescola(c.riga2, mescola)).font(Theme.mono(9, .bold)).foregroundColor(colore))
+        let t1 = gc.resolve(Text(Glifi.rimescola(c.riga1, mescola)).font(Theme.mono(10, .bold)).foregroundStyle(Color(hex: 0xEAFFEA)))
+        let t2 = gc.resolve(Text(Glifi.rimescola(c.riga2, mescola)).font(Theme.mono(9, .bold)).foregroundStyle(colore))
         let s1 = t1.measure(in: CGSize(width: 220, height: 40))
         let s2 = t2.measure(in: CGSize(width: 220, height: 40))
         let larghezza = min(220, max(s1.width, s2.width)) + 18

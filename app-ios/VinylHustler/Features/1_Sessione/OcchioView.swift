@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import CoreImage.CIFilterBuiltins
 import ImageIO
 import SwiftData
 import SwiftUI
@@ -490,7 +491,7 @@ struct OcchioView: View {
         Suoni.tocco()
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         let posto = place, m = media, s = sleeve
-        motore.chiediFotogramma { foto in
+        motore.chiediFotogramma(angoli: rec.angoliCamera(id)) { foto in
             Task { @MainActor in
                 guard let foto else { rec.fotografata(id, disco: nil); return }
                 let d = seller.shoot([foto], video: false, place: posto, media: m, sleeve: s, context: context)
@@ -799,7 +800,8 @@ struct AnteprimaOcchio: UIViewRepresentable {
         motore.suCopertine = { [weak v, weak tracker] quadri in
             Task { @MainActor in
                 guard let v, let tracker else { return }
-                tracker.aggiorna(quadri.map { q in q.map { v.anteprima.layerPointConverted(fromCaptureDevicePoint: $0) } })
+                tracker.aggiorna(quadri.map { q in q.map { v.anteprima.layerPointConverted(fromCaptureDevicePoint: $0) } },
+                                 camera: quadri)
             }
         }
         return v
@@ -826,6 +828,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
     /// Usate solo sulla coda dei fotogrammi (codaRiquadro).
     private var scansione = false
     private var vogliaFotogramma: (@Sendable (UIImage?) -> Void)?
+    private var angoliDaRitagliare: [CGPoint] = []
     private let contestoImmagini = CIContext()
     private let coda = DispatchQueue(label: "it.vinylhustler.app.occhio")
     private var configurata = false
@@ -1000,6 +1003,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
     func avviaScansione() {
         coda.async {
             guard self.sessione.isRunning else { return }
+            self.preset(.high)                              // fotogrammi da video (1920×1080): leggeri, come il REC di prima
             if !self.sessione.outputs.contains(self.fotogrammi) {
                 self.sessione.beginConfiguration()
                 self.fotogrammi.alwaysDiscardsLateVideoFrames = true
@@ -1013,27 +1017,51 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
     }
 
     func fermaScansione() {
-        codaRiquadro.async {
-            self.scansione = false
-            let f = self.vogliaFotogramma
-            self.vogliaFotogramma = nil
-            f?(nil)
-        }
         coda.async {
+            // passa dalla stessa coda di avviaScansione: un REC brevissimo non lascia la scansione accesa
+            self.codaRiquadro.async {
+                self.scansione = false
+                let f = self.vogliaFotogramma
+                self.vogliaFotogramma = nil
+                f?(nil)
+            }
             if self.sessione.outputs.contains(self.fotogrammi) {
                 self.sessione.beginConfiguration()
                 self.sessione.removeOutput(self.fotogrammi)
                 self.sessione.commitConfiguration()
             }
+            self.preset(.photo)                             // finito il REC si torna alla qualità foto piena
         }
     }
 
     /// Il prossimo fotogramma, in verticale, per riconoscere la copertina appena agganciata.
-    func chiediFotogramma(_ f: @escaping @Sendable (UIImage?) -> Void) {
+    /// Con i 4 angoli (coordinate della fotocamera) si manda solo quella copertina, raddrizzata.
+    func chiediFotogramma(angoli: [CGPoint], _ f: @escaping @Sendable (UIImage?) -> Void) {
         codaRiquadro.async {
             guard self.scansione else { f(nil); return }
+            self.angoliDaRitagliare = angoli
             self.vogliaFotogramma = f
         }
+    }
+
+    /// Solo la copertina, raddrizzata (se i 4 angoli ci sono); altrimenti il fotogramma intero.
+    private func ritaglio(_ immagine: CIImage, _ angoli: [CGPoint]) -> CIImage {
+        guard angoli.count == 4 else { return immagine }
+        let w = immagine.extent.width, h = immagine.extent.height
+        // coordinate della fotocamera (origine in alto a sinistra) → Core Image (origine in basso a sinistra), con un po' di margine
+        let c = CGPoint(x: angoli.map(\.x).reduce(0, +) / 4, y: angoli.map(\.y).reduce(0, +) / 4)
+        let punti = angoli.map { p -> CGPoint in
+            let x = c.x + (p.x - c.x) * 1.06, y = c.y + (p.y - c.y) * 1.06
+            return CGPoint(x: min(max(x, 0), 1) * w, y: (1 - min(max(y, 0), 1)) * h)
+        }
+        let filtro = CIFilter.perspectiveCorrection()
+        filtro.inputImage = immagine
+        filtro.topLeft = punti[0]
+        filtro.topRight = punti[1]
+        filtro.bottomRight = punti[2]
+        filtro.bottomLeft = punti[3]
+        guard let uscita = filtro.outputImage, uscita.extent.width > 64, uscita.extent.height > 64 else { return immagine }
+        return uscita
     }
 
     /// Un fotogramma dell'anteprima (durante il REC): ~8 volte al secondo si cercano le copertine.
@@ -1041,7 +1069,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         guard scansione, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         if let f = vogliaFotogramma {
             vogliaFotogramma = nil
-            let immagine = CIImage(cvPixelBuffer: buffer)
+            let immagine = ritaglio(CIImage(cvPixelBuffer: buffer), angoliDaRitagliare)
             let foto = contestoImmagini.createCGImage(immagine, from: immagine.extent)
                 .map { UIImage(cgImage: $0, scale: 1, orientation: .right) }
             f(foto)
