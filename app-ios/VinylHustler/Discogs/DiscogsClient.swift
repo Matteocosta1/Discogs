@@ -236,5 +236,29 @@ final class DiscogsClient: @unchecked Sendable {
         ])
     }
 
+    // MARK: - Ordini (V60)
+
+    /// Porta l'ordine in un altro stato su Discogs ("In Progress", "Shipped", "Cancelled (Non-Paying Buyer)"…).
+    /// Discogs avvisa l'acquirente con un messaggio automatico.
+    func setOrderStatus(_ id: String, status: String) async throws {
+        _ = try await raw("POST", "/marketplace/orders/\(id)", body: ["status": status])
+    }
+
+    /// La conversazione dell'ordine, dalla più vecchia alla più recente.
+    func orderMessages(_ id: String) async throws -> [OrderMessage] {
+        let page: OrderMessagesPage = try await request("GET", "/marketplace/orders/\(id)/messages",
+                                                        query: ["per_page": "100", "page": "1"])
+        return page.messages.sorted { ($0.timestamp ?? "") < ($1.timestamp ?? "") }
+    }
+
+    /// Scrive all'acquirente; con `status` cambia anche lo stato dell'ordine nello stesso momento
+    /// (Discogs mette il cambio di stato in testa al messaggio).
+    func postOrderMessage(_ id: String, message: String?, status: String? = nil) async throws {
+        var body: [String: Any] = [:]
+        if let message, !message.isEmpty { body["message"] = message }
+        if let status { body["status"] = status }
+        _ = try await raw("POST", "/marketplace/orders/\(id)/messages", body: body)
+    }
+
     // V56: tolta download(url): mandava le credenziali Discogs a qualunque indirizzo (non la usava nessuno).
 }

@@ -1,79 +1,98 @@
 import AVFoundation
 import UIKit
 
-/// I suoni dell'interfaccia, gli stessi di JARVIS (file in Resources/Suoni):
-///   «tick»          tocco su un tasto
-///   «avvio»         l'app si accende / la fotocamera aggancia
-///   «cerco»         dopo lo scatto, mentre cerca il disco (RescopicSound "progress 02", scelto da Alessandro)
-///   «apri»          si apre una scheda accessoria: scheda annuncio, Versioni, Statistiche ("deny small")
-///   «click»         salvataggi, Vendi/Bozza, Pubblica e i tocchi che prima erano muti ("select small")
-///   «schedapronta»  disco riconosciuto
-///   «apertura»      apertura dell'app (mp3 scelto da Alessandro)
-/// Nei momenti che prima erano muti (Vendi, Pubblica, note veloci, errori di Discogs, nuovo ordine)
-/// si usano: il click scelto da Alessandro («click»), «schedapronta», errore.
+/// I suoni dell'interfaccia (V60): i file di JARVIS, con la stessa logica di JARVIS (file in Resources/Suoni).
+/// Lo stesso suono vuol dire sempre la stessa cosa, come nel mock-up approvato:
+///   «tick»            un tocco: sezioni, Vendi/Bozza, passi, tracce; un tick leggero per ogni icona all'avvio;
+///                     nel REC un tick per ogni disco agganciato
+///   «clicktesta»      le icone tonde in alto (X della fotocamera e del lettore, Seleziona, grafico, menu)
+///   «apertura»        l'app si apre (mp3 scelto da Alessandro: resta quello di prima)
+///   «aperturacamera»  la fotocamera si apre
+///   «scheda» → «schedapronta»   qualcosa carica → è pronto (il primo sfuma quando parte il secondo):
+///                     scatto → disco riconosciuto, Statistiche che contano → grafico disegnato
+///   «chatcarica»      il testo che si stampa (Bozze, Magazzino, Settings, finestra Ascolto); sfuma con `chatPronta()`
+///   «chatsvuota»      qualcosa che si toglie: Elimina, Pubblica che svuota le Bozze, ordine annullato
+///   «pronto»          il «fatto»: online su Discogs, Spedito, Pubblica finita, fine del REC
 /// L'errore (non riconosciuto) è un doppio segnale basso generato al volo.
-/// Si spengono in Console › Suoni dell'interfaccia.
+/// Si spengono in Settings › Suoni dell'interfaccia.
 @MainActor
 enum Suoni {
     static var attivi: Bool { UserDefaults.standard.object(forKey: "suoni") as? Bool ?? true }
 
-    static func tocco() { riproduci("tick", volume: 0.55) }
-    static func avvio() { riproduci("avvio", volume: 0.7) }
-    /// All'apertura dell'app (file «apertura»; se manca, il suono d'avvio di JARVIS).
-    static func apertura() {
-        guard attivi else { return }
-        if let p = lettore("apertura", volume: 0.8) { tieni(p); p.play() } else { avvio() }
-    }
+    // MARK: - I suoni
 
-    /// Parte il riconoscimento (dopo il click dello scatto): «cerco» gira finché non trova il disco.
-    static func guardo() {
-        guard attivi, let p = lettore("cerco", volume: 0.6) ?? lettore("scheda", volume: 0.75) else { return }
+    /// Un tocco.
+    static func tocco() { riproduci("tick", volume: 1.0) }
+    /// Un'icona in basso che si carica all'avvio (più leggero del tocco).
+    static func icona() { riproduci("tick", volume: 0.6) }
+    /// Le icone tonde in alto.
+    static func testa() { riproduci("clicktesta", volume: 1.0) }
+    /// L'app si apre (file «apertura»).
+    static func apertura() { riproduci("apertura", volume: 0.8) }
+    /// La fotocamera si apre.
+    static func camera() { riproduci("aperturacamera", volume: 1.0) }
+    /// Il «fatto».
+    static func fatto() { riproduci("pronto", volume: 1.0) }
+    /// Qualcosa si toglie o si svuota.
+    static func svuota() { riproduci("chatsvuota", volume: 1.0) }
+
+    /// Qualcosa carica («scheda»): sfuma quando arriva `schedaPronta()`.
+    static func schedaApre() {
+        guard attivi, let p = lettore("scheda", volume: 1.0) else { return }
         lettoreScheda?.stop()
-        p.numberOfLoops = -1
         lettoreScheda = p
         p.play()
     }
-
-    /// Ferma «cerco» sfumando.
-    private static func smettiDiCercare() {
-        guard let p = lettoreScheda, p.isPlaying else { return }
-        p.setVolume(0, fadeDuration: 0.18)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { p.stop() }
-    }
-
-    /// Si apre una scheda accessoria (scheda annuncio, Versioni, Statistiche).
-    static func apri() { riproduci("apri", volume: 0.5) }
-
-    /// Disco riconosciuto: il suono del caricamento sfuma e parte quello di "pronto".
-    static func riconosciuto() {
+    /// È pronto: il caricamento sfuma e parte «schedapronta».
+    static func schedaPronta() {
         guard attivi else { return }
-        smettiDiCercare()
-        riproduci("schedapronta", volume: 0.8)
+        sfuma(lettoreScheda, 0.18)
+        lettoreScheda = nil
+        riproduci("schedapronta", volume: 1.0)
+    }
+    /// Il testo che si stampa: sfuma con `chatPronta()`.
+    static func chatCarica() {
+        guard attivi, let p = lettore("chatcarica", volume: 0.7) else { return }
+        lettoreChat?.stop()
+        lettoreChat = p
+        p.play()
+    }
+    static func chatPronta() {
+        sfuma(lettoreChat, 0.25)
+        lettoreChat = nil
     }
 
-    // Momenti che prima erano muti: usano solo i suoni di sempre (scelta di Alessandro).
-    /// Il click scelto da Alessandro («click», RescopicSound "select small"): solo dove prima non c'era niente.
-    static func click() { riproduci("click", volume: 0.5) }
+    // MARK: - I nomi di prima (chi li chiama non cambia: cambia solo il suono)
+
+    static func avvio() { camera() }
+    /// Dopo lo scatto, mentre cerca il disco.
+    static func guardo() { schedaApre() }
+    /// Disco riconosciuto.
+    static func riconosciuto() { schedaPronta() }
+    /// Si apre una scheda accessoria (scheda annuncio, Versioni).
+    static func apri() { tocco() }
+    static func click() { tocco() }
     /// Vendi / Bozza: parte l'annuncio.
-    static func carica() { click() }
+    static func carica() { tocco() }
     /// L'annuncio è su Discogs.
-    static func online() { riproduci("schedapronta", volume: 0.8) }
-    /// Pubblica tutto: click alla partenza, "pronto" alla fine.
-    static func pubblico() { click() }
-    static func fine() { online() }
-    /// Note veloci, − / + del prezzo, spunte in Seleziona.
-    static func seleziona() { click() }
+    static func online() { fatto() }
+    /// Pubblica tutto: tocco alla partenza, «fatto» alla fine.
+    static func pubblico() { tocco() }
+    static func fine() { fatto() }
+    /// Spunte, − / + del prezzo, Seleziona.
+    static func seleziona() { tocco() }
     /// Discogs rifiuta o non risponde.
     static func nego() { errore() }
-    static func nuovoOrdine() { online() }
-    /// Statistiche: niente suono mentre fa i conti.
+    static func nuovoOrdine() { riproduci("schedapronta", volume: 1.0) }
+    /// Statistiche: il caricamento lo fanno `schedaApre` / `schedaPronta`.
     static func elaboro() {}
     static func pronto() {}
 
     /// Non riconosciuto.
     static func errore() {
         guard attivi else { return }
-        smettiDiCercare()
+        sfuma(lettoreScheda, 0.18)
+        lettoreScheda = nil
         let dati = cacheErrore ?? generaErrore()
         cacheErrore = dati
         guard let p = try? AVAudioPlayer(data: dati) else { return }
@@ -85,8 +104,15 @@ enum Suoni {
     // MARK: - Lettori
 
     private static var lettoreScheda: AVAudioPlayer?
+    private static var lettoreChat: AVAudioPlayer?
     private static var lettori: [AVAudioPlayer] = []
     private static var cacheErrore: Data?
+
+    private static func sfuma(_ p: AVAudioPlayer?, _ secondi: TimeInterval) {
+        guard let p, p.isPlaying else { return }
+        p.setVolume(0, fadeDuration: secondi)
+        DispatchQueue.main.asyncAfter(deadline: .now() + secondi + 0.02) { p.stop() }
+    }
 
     private static func lettore(_ nome: String, volume: Float) -> AVAudioPlayer? {
         guard let url = ["m4a", "mp3", "wav", "caf"].lazy

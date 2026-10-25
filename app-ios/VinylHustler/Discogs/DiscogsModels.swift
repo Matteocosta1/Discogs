@@ -202,11 +202,41 @@ struct Order: Codable, Hashable, Identifiable {
     var buyer: Buyer
     var total: Money?
     var shippingAddress: String?
+    // V60: tutti opzionali, così un ordine senza questi campi si legge lo stesso
+    var fee: Money?                 // la commissione di Discogs su questo ordine
+    var shipping: OrderShipping?    // spese di spedizione pagate dall'acquirente
+    var nextStatus: [String]?       // gli stati in cui si può portare l'ordine adesso
+    var lastActivity: String?       // ultima novità (messaggio, cambio di stato): serve a rileggere i messaggi solo se serve
+}
+
+struct OrderShipping: Codable, Hashable {
+    var value: Double?
+    var currency: String?
+    var method: String?
 }
 
 struct OrdersPage: Codable {
     var orders: [Order]
     var pagination: Pagination
+}
+
+/// Un messaggio della conversazione di un ordine (GET /marketplace/orders/{id}/messages).
+/// type: "message" (scritto da qualcuno), "status", "shipping", "refund_sent", "refund_received" (righe di Discogs).
+struct OrderMessage: Codable, Hashable {
+    var timestamp: String?
+    var message: String?
+    var subject: String?
+    var type: String?
+    var from: MessageAuthor?
+}
+
+struct MessageAuthor: Codable, Hashable {
+    var username: String?
+}
+
+struct OrderMessagesPage: Codable {
+    var messages: [OrderMessage]
+    var pagination: Pagination?
 }
 
 struct CreatedListing: Codable {

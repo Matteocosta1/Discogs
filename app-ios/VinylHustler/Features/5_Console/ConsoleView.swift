@@ -2,11 +2,15 @@ import SwiftData
 import SwiftUI
 
 /// 05 / SETTINGS (prima "Console") — account, nome, valuta, accesso AI, voce, annunci, regole del prezzo.
+/// V60 · proposta 12: come JARVIS — riquadri scuri con il bordo verde e i titoli in monospazio al posto dell'elenco
+/// grigio di Apple; all'apertura la pagina si stampa dall'alto (0,9 s) con il suono del testo che carica.
+/// Le voci e l'ordine sono gli stessi di prima.
 struct ConsoleView: View {
     @Environment(Seller.self) private var seller
     @Query private var discs: [Disc]
     @State private var apiUsed = 0
     @State private var aiSignedIn = false
+    @State private var stampa = Date.distantPast
     @AppStorage("voice") private var voice = true
     @AppStorage("userName") private var userName = ""
     @AppStorage("voiceID") private var voiceID = Voice.systemChoice
@@ -18,79 +22,126 @@ struct ConsoleView: View {
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        @Bindable var seller = seller
         NavigationStack {
-            Form {
-                Section { LabeledContent("Versione dell'app", value: AppVersione.nome) }
-                accountSection
-                Section("API Discogs · ultimo minuto") {
-                    LabeledContent("Richieste", value: "\(apiUsed) / 60")
-                    ProgressView(value: Double(apiUsed), total: 60).tint(apiUsed > 50 ? Theme.warn : Theme.accent)
-                    Text("Una richiesta al secondo, sempre. Il limite è per telefono (indirizzo IP).")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Riconoscimento") {
-                    if !Backend.shared.isConfigured {
-                        Text("Supabase non configurato: niente AI, solo barcode e scritte.").font(.caption).foregroundStyle(Theme.warn)
-                    } else if aiSignedIn {
-                        Label("AI attiva", systemImage: "checkmark.seal").foregroundStyle(Theme.accent)
-                        Button("Esci dall'AI", role: .destructive) {
-                            Task { await Backend.shared.signOut(); aiSignedIn = false }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    GruppoJarvis("Account") {
+                        RigaJarvis { Text("Versione dell'app"); Spacer(); valore(AppVersione.nome) }
+                        accountRows
+                    } piede: { accountFooter }
+                    GruppoJarvis("API Discogs · ultimo minuto") {
+                        RigaJarvis {
+                            Text("Richieste")
+                            Spacer()
+                            ProgressView(value: Double(apiUsed), total: 60)
+                                .tint(apiUsed > 50 ? Theme.warn : Theme.accent)
+                                .frame(maxWidth: 120)
+                            valore("\(apiUsed) / 60")
                         }
-                    } else {
-                        AISignInRow { aiSignedIn = true }
+                    } piede: { Text("Una richiesta al secondo, sempre. Il limite è per telefono (indirizzo IP).") }
+                    GruppoJarvis("Riconoscimento") { riconoscimentoRows } piede: { EmptyView() }
+                    GruppoJarvis("Voce") { voiceRows } piede: { Text(footer) }
+                    GruppoJarvis("Annunci") { annunciRows } piede: { annunciFooter }
+                    GruppoJarvis("Regole del prezzo") { prezzoRows } piede: {
+                        Text("Base = più basso in vendita, mai sotto il suggerito per il grado. Premi: 0 copie +100%, 1-2 +50%, 3-5 +25%; want/have oltre 1 +10%, oltre 2 +25%, oltre 4 +50%. Arrotondato per eccesso alla griglia.")
                     }
-                    LabeledContent("Spesa AI (tutti i dischi)", value: discs.reduce(0) { $0 + $1.aiCost }.formatted(.currency(code: "EUR")))
+                    Text("VINYL HUSTLER · \(AppVersione.nome) · KR")
+                        .font(Theme.mono(10)).tracking(1.5).foregroundStyle(Theme.muted)
+                        .frame(maxWidth: .infinity)
                 }
-                voiceSection
-                annunciSection
-                Section("Regole del prezzo") {
-                    Stepper("Griglia: \(seller.rules.step.formatted()) €", value: decimal($seller.rules.step), in: 0.5...10, step: 0.5)
-                    Stepper("Prezzo minimo: \(seller.rules.minimum.formatted()) €", value: decimal($seller.rules.minimum), in: 0.5...20, step: 0.5)
-                    Toggle("Tre corsie (lenta / normale / calda)", isOn: Binding(get: { !seller.rules.lanesOff },
-                                                                                set: { seller.rules.lanesOff = !$0 }))
-                    Text("Base = più basso in vendita, mai sotto il suggerito per il grado. Premi: 0 copie +100%, 1-2 +50%, 3-5 +25%; want/have oltre 1 +10%, oltre 2 +25%, oltre 4 +50%. Arrotondato per eccesso alla griglia.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section {
-                    Text("VINYL HUSTLER · BUILD 0.1 · KR").font(.caption2.monospaced()).foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                // la pagina si stampa dall'alto, una volta, quando si apre
+                .mask {
+                    TimelineView(.animation(minimumInterval: 1 / 60, paused: Date().timeIntervalSince(stampa) > 1)) { ctx in
+                        let x = min(1, max(0, ctx.date.timeIntervalSince(stampa) / 0.9))
+                        let p = 1 - pow(1 - x, 2.2)
+                        GeometryReader { g in
+                            VStack(spacing: 0) {
+                                Rectangle().frame(height: g.size.height * p)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
                 }
             }
-            .themedBackground()
+            .sfondoHUD()
             .senzaTitolo("Settings")
             .onReceive(timer) { _ in Task { apiUsed = await seller.apiUsedLastMinute() } }
             .task { aiSignedIn = await Backend.shared.accessToken() != nil }
+            .onAppear {
+                stampa = Date()
+                Suoni.chatCarica()
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(900))
+                    Suoni.chatPronta()
+                }
+            }
         }
     }
 
+    private func valore(_ t: String) -> some View {
+        Text(t).font(Theme.mono(13)).foregroundStyle(Color(hex: 0xCFE9D3)).lineLimit(1).minimumScaleFactor(0.7)
+    }
+
     // Il corpo è diviso in pezzi: tutto insieme è troppo per il compilatore di Swift.
-    private var accountSection: some View {
-        Section {
-            HStack {
-                Text("Nome")
-                TextField("come ti chiami", text: $userName).multilineTextAlignment(.trailing)
-                    .foregroundStyle(Theme.glow)
-            }
-            LabeledContent("Account Discogs", value: seller.username.isEmpty ? "—" : seller.username)
+    @ViewBuilder private var accountRows: some View {
+        RigaJarvis {
+            Text("Nome")
+            TextField("come ti chiami", text: $userName).multilineTextAlignment(.trailing)
+                .font(Theme.mono(13)).foregroundStyle(Theme.glow)
+        }
+        RigaJarvis { Text("Account Discogs"); Spacer(); valore(seller.username.isEmpty ? "—" : seller.username) }
+        RigaJarvis {
+            Text("Valuta")
+            Spacer()
             Picker("Valuta", selection: Binding(get: { UserDefaults.standard.string(forKey: "valuta") ?? "" },
                                                 set: { seller.setCurrency($0) })) {
                 Text("Come su Discogs (\(seller.discogsCurrency))").tag("")
                 ForEach(Seller.currencies, id: \.self) { Text($0).tag($0) }
             }
-            Button("Cambia account Discogs", role: .destructive) { seller.logout() }
-        } header: {
-            Text("Account")
-        } footer: {
-            Text(seller.currency == seller.discogsCurrency
-                 ? "Il nome è quello con cui ti saluta la voce. La valuta è quella dei prezzi: di solito conviene lasciarla come su Discogs."
-                 : "Attenzione: su Discogs vendi in \(seller.discogsCurrency). L'app calcola i prezzi in \(seller.currency), ma Discogs li legge nella sua valuta: cambiala anche nelle impostazioni di Discogs, altrimenti i prezzi saranno sbagliati.")
-                .font(.caption)
-                .foregroundStyle(seller.currency == seller.discogsCurrency ? Color.secondary : Theme.warn)
+            .labelsHidden()
+        }
+        RigaJarvis(ultima: true) {
+            Button("Cambia account Discogs", role: .destructive) { Suoni.tocco(); seller.logout() }
+                .foregroundStyle(Theme.warn)
+            Spacer()
         }
     }
 
-    private var voiceSection: some View {
-        Section {
+    private var accountFooter: some View {
+        Text(seller.currency == seller.discogsCurrency
+             ? "Il nome è quello con cui ti saluta la voce. La valuta è quella dei prezzi: di solito conviene lasciarla come su Discogs."
+             : "Attenzione: su Discogs vendi in \(seller.discogsCurrency). L'app calcola i prezzi in \(seller.currency), ma Discogs li legge nella sua valuta: cambiala anche nelle impostazioni di Discogs, altrimenti i prezzi saranno sbagliati.")
+            .foregroundStyle(seller.currency == seller.discogsCurrency ? Theme.muted : Theme.warn)
+    }
+
+    @ViewBuilder private var riconoscimentoRows: some View {
+        if !Backend.shared.isConfigured {
+            RigaJarvis {
+                Text("Supabase non configurato: niente AI, solo barcode e scritte.").font(.caption).foregroundStyle(Theme.warn)
+            }
+        } else if aiSignedIn {
+            RigaJarvis {
+                Label("AI attiva", systemImage: "checkmark.seal").foregroundStyle(Theme.accent)
+                Spacer()
+                Button("Esci dall'AI", role: .destructive) {
+                    Task { await Backend.shared.signOut(); aiSignedIn = false }
+                }
+                .foregroundStyle(Theme.warn)
+            }
+        } else {
+            RigaJarvis { AISignInRow { aiSignedIn = true } }
+        }
+        RigaJarvis(ultima: true) {
+            Text("Spesa AI (tutti i dischi)")
+            Spacer()
+            valore(discs.reduce(0) { $0 + $1.aiCost }.formatted(.currency(code: "EUR")))
+        }
+    }
+
+    @ViewBuilder private var voiceRows: some View {
+        RigaJarvis {
             Picker("Voce", selection: $voceModo) {
                 Text("Vinyl Hustler").tag("eleven")
                 Text("Apple").tag("apple")
@@ -98,10 +149,14 @@ struct ConsoleView: View {
             }
             .pickerStyle(.segmented)
             .onChange(of: voceModo) { _, m in if m != "off" { voice = true } }
-            if voceModo == "eleven" {
-                Toggle("Modello veloce (Flash)", isOn: $veloce)
-            }
-            if voceModo != "off" {
+        }
+        if voceModo == "eleven" {
+            RigaJarvis { Toggle("Modello veloce (Flash)", isOn: $veloce).tint(Theme.accent) }
+        }
+        if voceModo != "off" {
+            RigaJarvis {
+                Text(voceModo == "eleven" ? "Riserva senza rete" : "Voce Apple")
+                Spacer()
                 Picker(voceModo == "eleven" ? "Riserva senza rete" : "Voce Apple", selection: $voiceID) {
                     Text("Quella di sistema (Impostazioni)").tag(Voice.systemChoice)
                     Text("La migliore italiana").tag("")
@@ -109,36 +164,66 @@ struct ConsoleView: View {
                         Text(Voice.label(v)).tag(v.identifier)
                     }
                 }
-                Button("Prova la voce") { Voice.shared.sayTitles(["Kind Of Blue di Miles Davis"]) }
+                .labelsHidden()
             }
-            if voceModo == "eleven" {
-                NavigationLink("Pronuncia") { PronunciaView() }
+            RigaJarvis {
+                Button("Prova la voce") { Suoni.tocco(); Voice.shared.sayTitles(["Kind Of Blue di Miles Davis"]) }
+                Spacer()
             }
-            Toggle("Suoni dell'interfaccia", isOn: $suoni)
-        } header: {
-            Text("Voce")
-        } footer: {
-            Text(footer).font(.caption)
         }
+        if voceModo == "eleven" {
+            NavigationLink { PronunciaView() } label: {
+                RigaJarvis {
+                    Text("Pronuncia").foregroundStyle(Theme.text)
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.muted)
+                }
+            }
+            .buttonStyle(.plain)
+        }
+        RigaJarvis(ultima: true) { Toggle("Suoni dell'interfaccia", isOn: $suoni).tint(Theme.accent) }
     }
 
-    private var annunciSection: some View {
-        Section {
+    @ViewBuilder private var annunciRows: some View {
+        RigaJarvis {
+            Text("Vendi")
+            Spacer()
             Picker("Vendi", selection: $vendiModo) {
                 Text("Subito").tag("subito")
                 Text("Prima la scheda").tag("scheda")
             }
-            Toggle("Accetta offerte", isOn: $offerteDefault)
-            NavigationLink { DescrizioneView() } label: {
-                LabeledContent("Descrizione", value: (UserDefaults.standard.string(forKey: "descLingua") ?? "en") == "itEn" ? "Italiano + English" : "English")
+            .labelsHidden()
+        }
+        RigaJarvis { Toggle("Accetta offerte", isOn: $offerteDefault).tint(Theme.accent) }
+        NavigationLink { DescrizioneView() } label: {
+            RigaJarvis(ultima: true) {
+                Text("Descrizione").foregroundStyle(Theme.text)
+                Spacer()
+                valore((UserDefaults.standard.string(forKey: "descLingua") ?? "en") == "itEn" ? "Italiano + English" : "English")
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.muted)
             }
-        } header: {
-            Text("Annunci")
-        } footer: {
-            Text(vendiModo == "subito"
-                 ? "Vendi mette il disco online con un tocco. Prezzo e tutto il resto li cambi quando vuoi toccando il disco in Magazzino."
-                 : "Vendi apre la scheda annuncio già compilata: controlli prezzo, condizioni e descrizione, poi «Metti online».")
-                .font(.caption)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var annunciFooter: some View {
+        Text(vendiModo == "subito"
+             ? "Vendi mette il disco online con un tocco. Prezzo e tutto il resto li cambi quando vuoi toccando il disco in Magazzino."
+             : "Vendi apre la scheda annuncio già compilata: controlli prezzo, condizioni e descrizione, poi «Metti online».")
+    }
+
+    @ViewBuilder private var prezzoRows: some View {
+        @Bindable var seller = seller
+        RigaJarvis {
+            Stepper("Griglia: \(seller.rules.step.formatted()) €", value: decimal($seller.rules.step), in: 0.5...10, step: 0.5)
+        }
+        RigaJarvis {
+            Stepper("Prezzo minimo: \(seller.rules.minimum.formatted()) €", value: decimal($seller.rules.minimum), in: 0.5...20, step: 0.5)
+        }
+        RigaJarvis(ultima: true) {
+            Toggle("Tre corsie (lenta / normale / calda)", isOn: Binding(get: { !seller.rules.lanesOff },
+                                                                        set: { seller.rules.lanesOff = !$0 }))
+                .tint(Theme.accent)
         }
     }
 
@@ -155,6 +240,60 @@ struct ConsoleView: View {
     private func decimal(_ b: Binding<Decimal>) -> Binding<Double> {
         Binding(get: { NSDecimalNumber(decimal: b.wrappedValue).doubleValue },
                 set: { b.wrappedValue = Decimal(string: String(format: "%.2f", $0)) ?? 0 })
+    }
+}
+
+/// V60 · un riquadro di Settings alla JARVIS: titolo in monospazio verde, righe dentro un riquadro scuro con il bordo verde,
+/// testo di spiegazione sotto.
+struct GruppoJarvis<Righe: View, Piede: View>: View {
+    let titolo: String
+    @ViewBuilder let righe: () -> Righe
+    @ViewBuilder let piede: () -> Piede
+
+    init(_ titolo: String, @ViewBuilder _ righe: @escaping () -> Righe, @ViewBuilder piede: @escaping () -> Piede) {
+        self.titolo = titolo
+        self.righe = righe
+        self.piede = piede
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(titolo.uppercased())
+                .font(Theme.mono(11, .bold)).tracking(2)
+                .foregroundStyle(Theme.glow)
+                .shadow(color: Theme.glow.opacity(0.4), radius: 3)
+                .padding(.horizontal, 4)
+            VStack(spacing: 0) { righe() }
+                .padding(.horizontal, 14)
+                .background(Theme.glow.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.glow.opacity(0.28), lineWidth: 1))
+            piede()
+                .font(.caption)
+                .foregroundStyle(Theme.muted)
+                .padding(.horizontal, 4)
+        }
+    }
+}
+
+/// Una riga di un riquadro: alta almeno 44 punti, con la linea verde sotto (tranne l'ultima).
+struct RigaJarvis<Contenuto: View>: View {
+    var ultima = false
+    @ViewBuilder let contenuto: () -> Contenuto
+
+    init(ultima: Bool = false, @ViewBuilder _ contenuto: @escaping () -> Contenuto) {
+        self.ultima = ultima
+        self.contenuto = contenuto
+    }
+
+    var body: some View {
+        HStack(spacing: 10) { contenuto() }
+            .font(.system(size: 15))
+            .foregroundStyle(Theme.text)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.vertical, 4)
+            .overlay(alignment: .bottom) {
+                if !ultima { Rectangle().fill(Theme.glow.opacity(0.12)).frame(height: 1) }
+            }
     }
 }
 

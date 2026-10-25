@@ -34,6 +34,8 @@ struct RootView: View {
     private var toCheck: [Disc]
     @AppStorage("selectedTab") private var tab = 0
     @State private var splash = true
+    /// V60 · proposta 7: quando parte l'entrata delle icone (nil = finita o non c'è).
+    @State private var avvio: Date?
 
     var body: some View {
         Group {
@@ -44,14 +46,22 @@ struct RootView: View {
             }
         }
         .overlay {
+            if let avvio, seller.isLoggedIn { AvvioIcone(da: avvio, selezionata: tab) }
+        }
+        .overlay {
             if splash { SplashView().transition(.opacity) }
         }
         .task { seller.startup(context: context) }
         .task {
-            // all'apertura il marchio si accende come un neon, col suono d'avvio di JARVIS, poi sfuma
+            // all'apertura il marchio si accende come un neon, con il suono d'apertura, poi sfuma
             Suoni.apertura()
             try? await Task.sleep(for: .milliseconds(1700))
+            // V60: la barra in basso si copre subito, poi le icone entrano una dopo l'altra mentre la scritta sfuma
+            avvio = Date()
             withAnimation(.easeOut(duration: 0.5)) { splash = false }
+            if seller.isLoggedIn { await AvvioIcone.suona() }
+            try? await Task.sleep(for: .milliseconds(Int(AvvioIcone.durata * 1000) - 750))
+            avvio = nil
         }
         .onChange(of: tab) { _, _ in Suoni.tocco() }
         .onChange(of: seller.lastError) { _, e in if e != nil { Suoni.nego() } }

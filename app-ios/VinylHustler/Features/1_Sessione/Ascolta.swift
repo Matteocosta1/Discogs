@@ -4,11 +4,12 @@ import WebKit
 // MARK: - Il riquadro del disco in alto (come il Satellite di JARVIS, nel verde Discosizer) — V59
 
 /// Sotto "VINYL HUSTLER": titolo, artista, anno, paese, catalogo, etichetta e formato del disco riconosciuto.
-/// Si apre dall'alto con una linea di scansione e le righe entrano una alla volta.
+/// Si apre dall'alto con una linea di scansione; V60: le scritte escono come simboli e si sistemano riga per riga.
 struct PannelloDisco: View {
     let release: Release
     let versione: String
-    @State private var righe = 0
+    /// Quando il riquadro è comparso: da qui partono le decodifiche (una nuova release = un riquadro nuovo, con .id).
+    @State private var aperto = Date()
     @State private var scan: CGFloat = 0
     @State private var scanVisibile = true
 
@@ -29,17 +30,17 @@ struct PannelloDisco: View {
                 HStack {
                     Text("● DISCO")
                     Spacer(minLength: 8)
-                    if !versione.isEmpty { Text("VERSIONE \(versione)") }
+                    if !versione.isEmpty { decodifica("VERSIONE \(versione)", 0) }
                 }
                 .font(Theme.mono(9, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
             }
             riga(1) {
-                Text(release.title.uppercased())
+                decodifica(release.title.uppercased(), 1)
                     .font(Theme.mono(15, .heavy)).tracking(1)
                     .foregroundStyle(Color(hex: 0xEAFFEA)).lineLimit(2)
             }
             riga(2) {
-                Text(artista.uppercased())
+                decodifica(artista.uppercased(), 2)
                     .font(Theme.mono(11, .bold)).tracking(1.5)
                     .foregroundStyle(Theme.accent).lineLimit(1)
             }
@@ -47,7 +48,7 @@ struct PannelloDisco: View {
                 riga(3) {
                     HStack(spacing: 6) {
                         ForEach(cartellini, id: \.self) { c in
-                            Text(c.uppercased())
+                            decodifica(c.uppercased(), 3)
                                 .font(Theme.mono(9, .bold)).tracking(1)
                                 .foregroundStyle(Color(hex: 0xD9FFD9)).lineLimit(1)
                                 .padding(.horizontal, 6).padding(.vertical, 2)
@@ -58,7 +59,7 @@ struct PannelloDisco: View {
             }
             if !etichettaFormato.isEmpty {
                 riga(4) {
-                    Text(etichettaFormato)
+                    decodifica(etichettaFormato, 4)
                         .font(Theme.mono(9, .semibold)).tracking(1.2)
                         .foregroundStyle(Color(hex: 0x8FD88F)).lineLimit(1)
                 }
@@ -82,20 +83,21 @@ struct PannelloDisco: View {
         .shadow(color: Theme.glow.opacity(0.25), radius: 10)
         .task {
             withAnimation(.easeOut(duration: 0.9)) { scan = 1 }
-            for i in 1...5 {
-                try? await Task.sleep(for: .milliseconds(150))
-                withAnimation(.easeOut(duration: 0.35)) { righe = i }
-            }
-            try? await Task.sleep(for: .milliseconds(200))
+            try? await Task.sleep(for: .milliseconds(950))
             withAnimation(.easeOut(duration: 0.3)) { scanVisibile = false }
         }
         .accessibilityElement(children: .combine)
+        .accessibilityLabel([release.title, artista, etichettaFormato].filter { !$0.isEmpty }.joined(separator: ", "))
     }
 
+    /// Le righe si vedono subito: sono i simboli che diventano il testo, una riga dopo l'altra (come nel mock-up:
+    /// 200 ms, poi 110 ms tra una riga e la successiva, 420 ms per sistemarsi).
     private func riga<C: View>(_ i: Int, @ViewBuilder _ contenuto: () -> C) -> some View {
         contenuto()
-            .opacity(righe > i ? 1 : 0)
-            .offset(x: righe > i ? 0 : -10)
+    }
+
+    private func decodifica(_ testo: String, _ i: Int) -> TestoDecodifica {
+        TestoDecodifica(testo: testo, da: aperto, ritardo: 0.2 + Double(i) * 0.11, durata: 0.42)
     }
 }
 
@@ -156,6 +158,8 @@ struct LettorePiccolo: View {
 struct LettoreGrande: View {
     let ascolto: Ascolto
     let release: Release?
+    /// V60: la X in alto (sezione con la fotocamera: si chiude con la X nel cerchio).
+    var chiudi: () -> Void = {}
     /// La maniglia: il dito che tira giù (di quanto) e quando lascia.
     var trascinando: (CGFloat) -> Void = { _ in }
     var rilasciato: (CGFloat) -> Void = { _ in }
@@ -172,6 +176,17 @@ struct LettoreGrande: View {
                     Text(sottotitolo)
                         .font(Theme.mono(9, .semibold)).tracking(1.5)
                         .foregroundStyle(Color(hex: 0x8FD88F)).lineLimit(1)
+                    Button { chiudi() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.45))
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(Theme.accent.opacity(0.5), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Chiudi il lettore")
                 }
             }
             .padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 6)

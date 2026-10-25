@@ -37,6 +37,9 @@ struct OcchioView: View {
     private let ascolto = Ascolto.shared
     @State private var lettoreAperto = false
     @State private var trascina: CGFloat = 0
+    // V60: il caricamento HUD mentre analizza (anelli, barra con la percentuale, fasi): quando parte e quando finisce
+    @State private var analisiDa: Date?
+    @State private var analisiFine: Date?
 
     private let tinta = Theme.accent
 
@@ -67,6 +70,12 @@ struct OcchioView: View {
                 MirinoOcchio(agganciato: agganciato, scattando: registrando, analizzo: seller.working > 0,
                              preso: preso, tinta: tinta)
                     .allowsHitTesting(false)
+                // V60: mentre riconosce, al centro del mirino il caricamento alla JARVIS
+                if let da = analisiDa {
+                    HUDAnalisi(da: da, fine: analisiFine)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
                 Color.white.opacity(lampo ? 0.85 : 0).allowsHitTesting(false)
                 VStack(spacing: 10) {
                     topBar
@@ -135,9 +144,27 @@ struct OcchioView: View {
                 break                               // tendina, Centro di Controllo: la fotocamera resta accesa
             }
         }
+        // V60: il caricamento HUD segue il lavoro vero: parte col primo disco in riconoscimento,
+        // arriva al 100% quando l'ultimo ha la risposta, poi sparisce
+        .onChange(of: seller.working) { old, new in
+            if new > old && analisiDa == nil {
+                analisiFine = nil
+                withAnimation(.easeOut(duration: 0.2)) { analisiDa = Date() }
+            } else if new == 0 && analisiDa != nil && analisiFine == nil {
+                let fine = Date()
+                analisiFine = fine
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(650))
+                    guard analisiFine == fine else { return }
+                    withAnimation(.easeOut(duration: 0.25)) { analisiDa = nil }
+                    analisiFine = nil
+                }
+            }
+        }
         // disco riconosciuto: il mirino si accende un attimo ("LOCK")
         .onChange(of: seen.filter { $0.status == .daConfermare }.count) { old, new in
             guard new > old else { return }
+            UINotificationFeedbackGenerator().notificationOccurred(.success)     // V60: «fatto», come JARVIS
             withAnimation(.spring(duration: 0.35, bounce: 0.4)) { preso = true }
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1.6))
@@ -171,6 +198,7 @@ struct OcchioView: View {
                 voice.toggle()
             }
             roundButton("xmark", label: "Chiudi") {
+                Suoni.testa()
                 if registrando { motore.fermaVideo() }
                 close()
             }
@@ -302,6 +330,10 @@ struct OcchioView: View {
                     .onTapGesture { chiudiLettore() }
                     .allowsHitTesting(lettoreAperto)
                 LettoreGrande(ascolto: ascolto, release: schedaAttuale,
+                              chiudi: {
+                                  Suoni.testa()
+                                  chiudiLettore()
+                              },
                               trascinando: { dy in trascina = max(0, dy) },
                               rilasciato: { dy in
                                   if dy > 90 { chiudiLettore() } else { withAnimation(.spring(duration: 0.35)) { trascina = 0 } }
@@ -324,6 +356,7 @@ struct OcchioView: View {
     }
 
     private func apriLettore() {
+        if !lettoreAperto { Suoni.tocco() }
         trascina = 0
         withAnimation(.spring(duration: 0.42, bounce: 0.15)) { lettoreAperto = true }
     }
@@ -356,12 +389,12 @@ struct OcchioView: View {
             }
             guard motore.sessione.isRunning else { return }
             agganciato = true
-            Suoni.avvio()
+            Suoni.camera()
             stato = "INQUADRA UN DISCO"
             return
         }
         agganciato = true
-        Suoni.avvio()
+        Suoni.camera()
         stato = "INQUADRA UN DISCO"
     }
 
@@ -402,6 +435,7 @@ struct OcchioView: View {
                 registrando = false
                 UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
                 guard let url else { stato = "VIDEO NON RIUSCITO · RIPROVA"; return }
+                Suoni.fatto()                               // V60: video finito
                 preparo = true
                 stato = "ANALISI DEL VIDEO"
                 let frames = await OcchioView.fotogrammi(url)
@@ -448,6 +482,85 @@ struct OcchioView: View {
         CGImageDestinationAddImage(destinazione, piccola, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
         guard CGImageDestinationFinalize(destinazione) else { return nil }
         return uscita as Data
+    }
+}
+
+// MARK: - Caricamento HUD (V60): due anelli che girano, barra con la percentuale, fasi LETTURA → DISCOGS → PREZZO
+
+/// Al centro del mirino mentre il disco viene riconosciuto. La percentuale sale morbida (non si conosce la durata vera)
+/// e arriva al 100% quando il riconoscimento è finito (`fine`).
+struct HUDAnalisi: View {
+    let da: Date
+    let fine: Date?
+
+    /// Avanzamento finto ma onesto: sale veloce e rallenta, senza mai arrivare da solo in fondo.
+    private static func avanzamento(_ t: Double) -> Double { 0.95 * (1 - exp(-max(0, t) / 2.2)) }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
+            let t = ctx.date.timeIntervalSince(da)
+            let p: Double = {
+                guard let fine else { return Self.avanzamento(t) }
+                let base = Self.avanzamento(fine.timeIntervalSince(da))
+                return base + (1 - base) * morbido(ctx.date.timeIntervalSince(fine) / 0.3)
+            }()
+            let pct = Int((p * 100).rounded())
+            VStack(spacing: 12) {
+                anelli(t)
+                VStack(spacing: 6) {
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Theme.glow.opacity(0.15))
+                        Capsule().fill(Theme.glow)
+                            .frame(width: 170 * CGFloat(p))
+                            .shadow(color: Theme.glow, radius: 4)
+                    }
+                    .frame(width: 170, height: 3)
+                    Text("\(pct)%")
+                        .font(Theme.mono(10, .bold)).monospacedDigit()
+                        .foregroundStyle(Theme.glow)
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    fase("LETTURA", accesa: p >= 0.02)
+                    fase("DISCOGS", accesa: p >= 0.42)
+                    fase("PREZZO", accesa: p >= 0.78)
+                }
+            }
+            .padding(.top, 16).padding(.bottom, 14)
+            .frame(width: 220)
+            .background(Color(red: 4 / 255, green: 8 / 255, blue: 5 / 255).opacity(0.74),
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.glow.opacity(0.35), lineWidth: 1))
+            .shadow(color: Theme.glow.opacity(0.2), radius: 11)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Analisi del disco in corso")
+    }
+
+    /// Due archi che girano in senso opposto attorno alla scritta DISCO.
+    private func anelli(_ t: Double) -> some View {
+        ZStack {
+            Circle().stroke(Theme.glow.opacity(0.2), lineWidth: 1)
+            Circle().trim(from: 0, to: 0.25)
+                .stroke(Theme.glow, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(t.truncatingRemainder(dividingBy: 1.4) / 1.4 * 360))
+            Circle().trim(from: 0, to: 0.25)
+                .stroke(Theme.glow.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .rotationEffect(.degrees(-t.truncatingRemainder(dividingBy: 1.0) * 360))
+                .padding(8)
+            Text("DISCO").font(Theme.mono(8, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
+        }
+        .frame(width: 64, height: 64)
+        .shadow(color: Theme.glow.opacity(0.6), radius: 4)
+    }
+
+    private func fase(_ nome: String, accesa: Bool) -> some View {
+        HStack(spacing: 7) {
+            Rectangle().fill(Theme.glow).frame(width: 5, height: 5)
+            Text(nome).font(Theme.mono(9, .semibold)).tracking(1.5)
+        }
+        .foregroundStyle(Theme.glow)
+        .opacity(accesa ? 0.95 : 0.3)
+        .animation(.easeOut(duration: 0.2), value: accesa)
     }
 }
 

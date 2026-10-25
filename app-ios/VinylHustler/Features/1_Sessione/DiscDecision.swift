@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import UIKit
 
 /// Il disco riconosciuto in una riga: copertina Discogs, titolo e la decisione da prendere.
 /// Lo stesso blocco sta nella fotocamera (sotto il mirino) e nella Sessione (Oggi).
@@ -11,13 +12,25 @@ struct DiscRow: View {
     var compact = false
     @State private var flash = false
     @State private var zap = false              // lampo verde: è appena andato su Discogs
+    // V60: la scheda si stampa dall'alto dietro la riga verde quando il disco è riconosciuto…
+    @State private var stampaDa: Date?
+    @State private var acquisisco = false       // …e intanto il cartellino dice «ACQUISIZIONE DATI»
+    // V60: Vendi / Bozza nella fotocamera: la scheda si ritira dietro una riga verde verticale (da destra a sinistra)
+    @State private var ritiroDa: Date?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 cover
                 VStack(alignment: .leading, spacing: 5) {
-                    StatusTag(status: disc.status)
+                    if acquisisco {
+                        Text("ACQUISIZIONE DATI")
+                            .font(Theme.mono(10, .bold)).tracking(1.2)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .foregroundStyle(Theme.money).background(Theme.military, in: Capsule())
+                    } else {
+                        StatusTag(status: disc.status)
+                    }
                     ReleaseTitle(disc: disc, size: compact ? 15 : 17, lines: compact ? 1 : 3)
                     Text("\(disc.gradeText) · \(disc.box)")
                         .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
@@ -25,7 +38,8 @@ struct DiscRow: View {
                 Spacer(minLength: 0)
                 if compact { DeleteDiscButton(disc: disc, wide: false) }     // Elimina sempre in vista
             }
-            DiscActions(disc: disc, onRetake: onRetake, compact: compact)
+            DiscActions(disc: disc, onRetake: onRetake, compact: compact,
+                        onRitiro: compact ? { si in ritira(si) } : nil)
             if !compact { DeleteDiscButton(disc: disc, wide: true) }
         }
         .padding(14)
@@ -43,6 +57,8 @@ struct DiscRow: View {
                     .transition(.opacity)
             }
         }
+        .modifier(StampaRitiro(stampaDa: stampaDa, ritiroDa: ritiroDa))
+        .allowsHitTesting(ritiroDa == nil)
         .animation(.spring(duration: 0.4, bounce: 0.2), value: disc.statusRaw)
         .onChange(of: disc.statusRaw) { old, new in
             // appena online o in bozza: lampo verde che sale dal basso e si spegne
@@ -55,11 +71,35 @@ struct DiscRow: View {
             }
             // riconosciuto o prezzo pronto: la scheda si accende un attimo, come un'icona di JARVIS
             guard new == DiscStatus.daConfermare.rawValue || new == DiscStatus.pronto.rawValue else { return }
+            if new == DiscStatus.daConfermare.rawValue && old != new { stampa() }
             flash = true
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(60))
                 withAnimation(.easeOut(duration: 0.9)) { flash = false }
             }
+        }
+    }
+
+    /// V60: la scheda si stampa (come nel mock-up: parte dopo 150 ms e dura 700 ms; il cartellino dice
+    /// «ACQUISIZIONE DATI» finché non è tutta fuori).
+    private func stampa() {
+        let da = Date()
+        stampaDa = da
+        acquisisco = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(850))
+            acquisisco = false
+            try? await Task.sleep(for: .milliseconds(250))
+            if stampaDa == da { stampaDa = nil }           // finita: niente più da ridisegnare
+        }
+    }
+
+    /// V60: Vendi / Bozza: si ritira (true); se Discogs non lo prende, torna com'era (false).
+    private func ritira(_ si: Bool) {
+        if si {
+            ritiroDa = Date()
+        } else {
+            withAnimation(.easeOut(duration: 0.25)) { ritiroDa = nil }
         }
     }
 
@@ -117,6 +157,8 @@ struct DiscActions: View {
     @Bindable var disc: Disc
     var onRetake: (() -> Void)? = nil
     var compact = false
+    /// V60: nella fotocamera la scheda si ritira quando si tocca Vendi o Bozza (true) e torna se non va (false).
+    var onRitiro: ((Bool) -> Void)? = nil
     @State private var busy = false
     @State private var alternatives = false
     @State private var askRelease = false
@@ -172,9 +214,9 @@ struct DiscActions: View {
                         }
                     }
                     HStack(spacing: 8) {
-                        Button("Vendi") { run { Suoni.carica(); await seller.sell(disc); if disc.listingID != nil { Suoni.online() } } }
+                        Button("Vendi") { vendiPronto(draft: false) }
                             .buttonStyle(SignalButtonStyle())
-                        Button("Bozza") { run { Suoni.carica(); await seller.sell(disc, draft: true); if disc.listingID != nil { Suoni.online() } } }
+                        Button("Bozza") { vendiPronto(draft: true) }
                             .buttonStyle(SignalButtonStyle(filled: false))
                     }
                     Button { editor = EditorRequest(status: "For Sale") } label: {
@@ -298,11 +340,10 @@ struct DiscActions: View {
             Text("Prezzo").font(.system(size: 15)).foregroundStyle(Theme.muted)
             Spacer()
             if let p = disc.price {
-                Text(p, format: .currency(code: seller.currency))
-                    .font(.system(size: compact ? 24 : 28, weight: .bold))
-                    .foregroundStyle(Theme.glow)
+                // V60: il prezzo conta da zero quando arriva
+                PrezzoConta(valore: p, valuta: seller.currency, size: compact ? 24 : 28)
                     .shadow(color: Theme.glow.opacity(0.35), radius: 8)
-                    .contentTransition(.numericText(value: p))
+                    .id(p)
             } else if seller.prezzoInCorso.contains(disc.id) {
                 ProgressView().tint(Theme.accent).controlSize(.small)
             } else {
@@ -333,16 +374,34 @@ struct DiscActions: View {
     /// Vendi / Bozza su un disco riconosciuto: conferma e prezzo, poi online subito oppure la scheda annuncio
     /// (Console › Annunci › Vendi).
     private func decide(draft: Bool) {
+        // V60: tocco medio e tick; nella fotocamera (vendita subito) la scheda si ritira dietro la riga verde
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Suoni.carica()
+        let ritiro = vendiModo != "scheda"
+        if ritiro { onRitiro?(true) }
         run {
             await seller.accept(disc)
-            guard disc.status == .pronto else { return }
+            guard disc.status == .pronto else {
+                if ritiro { onRitiro?(false) }
+                return
+            }
             if vendiModo == "scheda" {
                 editor = EditorRequest(status: draft ? "Draft" : "For Sale")
             } else {
-                Suoni.carica()
                 await seller.sell(disc, draft: draft)
-                if disc.listingID != nil { Suoni.online() }
+                if disc.listingID != nil { Suoni.online() } else { onRitiro?(false) }
             }
+        }
+    }
+
+    /// Vendi / Bozza col prezzo già pronto (V60: stesso tocco, stesso ritiro).
+    private func vendiPronto(draft: Bool) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Suoni.carica()
+        onRitiro?(true)
+        run {
+            await seller.sell(disc, draft: draft)
+            if disc.listingID != nil { Suoni.online() } else { onRitiro?(false) }
         }
     }
 
@@ -505,11 +564,86 @@ struct DeleteDiscButton: View {
                             isPresented: $ask, titleVisibility: .visible) {
             Button("Elimina", role: .destructive) {
                 busy = true
+                // V60: suono «si toglie» e vibrazione morbida che cala
+                Suoni.svuota()
+                let g = UIImpactFeedbackGenerator(style: .soft)
+                g.impactOccurred(intensity: 1.0)
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(70))
+                    g.impactOccurred(intensity: 0.6)
+                    try? await Task.sleep(for: .milliseconds(70))
+                    g.impactOccurred(intensity: 0.3)
+                }
                 Task {
                     await seller.deleteDisc(disc)
                     busy = false
                 }
             }
         }
+    }
+}
+
+/// V60: la scheda che si stampa dall'alto dietro una riga verde (`stampaDa`) e che si ritira da destra a sinistra
+/// dietro una riga verde verticale (`ritiroDa`). Tempi del mock-up: stampa 150 ms + 700 ms, ritiro 520 ms.
+struct StampaRitiro: ViewModifier {
+    let stampaDa: Date?
+    let ritiroDa: Date?
+
+    func body(content: Content) -> some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: stampaDa == nil && ritiroDa == nil)) { ctx in
+            let st: Double = stampaDa.map { morbido((ctx.date.timeIntervalSince($0) - 0.15) / 0.7) } ?? 1
+            let via: Double = ritiroDa.map { morbido(ctx.date.timeIntervalSince($0) / 0.52) } ?? 0
+            content
+                .mask {
+                    GeometryReader { g in
+                        Rectangle()
+                            .frame(width: g.size.width * CGFloat(1 - via), height: g.size.height * CGFloat(st))
+                    }
+                }
+                .overlay {
+                    GeometryReader { g in
+                        ZStack(alignment: .topLeading) {
+                            if st > 0 && st < 1 {
+                                Rectangle().fill(Theme.glow)
+                                    .frame(width: max(0, g.size.width - 24), height: 2)
+                                    .shadow(color: Theme.glow, radius: 4)
+                                    .offset(x: 12, y: g.size.height * CGFloat(st) - 1)
+                            }
+                            if via > 0 && via < 1 {
+                                Rectangle().fill(Theme.glow)
+                                    .frame(width: 2, height: max(0, g.size.height - 10))
+                                    .shadow(color: Theme.glow, radius: 4)
+                                    .offset(x: g.size.width * CGFloat(1 - via) - 1, y: 10)
+                            }
+                        }
+                        .frame(width: g.size.width, height: g.size.height, alignment: .topLeading)
+                    }
+                    .allowsHitTesting(false)
+                }
+        }
+    }
+}
+
+/// V60: il prezzo che conta da zero al valore in 700 ms (come nel mock-up).
+struct PrezzoConta: View {
+    let valore: Double
+    let valuta: String
+    var size: CGFloat = 28
+    @State private var da = Date()
+    @State private var finito = false
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: finito)) { ctx in
+            let k = finito ? 1 : morbido(ctx.date.timeIntervalSince(da) / 0.7)
+            Text(valore * k, format: .currency(code: valuta))
+                .font(.system(size: size, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(Theme.glow)
+        }
+        .task {
+            try? await Task.sleep(for: .milliseconds(750))
+            finito = true
+        }
+        .accessibilityLabel(Text(valore, format: .currency(code: valuta)))
     }
 }
