@@ -1,6 +1,7 @@
 import BackgroundTasks
 import SwiftData
 import SwiftUI
+import UIKit
 import UserNotifications
 
 /// 04 / ORDINI — come le serate in Discosizer: in alto i numeri, poi le schede degli ordini da evadere
@@ -8,21 +9,43 @@ import UserNotifications
 /// Tocchi una scheda e si apre il dettaglio con indirizzo da copiare e link a Discogs.
 /// Discogs non ha webhook: l'app controlla gli ordini ogni 3 minuti mentre è aperta,
 /// e in sottofondo quando iOS lo permette (BGAppRefreshTask), con notifica "Nuovo ordine".
+///
+/// V60 (come Discogs): Imballato mette l'ordine «In preparazione» su Discogs, Spedito chiede il tracking e lo
+/// manda all'acquirente insieme allo stato «Shipped»; i messaggi dell'ordine si leggono e si scrivono qui;
+/// finché l'acquirente non ha pagato Spedito è bloccato (Sollecita / Annulla); ogni scheda mostra il netto.
 struct OrdersView: View {
     @Environment(Seller.self) private var seller
     @Query private var discs: [Disc]
     @State private var orders: [Order] = []
     @State private var error: String?
+    @State private var avviso: String?
     @State private var loading = false
     @State private var detail: Order?
+    @State private var chat: Order?
+    @State private var spedizione: Order?
     private let timer = Timer.publish(every: 180, on: .main, in: .common).autoconnect()
     /// Preso / Imballato / Spedito, segnati nell'app (sul telefono): 0 = niente, 3 = spedito.
     @State private var checkedAt: Date?
     @State private var steps: [String: Int] = (UserDefaults.standard.dictionary(forKey: "orderSteps") as? [String: Int]) ?? [:]
+    /// V60: la conversazione di ogni ordine aperto (riletta solo se l'ordine ha novità) e i messaggi non letti.
+    @State private var messaggi: [String: [OrderMessage]] = [:]
+    @State private var attivitaLetta: [String: String] = [:]
+    @State private var nonLetti: [String: Int] = [:]
+    /// La riga sotto la pista di ogni scheda («DISCOGS AGGIORNATO…»).
+    @State private var note: [String: String] = [:]
+    /// Ordini con una richiesta a Discogs in corso.
+    @State private var lavoro: Set<String> = []
+    /// Spediti adesso: restano un attimo tra gli aperti, il tempo del furgoncino.
+    @State private var inUscita: Set<String> = []
+    /// I messaggi sono già stati letti una volta (dopo, un messaggio nuovo dell'acquirente suona).
+    @State private var chatPronte = false
 
-    private func step(_ o: Order) -> Int { steps[o.id] ?? 0 }
-    private var open: [Order] { orders.filter { !OrderStyle.closed($0.status) && step($0) < 3 } }
-    private var closed: [Order] { orders.filter { OrderStyle.closed($0.status) || step($0) >= 3 } }
+    private func step(_ o: Order) -> Int {
+        let locale = steps[o.id] ?? 0
+        return StatoPagamento(o.status) == .inPreparazione ? max(locale, 2) : locale
+    }
+    private var open: [Order] { orders.filter { !OrderStyle.closed($0.status) && (step($0) < 3 || inUscita.contains($0.id)) } }
+    private var closed: [Order] { orders.filter { !open.map(\.id).contains($0.id) } }
 
     private func setStep(_ o: Order, _ v: Int) {
         steps[o.id] = v
@@ -30,10 +53,31 @@ struct OrdersView: View {
     }
     private var cashed: Double { orders.filter { !$0.status.hasPrefix("Cancelled") }.compactMap { $0.total?.value }.reduce(0, +) }
 
+    /// Il netto del mese: totale meno la commissione Discogs, degli ordini di questo mese non annullati.
+    private var nettoMese: Double {
+        let cal = Calendar.current
+        let ora = Date()
+        return orders.filter { o in
+            guard !o.status.hasPrefix("Cancelled"), let d = ChatOrdini.data(o.created) else { return false }
+            return cal.isDate(d, equalTo: ora, toGranularity: .month)
+        }
+        .map { OrderCifre.netto($0) }
+        .reduce(0, +)
+    }
+
+    private var testata: String {
+        let mese = Date().formatted(.dateTime.month(.wide).locale(Locale(identifier: "it_IT"))).uppercased()
+        let netto = nettoMese.formatted(.currency(code: seller.currency).precision(.fractionLength(2)).locale(Locale(identifier: "it_IT")))
+        return "APERTI · \(open.count) · NETTO DI \(mese) \(netto)"
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    Text(testata).font(Theme.mono(10, .bold)).tracking(2).foregroundStyle(Theme.glow)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                        .contentTransition(.numericText())
                     HStack {
                         stat("\(open.count)", "aperti", highlight: !open.isEmpty)
                         stat("\(closed.count)", "spediti")
@@ -56,12 +100,17 @@ struct OrdersView: View {
                         .padding(14)
                         .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
                     } else {
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 12) {
                             Text("APERTI").font(.system(size: 13)).foregroundStyle(Theme.muted).padding(.leading, 16)
                             ForEach(open) { o in
                                 OpenOrderCard(order: o, box: box(for: o), step: step(o), currency: seller.currency,
+                                              stato: StatoPagamento(o.status), nonLetti: nonLetti[o.id] ?? 0,
+                                              nota: note[o.id], lavoro: lavoro.contains(o.id),
                                               onOpen: { Suoni.tocco(); detail = o },
-                                              onStep: { v in withAnimation(.spring(duration: 0.4)) { setStep(o, v) } })
+                                              onStep: { v in tocca(o, v) },
+                                              onMessaggi: { Suoni.tocco(); chat = o },
+                                              onSollecita: { Task { await sollecita(o) } },
+                                              onAnnulla: { nonPagato in Task { await annulla(o, nonPagato: nonPagato) } })
                                     .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
                                                             removal: .move(edge: .trailing).combined(with: .opacity)))
                             }
@@ -80,7 +129,7 @@ struct OrdersView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
             }
-            .background(Theme.bg)
+            .sfondoHUD()
             .senzaTitolo("Ordini")
             .refreshable { await Task { await load() }.value }   // Task a parte: il gesto non la interrompe
             .overlay { if loading && orders.isEmpty { ProgressView("Leggo gli ordini…").tint(Theme.accent) } }
@@ -90,7 +139,14 @@ struct OrdersView: View {
                 OrderDetail(order: o, box: box(for: o))
                     .presentationDetents([.medium, .large])
             }
+            .sheet(item: $chat) { o in
+                MessaggiSheet(order: o, onLetti: { ricontaNonLetti(o) })
+            }
+            .sheet(item: $spedizione) { o in
+                SpedizioneSheet(order: o, onSpedito: { spedito(o) })
+            }
             .alert(error ?? "", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {}
+            .alert(avviso ?? "", isPresented: Binding(get: { avviso != nil }, set: { if !$0 { avviso = nil } })) {}
         }
     }
 
@@ -102,68 +158,6 @@ struct OrdersView: View {
             Text(label).font(.system(size: 13)).foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder private func section(_ title: String, _ list: [Order], empty: String?) -> some View {
-        if !list.isEmpty || empty != nil {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title).font(.system(size: 13)).foregroundStyle(Theme.muted).padding(.leading, 16)
-                VStack(spacing: 0) {
-                    if list.isEmpty, let empty {
-                        Text(empty).font(.system(size: 15)).foregroundStyle(Theme.muted)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(16)
-                    }
-                    ForEach(Array(list.enumerated()), id: \.element.id) { i, o in
-                        Button { Suoni.tocco(); detail = o } label: { card(o) }
-                            .buttonStyle(.plain)
-                        if i < list.count - 1 { Divider().overlay(Theme.line).padding(.leading, 84) }
-                    }
-                }
-                .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-            }
-        }
-    }
-
-    /// Una scheda: copertina tonda, cosa e a chi, importo in pastiglia, da dove prelevarlo.
-    private func card(_ o: Order) -> some View {
-        // spedito nell'app (Preso → Imballato → Spedito) ma su Discogs ancora da spedire
-        let style = OrderStyle(step(o) >= 3 && !OrderStyle.closed(o.status) ? "Shipped" : o.status)
-        let first = o.items.first
-        return HStack(spacing: 14) {
-            AsyncImage(url: first?.release.thumbnail.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                .frame(width: 54, height: 54)
-                .clipShape(Circle())
-                .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(first?.release.description ?? "Ordine \(o.id)")
-                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(2)
-                if o.items.count > 1 {
-                    Text("+ altri \(o.items.count - 1) dischi").font(.system(size: 13)).foregroundStyle(Theme.muted)
-                }
-                Text("\(o.buyer.username) · \(OrderStyle.date(o.created))").font(.system(size: 14)).foregroundStyle(Theme.muted)
-                HStack(spacing: 6) {
-                    Text(style.label).font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 9).padding(.vertical, 3)
-                        .foregroundStyle(style.fg).background(style.bg, in: Capsule())
-                    if let box = box(for: o), !OrderStyle.closed(o.status) {
-                        Label(box, systemImage: "archivebox.fill").font(.system(size: 12, weight: .semibold))
-                            .padding(.horizontal, 9).padding(.vertical, 3)
-                            .foregroundStyle(Color.black).background(Theme.accent, in: Capsule())
-                    }
-                }
-            }
-            Spacer(minLength: 4)
-            if let t = o.total {
-                Text(t.value, format: .currency(code: t.currency ?? seller.currency))
-                    .font(.system(size: 16, weight: .semibold))
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .foregroundStyle(Theme.money).background(Theme.military, in: Capsule())
-            }
-            Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.muted)
-        }
-        .padding(14)
-        .contentShape(Rectangle())
-        .opacity(OrderStyle.closed(o.status) ? 0.75 : 1)
     }
 
     /// Un ordine già spedito o chiuso: copertina piccola, titolo grigio, stato e data, importo.
@@ -194,6 +188,126 @@ struct OrdersView: View {
         return boxes.isEmpty ? nil : Array(Set(boxes)).sorted().joined(separator: ", ")
     }
 
+    // MARK: - I passi: Preso (sul telefono) → Imballato (In Progress su Discogs) → Spedito (tracking + Shipped)
+
+    private func tocca(_ o: Order, _ n: Int) {
+        guard !lavoro.contains(o.id) else { return }
+        let stato = StatoPagamento(o.status)
+        if n >= 3 {
+            guard stato != .daPagare else {
+                Suoni.tocco()
+                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                note[o.id] = "PRIMA IL PAGAMENTO: SPEDITO SI SBLOCCA QUANDO HA PAGATO"
+                return
+            }
+            Suoni.tocco()
+            spedizione = o
+            return
+        }
+        guard n > step(o) else { Suoni.tocco(); return }        // un passo già fatto non si disfa
+        Suoni.tocco()
+        if n == 2 && stato == .pagato {
+            // Imballato: su Discogs l'ordine diventa «In preparazione» (l'acquirente riceve l'avviso)
+            lavoro.insert(o.id)
+            Task { @MainActor in
+                do {
+                    try await seller.client.setOrderStatus(o.id, status: "In Progress")
+                    withAnimation(.spring(duration: 0.4)) { setStep(o, 2) }
+                    note[o.id] = "DISCOGS AGGIORNATO · IN PREPARAZIONE · \(o.buyer.username.uppercased()) AVVISATO"
+                    lavoro.remove(o.id)
+                    await load()
+                } catch {
+                    lavoro.remove(o.id)
+                    Suoni.nego()
+                    self.error = "Discogs non ha cambiato lo stato: " + error.localizedDescription
+                }
+            }
+        } else {
+            withAnimation(.spring(duration: 0.4)) { setStep(o, n) }
+            note[o.id] = n == 1 ? "PRESO · SEGNATO SUL TELEFONO" : "IMBALLATO · SEGNATO SUL TELEFONO"
+        }
+    }
+
+    /// Discogs ha accettato «Shipped»: il furgoncino arriva in fondo, poi la scheda esce.
+    private func spedito(_ o: Order) {
+        Suoni.fatto()
+        inUscita.insert(o.id)
+        note[o.id] = "SPEDITO SU DISCOGS · TRACKING INVIATO A \(o.buyer.username.uppercased())"
+        setStep(o, 3)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1300))
+            _ = withAnimation(.easeInOut(duration: 0.45)) { inUscita.remove(o.id) }
+            await load()
+        }
+    }
+
+    /// Sollecita: un promemoria all'acquirente che non ha pagato (al massimo uno al giorno).
+    private func sollecita(_ o: Order) async {
+        let chiave = "sollecito-\(o.id)"
+        if let ultimo = UserDefaults.standard.object(forKey: chiave) as? Date, Date().timeIntervalSince(ultimo) < 86_400 {
+            Suoni.tocco()
+            note[o.id] = "PROMEMORIA GIÀ INVIATO OGGI"
+            return
+        }
+        Suoni.tocco()
+        lavoro.insert(o.id)
+        defer { lavoro.remove(o.id) }
+        let testo = "Ciao \(o.buyer.username), ti ricordo il pagamento dell\u{2019}ordine \(o.id). Appena arriva lo spedisco. Grazie!"
+        do {
+            try await seller.client.postOrderMessage(o.id, message: testo)
+            UserDefaults.standard.set(Date(), forKey: chiave)
+            note[o.id] = "PROMEMORIA INVIATO · \(o.buyer.username.uppercased())"
+        } catch {
+            Suoni.nego()
+            self.error = "Promemoria non inviato: " + error.localizedDescription
+        }
+    }
+
+    /// Annulla con il motivo: «Non pagato» → il disco torna in vendita; «Non disponibile» → l'annuncio si toglie.
+    private func annulla(_ o: Order, nonPagato: Bool) async {
+        lavoro.insert(o.id)
+        defer { lavoro.remove(o.id) }
+        let stato = nonPagato ? "Cancelled (Non-Paying Buyer)" : "Cancelled (Item Unavailable)"
+        do {
+            try await seller.client.setOrderStatus(o.id, status: stato)
+        } catch {
+            Suoni.nego()
+            self.error = "Ordine non annullato: " + error.localizedDescription
+            return
+        }
+        Suoni.svuota()
+        var problemi: [String] = []
+        for item in o.items {
+            let nome = item.release.description ?? "annuncio \(item.id)"
+            if nonPagato {
+                // deve tornare in vendita: se Discogs non l'ha già rimesso, lo rimettiamo noi
+                let attuale = (try? await seller.client.listing(item.id))?.status
+                if attuale == "For Sale" { continue }
+                if attuale == "Draft" || attuale == "Expired" {
+                    do { try await seller.client.editListing(item.id, changes: ["status": "For Sale"]) } catch { problemi.append(nome) }
+                } else {
+                    problemi.append(nome)
+                }
+            } else {
+                do { try await seller.deleteListing(item.id, discs: discs) } catch { problemi.append(nome) }
+            }
+        }
+        if problemi.isEmpty {
+            avviso = nonPagato ? "Ordine annullato (non pagato). Il disco è di nuovo in vendita."
+                               : "Ordine annullato (disco non disponibile). L'annuncio è stato tolto."
+        } else {
+            avviso = "Ordine annullato su Discogs. Da sistemare a mano su Discogs: " + problemi.joined(separator: ", ")
+        }
+        await load()
+    }
+
+    /// Dopo aver aperto la chat: il pallino rosso si riconta (i messaggi sono letti).
+    private func ricontaNonLetti(_ o: Order) {
+        nonLetti[o.id] = ChatOrdini.nonLetti(messaggi[o.id] ?? [], ordine: o)
+        // la conversazione si rilegge al prossimo controllo (ci sono messaggi nuovi miei)
+        attivitaLetta[o.id] = nil
+    }
+
     private func load() async {
         loading = true
         defer { loading = false }
@@ -207,11 +321,27 @@ struct OrdersView: View {
             withAnimation(.snappy) { orders = page.orders }
             checkedAt = Date()
             error = nil
+            await leggiMessaggi(page.orders)
         } catch {
             // lettura interrotta (cambio scheda, nuovo aggiornamento): non è un errore da mostrare
             if error.isCancellation { return }
             self.error = error.localizedDescription
         }
+    }
+
+    /// I messaggi degli ordini aperti: si rileggono solo quelli con novità (last_activity cambiata).
+    private func leggiMessaggi(_ tutti: [Order]) async {
+        let prima = nonLetti.values.reduce(0, +)
+        for o in tutti where !OrderStyle.closed(o.status) {
+            let attivita = o.lastActivity ?? o.created
+            if messaggi[o.id] != nil && attivitaLetta[o.id] == attivita { continue }
+            guard let m = try? await seller.client.orderMessages(o.id) else { continue }
+            messaggi[o.id] = m
+            attivitaLetta[o.id] = attivita
+            nonLetti[o.id] = ChatOrdini.nonLetti(m, ordine: o)
+        }
+        if chatPronte && nonLetti.values.reduce(0, +) > prima { Suoni.nuovoOrdine() }   // l'acquirente ha scritto
+        chatPronte = true
     }
 }
 
@@ -222,42 +352,107 @@ extension Error {
     }
 }
 
+/// Lo stato del pagamento, come lo mostra la scheda (pastiglia in alto).
+enum StatoPagamento: Equatable {
+    case daPagare, pagato, inPreparazione, spedito, altro
+
+    init(_ status: String) {
+        if status.hasPrefix("Payment Received") { self = .pagato }
+        else if status.hasPrefix("In Progress") { self = .inPreparazione }
+        else if status.hasPrefix("Shipped") { self = .spedito }
+        else if ["New Order", "Buyer Contacted", "Invoice Sent", "Payment Pending", "Order Changed"].contains(where: { status.hasPrefix($0) }) {
+            self = .daPagare
+        } else { self = .altro }
+    }
+
+    var etichetta: String {
+        switch self {
+        case .daPagare: return "DA PAGARE"
+        case .pagato: return "PAGATO"
+        case .inPreparazione: return "IN PREPARAZIONE"
+        case .spedito: return "SPEDITO"
+        case .altro: return "ORDINE"
+        }
+    }
+    var testo: Color {
+        switch self {
+        case .daPagare: return Color(red: 0.10, green: 0.07, blue: 0)
+        case .pagato, .spedito: return Color.black
+        case .inPreparazione: return Theme.glow
+        case .altro: return Theme.muted
+        }
+    }
+    var fondo: Color {
+        switch self {
+        case .daPagare: return Color(hex: 0xFFD60A)
+        case .pagato, .spedito: return Theme.money
+        case .inPreparazione: return Theme.military
+        case .altro: return Theme.panelHigh
+        }
+    }
+}
+
+/// Totale, commissione Discogs e netto di un ordine.
+enum OrderCifre {
+    static func totale(_ o: Order) -> Double { o.total?.value ?? 0 }
+    static func commissione(_ o: Order) -> Double { o.fee?.value ?? 0 }
+    static func netto(_ o: Order) -> Double { totale(o) - commissione(o) }
+}
+
 /// Un radar piccolo (come un'icona): il fascio gira piano, l'app sta controllando gli ordini.
 struct MiniRadar: View {
-    @State private var giro = false
-
     var body: some View {
-        ZStack {
-            Circle().fill(Color(red: 0.04, green: 0.07, blue: 0.05))
-            Circle().stroke(Theme.accent.opacity(0.35), lineWidth: 1)
-            Circle().stroke(Theme.accent.opacity(0.2), lineWidth: 1).padding(8)
-            Circle()
-                .fill(AngularGradient(colors: [Theme.glow.opacity(0.6), Theme.glow.opacity(0), .clear, .clear], center: .center))
-                .rotationEffect(.degrees(giro ? 360 : 0))
-                .animation(.linear(duration: 3.2).repeatForever(autoreverses: false), value: giro)
-            Circle().fill(Theme.glow).frame(width: 4, height: 4).shadow(color: Theme.glow, radius: 3).offset(x: 6, y: -6)
+        TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
+            let giro = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3.2) / 3.2 * 360
+            ZStack {
+                Circle().fill(Color(red: 0.04, green: 0.07, blue: 0.05))
+                Circle().stroke(Theme.accent.opacity(0.35), lineWidth: 1)
+                Circle().stroke(Theme.accent.opacity(0.2), lineWidth: 1).padding(8)
+                Circle()
+                    .fill(AngularGradient(colors: [Theme.glow.opacity(0.6), Theme.glow.opacity(0), .clear, .clear], center: .center))
+                    .rotationEffect(.degrees(giro))
+                Circle().fill(Theme.glow).frame(width: 4, height: 4).shadow(color: Theme.glow, radius: 3).offset(x: 6, y: -6)
+            }
         }
         .frame(width: 34, height: 34)
         .clipShape(Circle())
-        .onAppear { giro = true }
         .accessibilityHidden(true)
     }
 }
 
-/// Un ordine da evadere: NUOVO che lampeggia, bordo che respira, "Preleva da …" in grande,
-/// e i tre passi Preso → Imballato → Spedito. Su Spedito parte il furgoncino.
+/// Un ordine da evadere (come nel mock-up V60): stato del pagamento, totale / Discogs / netto,
+/// «Preleva da …», la pista Preso → Imballato → Spedito con il furgoncino, la riga di Discogs
+/// e i tasti Messaggi (con il pallino rosso), Sollecita e Annulla (solo se non ha pagato).
 struct OpenOrderCard: View {
     let order: Order
     let box: String?
     let step: Int
     let currency: String
+    let stato: StatoPagamento
+    let nonLetti: Int
+    let nota: String?
+    let lavoro: Bool
     let onOpen: () -> Void
     let onStep: (Int) -> Void
+    let onMessaggi: () -> Void
+    let onSollecita: () -> Void
+    let onAnnulla: (Bool) -> Void          // true = non pagato, false = disco non disponibile
 
-    private let respiro = true             // V55: luce ferma (l'animazione infinita faceva ondeggiare la scheda)
-    @State private var furgone = false
+    /// «Annulla» toccato: si chiede il motivo nella scheda stessa.
+    @State private var chiediMotivo = false
 
-    private let labels = ["Preso", "Imballato", "Spedito"]
+    private var giorni: Int {
+        guard let d = ChatOrdini.data(order.created) else { return 0 }
+        return max(0, Calendar.current.dateComponents([.day], from: d, to: Date()).day ?? 0)
+    }
+    private var riga: String? {
+        if let nota { return nota }
+        if stato == .daPagare {
+            return "ATTESA PAGAMENTO · DA \(giorni) \(giorni == 1 ? "GIORNO" : "GIORNI") · SPEDITO BLOCCATO"
+        }
+        return nil
+    }
+    private var rigaGialla: Bool { stato == .daPagare && (nota == nil || nota?.hasPrefix("PRIMA") == true) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -267,14 +462,11 @@ struct OpenOrderCard: View {
                         .frame(width: 52, height: 52).clipShape(Circle())
                         .overlay(Circle().stroke(Theme.accent, lineWidth: 1.5))
                     VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text("NUOVO").font(Theme.mono(10, .heavy)).tracking(1.5)
-                                .padding(.horizontal, 7).padding(.vertical, 2)
-                                .foregroundStyle(Color.black).background(Theme.glow, in: Capsule())
-                                .opacity(respiro ? 1 : 0.45)
-                            Text("\(OrderStyle.date(order.created)) · \(order.buyer.username)")
-                                .font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
-                        }
+                        Text(stato.etichetta).font(Theme.mono(9, .bold)).tracking(1.2)
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .foregroundStyle(stato.testo).background(stato.fondo, in: Capsule())
+                        Text("\(OrderStyle.date(order.created)) · \(order.buyer.username)")
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
                         Text(order.items.first?.release.description ?? "Ordine \(order.id)")
                             .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
                         if order.items.count > 1 {
@@ -284,9 +476,7 @@ struct OpenOrderCard: View {
                     Spacer(minLength: 4)
                     if let t = order.total {
                         Text(t.value, format: .currency(code: t.currency ?? currency))
-                            .font(.system(size: 15, weight: .bold))
-                            .padding(.horizontal, 10).padding(.vertical, 5)
-                            .foregroundStyle(Theme.money).background(Theme.military, in: Capsule())
+                            .font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.money)
                     }
                 }
                 .contentShape(Rectangle())
@@ -302,63 +492,160 @@ struct OpenOrderCard: View {
                     .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
 
-            GeometryReader { g in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Theme.panelHigh)
-                    Capsule().fill(Theme.accent).shadow(color: Theme.glow, radius: 4)
-                        .frame(width: g.size.width * CGFloat(min(step, 3)) / 3)
-                }
-            }
-            .frame(height: 4)
-            .animation(.spring(duration: 0.45), value: step)
+            cifre
 
-            HStack(spacing: 8) {
-                ForEach(0..<3, id: \.self) { k in
-                    let done = step > k
-                    let next = step == k
-                    Button {
-                        guard next else { Suoni.click(); return }
-                        if k < 2 {
-                            Suoni.seleziona()
-                            onStep(k + 1)
-                        } else {
-                            Suoni.carica()
-                            withAnimation(.easeIn(duration: 1.0)) { furgone = true }
-                            Task { @MainActor in
-                                try? await Task.sleep(for: .milliseconds(1000))
-                                Suoni.online()
-                                onStep(3)
-                            }
-                        }
-                    } label: {
-                        Text((done ? "✓ " : "") + labels[k])
-                            .font(.system(size: 13, weight: .bold))
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .foregroundStyle(done ? Theme.money : (next ? Color.black : Theme.muted))
-                            .background(done ? Theme.military : (next ? Theme.accent : Theme.panelHigh),
-                                        in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
+            PistaSpedizione(step: step, bloccato: stato == .daPagare, tocca: onStep)
+
+            if riga != nil || lavoro {
+                HStack(spacing: 6) {
+                    if lavoro { ProgressView().controlSize(.mini).tint(Theme.glow) }
+                    Text(lavoro ? "DISCOGS…" : (riga ?? ""))
+                        .font(Theme.mono(9.5, .bold)).tracking(1.2)
+                        .foregroundStyle(rigaGialla && !lavoro ? Color(hex: 0xFFD60A) : Theme.glow)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
+
+            azioni
         }
         .padding(14)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-        .overlay(alignment: .bottomLeading) {
-            // il furgoncino che attraversa la scheda quando si spedisce
-            Image(systemName: "box.truck.fill")
-                .font(.system(size: 20))
-                .foregroundStyle(Theme.glow)
-                .shadow(color: Theme.glow, radius: 6)
-                .offset(x: furgone ? 420 : -40, y: -6)
-                .opacity(furgone ? 1 : 0)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
-                .stroke(Theme.glow.opacity(respiro ? 0.9 : 0.4), lineWidth: 1)
+                .stroke(Theme.glow.opacity(0.35), lineWidth: 1)
         )
-        .shadow(color: Theme.glow.opacity(respiro ? 0.45 : 0.15), radius: respiro ? 14 : 6)
+    }
+
+    /// TOTALE / DISCOGS / NETTO.
+    private var cifre: some View {
+        let tot = OrderCifre.totale(order), fee = OrderCifre.commissione(order)
+        let valuta = order.total?.currency ?? currency
+        return HStack(spacing: 6) {
+            cifra("TOTALE", Text(tot, format: .currency(code: valuta)), Theme.text)
+            cifra("DISCOGS", Text("−") + Text(fee, format: .currency(code: valuta)), Color(hex: 0xFF9F0A))
+            cifra("NETTO", Text(tot - fee, format: .currency(code: valuta)), Theme.money)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func cifra(_ titolo: String, _ valore: Text, _ colore: Color) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(titolo).font(Theme.mono(8.5, .bold)).tracking(1.2).foregroundStyle(Theme.muted)
+            valore.font(.system(size: 14, weight: .bold)).foregroundStyle(colore)
+                .lineLimit(1).minimumScaleFactor(0.7).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var azioni: some View {
+        if chiediMotivo {
+            HStack(spacing: 8) {
+                tasto("Non pagato", rosso: true) { chiediMotivo = false; onAnnulla(true) }
+                tasto("Non disponibile", rosso: true) { chiediMotivo = false; onAnnulla(false) }
+                tasto("Indietro") { Suoni.tocco(); chiediMotivo = false }
+            }
+        } else {
+            HStack(spacing: 8) {
+                Button(action: onMessaggi) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bubble.left").font(.system(size: 14, weight: .semibold))
+                        Text("Messaggi").font(.system(size: 14, weight: .semibold))
+                        if nonLetti > 0 {
+                            Text("\(nonLetti)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                                .padding(.horizontal, 5).frame(minWidth: 18, minHeight: 18)
+                                .background(Theme.warn, in: Capsule())
+                        }
+                    }
+                    .foregroundStyle(Theme.accent)
+                    .frame(maxWidth: .infinity, minHeight: 40)
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.accent, lineWidth: 1.5))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(nonLetti > 0 ? "Messaggi, \(nonLetti) da leggere" : "Messaggi")
+                if stato == .daPagare {
+                    tasto("Sollecita", action: onSollecita)
+                    tasto("Annulla", rosso: true) { Suoni.tocco(); chiediMotivo = true }
+                }
+            }
+            .disabled(lavoro)
+        }
+    }
+
+    private func tasto(_ titolo: String, rosso: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(titolo).font(.system(size: 13, weight: .semibold))
+                .lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8)
+                .foregroundStyle(rosso ? Theme.warn : Theme.accent)
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(rosso ? Theme.warn.opacity(0.6) : Theme.accent, lineWidth: 1.5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// La pista Preso → Imballato → Spedito (proposta 9): una linea che si riempie e il furgoncino che parte.
+/// Spedito ha il lucchetto finché l'acquirente non ha pagato.
+struct PistaSpedizione: View {
+    let step: Int
+    let bloccato: Bool
+    let tocca: (Int) -> Void
+
+    private let nomi = ["Preso", "Imballato", "Spedito"]
+
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width
+            let pista = max(0, w - 72)
+            let fr: CGFloat = step <= 1 ? 0 : CGFloat(min(step, 3) - 1) / 2
+            ZStack(alignment: .topLeading) {
+                Capsule().fill(Theme.glow.opacity(0.15))
+                    .frame(width: pista, height: 3).offset(x: 36, y: 13)
+                Capsule().fill(Theme.glow).shadow(color: Theme.glow, radius: 3)
+                    .frame(width: pista * fr, height: 3).offset(x: 36, y: 13)
+                ForEach(0..<3, id: \.self) { k in
+                    nodo(k).offset(x: CGFloat(k) * pista / 2, y: 0)
+                }
+                Image(systemName: "box.truck.fill")
+                    .font(.system(size: 17))
+                    .foregroundStyle(Theme.glow)
+                    .shadow(color: Theme.glow, radius: 4)
+                    .offset(x: 36 + fr * pista - 13, y: -16)
+                    .opacity(step >= 2 ? 1 : 0)
+            }
+            .animation(.timingCurve(0.4, 0, 0.2, 1, duration: 1.1), value: step)
+        }
+        .frame(height: 52)
+        .padding(.top, 14)
+    }
+
+    private func nodo(_ k: Int) -> some View {
+        let fatto = step > k
+        let blocco = bloccato && k == 2
+        return Button { tocca(k + 1) } label: {
+            VStack(spacing: 6) {
+                ZStack {
+                    Circle().fill(fatto ? Theme.glow : Color(red: 0.043, green: 0.059, blue: 0.047))
+                    Circle().stroke(fatto ? Theme.glow : Theme.glow.opacity(0.35), lineWidth: 2)
+                    if fatto {
+                        Image(systemName: "checkmark").font(.system(size: 12, weight: .heavy)).foregroundStyle(Color.black)
+                    } else if blocco {
+                        Image(systemName: "lock.fill").font(.system(size: 10)).foregroundStyle(Theme.muted)
+                    }
+                }
+                .frame(width: 28, height: 28)
+                .shadow(color: fatto ? Theme.glow.opacity(0.6) : .clear, radius: 5)
+                Text(nomi[k]).font(.system(size: 11, weight: .semibold)).foregroundStyle(fatto ? Theme.glow : Theme.muted)
+            }
+            .opacity(blocco ? 0.45 : 1)
+            .frame(width: 72, height: 50)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(nomi[k] + (fatto ? ": fatto" : (blocco ? ": bloccato, prima il pagamento" : "")))
     }
 }
 
@@ -480,12 +767,38 @@ enum OrderWatcher {
             guard !firstRun else { continue }       // al primo avvio non si notificano gli ordini vecchi
             let content = UNMutableNotificationContent()
             content.title = "Nuovo ordine"
-            content.body = o.items.map { $0.release.description ?? "" }.joined(separator: ", ")
+            content.body = corpo(o)
             content.sound = .default
+            // V60: la copertina del disco venduto nella notifica (se si scarica in tempo)
+            if let allegato = await copertina(o) { content.attachments = [allegato] }
             try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: o.id, content: content, trigger: nil))
         }
         UserDefaults.standard.set(Array(seen), forKey: seenKey)
         UserDefaults.standard.set(true, forKey: "ordersInitialized")
+    }
+
+    /// «Artista – Titolo · 124,00 €» (con «+ altri N» se l'ordine ha più dischi).
+    static func corpo(_ o: Order) -> String {
+        var t = o.items.first?.release.description ?? "Ordine \(o.id)"
+        if o.items.count > 1 { t += " + altri \(o.items.count - 1)" }
+        if let tot = o.total {
+            let prezzo = tot.value.formatted(.currency(code: tot.currency ?? "EUR").locale(Locale(identifier: "it_IT")))
+            t += " · " + prezzo
+        }
+        return t
+    }
+
+    /// La copertina scaricata in un file temporaneo, come allegato della notifica (immagine pubblica di Discogs).
+    static func copertina(_ o: Order) async -> UNNotificationAttachment? {
+        guard let indirizzo = o.items.first?.release.thumbnail, let url = URL(string: indirizzo) else { return nil }
+        var richiesta = URLRequest(url: url, timeoutInterval: 8)
+        richiesta.setValue(AppConfig.userAgent, forHTTPHeaderField: "User-Agent")
+        guard let risposta = try? await URLSession.shared.data(for: richiesta) else { return nil }
+        let dati: Data = risposta.0
+        guard !dati.isEmpty else { return nil }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ordine-\(o.id)-\(UUID().uuidString).jpg")
+        guard (try? dati.write(to: file)) != nil else { return nil }
+        return try? UNNotificationAttachment(identifier: "copertina", url: file, options: nil)
     }
 
     /// Da chiamare all'avvio (VinylHustlerApp) per registrare il controllo in sottofondo.

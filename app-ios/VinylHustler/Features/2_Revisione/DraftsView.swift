@@ -18,6 +18,13 @@ struct DraftsView: View {
     @State private var lit: Set<Int> = []              // bozze appena messe in vendita: si accendono e poi scivolano via
     @State private var done = 0                         // per la barra di "Pubblica"
     @State private var total = 0
+    // V60 · p3: la lista si stampa dall'alto dietro la riga verde («ACQUISIZIONE DATI»)
+    @State private var stampaT: Date?
+    @State private var stampando = false
+    // V60 · p5: Pubblica — le bozze si ritirano dal basso dietro la riga verde, la barra va da 100% a 0%
+    @State private var ritiro: [Int: Date] = [:]
+    // V60 · p15: la finestra Ascolto
+    @State private var ascolta: BersaglioAscolto?
 
     private var shownDrafts: [Listing] {
         let q = search.lowercased()
@@ -38,13 +45,27 @@ struct DraftsView: View {
         Group {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    ForEach(local) { disc in
-                        DiscCard(disc: disc)
+                    Text(stampando ? "ACQUISIZIONE DATI" : "BOZZE · \(local.count + shownDrafts.count)")
+                        .font(Theme.mono(10, .bold)).tracking(2)
+                        .foregroundStyle(Theme.glow)
+                        .padding(.horizontal, 4)
+                    ForEach(Array(local.enumerated()), id: \.element.id) { coppia in
+                        DiscCard(disc: coppia.element)
+                            .stampa(stampaT, ritardo: ritardoStampa(coppia.offset), durata: 0.45)
                     }
-                    ForEach(Array(shownDrafts.enumerated()), id: \.element.id) { i, l in
+                    ForEach(Array(shownDrafts.enumerated()), id: \.element.id) { coppia in
+                        let i = coppia.offset
+                        let l = coppia.element
                         DraftRow(listing: l, lit: lit.contains(l.id), currency: seller.currency, index: i,
                                  onEdit: { editing = l }, onSell: { Suoni.click(); Task { await sell(l) } },
-                                 onDelete: { Suoni.click(); toDelete = l })
+                                 onDelete: { Suoni.click(); toDelete = l },
+                                 onListen: { punto in
+                                     apriFinestraAscolto(BersaglioAscolto(releaseID: l.release.id,
+                                                                         titolo: l.release.description ?? "",
+                                                                         origine: punto), in: $ascolta)
+                                 })
+                            .stampa(stampaT, ritardo: ritardoStampa(local.count + i))
+                            .ritiro(ritiro[l.id])
                             .transition(.asymmetric(insertion: .opacity, removal: .move(edge: .trailing).combined(with: .opacity)))
                     }
                     if local.isEmpty && shownDrafts.isEmpty && !loading {
@@ -58,14 +79,16 @@ struct DraftsView: View {
                 }
                 .padding()
             }
-            .background(Theme.bg)
+            .sfondoHUD()
             .senzaTitolo("Bozze")
             .searchable(text: $search, prompt: "Titolo, artista, scatola…")
             .overlay { if loading && drafts.isEmpty { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
             .refreshable { await Task { await loadDrafts() }.value }
             .task { await Task { await loadDrafts() }.value }
             .safeAreaInset(edge: .bottom) {
-                if publishCount > 0 {
+                if publishing && total > 0 {
+                    barraSvuota
+                } else if publishCount > 0 {
                     Button { askPublish = true } label: {
                         Text(publishing ? "Pubblico…" : "Pubblica \(publishCount)")
                             .font(.system(size: 15, weight: .semibold))
@@ -95,6 +118,7 @@ struct DraftsView: View {
                 Text("Vanno online subito su Discogs.")
             }
             .onChange(of: editing?.id) { _, id in if id != nil { Suoni.apri() } }
+            .finestraAscolto($ascolta, seller: seller)
             .sheet(item: $editing) { l in
                 ListingEditor(target: .listing(l.id)) { after in
                     if after.status == "Draft", let i = drafts.firstIndex(where: { $0.id == after.id }) {
@@ -124,13 +148,22 @@ struct DraftsView: View {
     }
 
     /// Vendi su una bozza: si accende (bordo verde, copertina a colori, scintille), poi scivola via.
-    private func sell(_ l: Listing) async {
+    /// V60 · p5: con «Pubblica» (insieme = true) invece si ritira dietro la riga verde, una dopo l'altra dal basso.
+    private func sell(_ l: Listing, insieme: Bool = false) async {
         do {
             try await seller.draftToSale(listingID: l.id)
-            Suoni.online()
-            withAnimation(.spring(duration: 0.4, bounce: 0.3)) { _ = lit.insert(l.id) }
-            try? await Task.sleep(for: .milliseconds(700))
-            moved(l)
+            if insieme {
+                ritiro[l.id] = Date()
+                try? await Task.sleep(for: .milliseconds(560))
+                drafts.removeAll { $0.id == l.id }
+                ritiro[l.id] = nil
+                for d in discs where d.listingID == l.id { d.status = .inVendita }
+            } else {
+                Suoni.online()
+                withAnimation(.spring(duration: 0.4, bounce: 0.3)) { _ = lit.insert(l.id) }
+                try? await Task.sleep(for: .milliseconds(700))
+                moved(l)
+            }
             done += 1
         } catch { seller.lastError = error.localizedDescription }
     }
@@ -142,10 +175,59 @@ struct DraftsView: View {
         total = ready.count + list.count
         done = 0
         Suoni.pubblico()
+        Suoni.svuota()
         await seller.publishReady(ready)
         done = ready.count
-        for l in list { await sell(l) }
+        for l in list.reversed() { await sell(l, insieme: true) }       // dal basso verso l'alto
         Suoni.fine()
+        try? await Task.sleep(for: .milliseconds(600))                   // la barra resta un attimo a 0%
+    }
+
+    /// V60 · p5: al posto del tasto, la barra che si svuota da 100% a 0% mentre le bozze vanno online.
+    private var barraSvuota: some View {
+        let resta = total == 0 ? 0 : Double(max(0, total - done)) / Double(total)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("CARICO SU DISCOGS")
+                Spacer()
+                Text("\(Int((resta * 100).rounded()))%").monospacedDigit()
+            }
+            .font(Theme.mono(9, .semibold)).tracking(1.5)
+            .foregroundStyle(Theme.glow)
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.glow.opacity(0.15))
+                    Capsule().fill(Theme.glow)
+                        .frame(width: g.size.width * CGFloat(resta))
+                        .shadow(color: Theme.glow, radius: 4)
+                        .animation(.easeOut(duration: 0.35), value: done)
+                }
+            }
+            .frame(height: 3)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .background(Theme.bg.opacity(0.85))
+    }
+
+    /// V60 · p3: quando parte la stampa di ogni riga (le righe oltre la decima partono insieme, sono fuori schermo).
+    private func ritardoStampa(_ indice: Int) -> Double {
+        0.1 + Double(min(indice, 10)) * 0.12
+    }
+
+    /// V60 · p3: la lista si stampa (suono del caricamento che sfuma alla fine).
+    private func stampaLista() {
+        let righe = min(local.count + shownDrafts.count, 11)
+        guard righe > 0 else { stampaT = nil; return }
+        stampaT = Date()
+        stampando = true
+        Suoni.chatCarica()
+        let durata = ritardoStampa(righe - 1) + 0.45
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(Int(durata * 1000)))
+            stampando = false
+            Suoni.chatPronta()
+        }
     }
 
     private func delete(_ l: Listing) async {
@@ -161,6 +243,7 @@ struct DraftsView: View {
         if let all = try? await seller.syncInventory(discs: discs) {
             drafts = all.filter { $0.status == "Draft" }
         }
+        stampaLista()
     }
 }
 
@@ -175,6 +258,8 @@ struct DraftRow: View {
     let onEdit: () -> Void
     let onSell: () -> Void
     let onDelete: () -> Void
+    /// V60 · p15: il tasto ▶ sulla copertina apre la finestra Ascolto (dal punto toccato).
+    var onListen: ((CGPoint) -> Void)? = nil
 
     @State private var sheen = false
 
@@ -187,6 +272,11 @@ struct DraftRow: View {
                 .brightness(lit ? 0 : -0.15)
                 .overlay(Circle().stroke(lit ? Theme.glow : Color.clear, lineWidth: 2))
                 .shadow(color: Theme.glow.opacity(lit ? 0.7 : 0), radius: 8)
+                .overlay {
+                    if let onListen, !lit {
+                        TastoAscolta(nome: listing.release.description ?? "", azione: onListen)
+                    }
+                }
             VStack(alignment: .leading, spacing: 4) {
                 Link(destination: URL(string: "https://www.discogs.com/sell/item/\(listing.id)")!) {
                     (Text(listing.release.description ?? "Release \(listing.release.id)") + Text(" ↗").foregroundColor(Theme.accent))

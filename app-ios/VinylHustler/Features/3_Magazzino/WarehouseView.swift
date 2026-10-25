@@ -21,6 +21,19 @@ struct WarehouseView: View {
     @State private var newPlace = "Scatola 1"
     @State private var editing: Listing?                // scheda annuncio aperta
     @State private var showStats = false
+    // V60 · p8: lettura da Discogs (barra con la percentuale), righe che si stampano, numeri che contano
+    @State private var letturaT: Date?                  // quando è partita la lettura (nil = barra nascosta)
+    @State private var letturaFine: Date?               // quando sono arrivati i dati
+    @State private var stampaT: Date?                   // quando parte la stampa delle righe
+    @State private var contaT: Date?                    // quando partono i numeri che contano
+    @State private var contaDa = Conteggi(online: 0, bozze: 0, euro: 0)
+    @State private var ritiro: [Int: Date] = [:]        // righe che si ritirano dietro la riga verde (Elimina)
+    @State private var cercaT = Date()                  // per «N TROVATI» che si decodifica
+    // V60 · p15: la finestra Ascolto
+    @State private var ascolta: BersaglioAscolto?
+
+    /// I tre numeri in alto (Online, Bozze, Euro): da dove partono quando contano.
+    struct Conteggi { var online: Double; var bozze: Double; var euro: Double }
     /// Annunci (online e bozze) senza posizione.
     private var noPlaceCount: Int {
         listings.filter { ($0.location ?? "").trimmingCharacters(in: .whitespaces).isEmpty }.count
@@ -72,16 +85,28 @@ struct WarehouseView: View {
         List {
             Section {
                 HStack {
-                    stat(String(forSaleCount), "Online")
+                    statConta(Double(forSaleCount), contaDa.online, "Online") { String(Int($0.rounded())) }
                     Button { selectedTab = 1 } label: {        // porta alla pagina Bozze
-                        stat(String(draftCount), "Bozze")
+                        statConta(Double(draftCount), contaDa.bozze, "Bozze") { String(Int($0.rounded())) }
                     }
                     .buttonStyle(.plain)
-                    stat(total, "Euro")
+                    statConta(totalValue, contaDa.euro, "Euro") { euro($0) }
+                }
+                if let letturaT {
+                    BarraLettura(inizio: letturaT, fine: letturaFine, testoFine: "\(listings.count) ANNUNCI · AGGIORNATO")
                 }
             }
             Section {
-                ForEach(shown) { l in row(l) }
+                ForEach(Array(shown.enumerated()), id: \.element.id) { coppia in
+                    row(coppia.element, indice: coppia.offset)
+                }
+            } header: {
+                if !search.isEmpty {
+                    TestoDecodifica(testo: shown.isEmpty ? "NESSUN DISCO" : (shown.count == 1 ? "1 TROVATO" : "\(shown.count) TROVATI"),
+                                    da: cercaT, durata: 0.38)
+                        .font(Theme.mono(10, .bold)).tracking(2)
+                        .foregroundStyle(Theme.glow)
+                }
             } footer: {
                 if !selecting && !listings.isEmpty {
                     Text("Titolo = apre l'annuncio su Discogs. Tasto verde = scheda annuncio. Scorri a sinistra per togliere dalla vendita.")
@@ -92,11 +117,14 @@ struct WarehouseView: View {
 
     private func chrome<V: View>(_ content: V) -> some View {
         content
-            .themedBackground()
+            .scrollContentBackground(.hidden)
+            .sfondoHUD()
             .senzaTitolo("Magazzino")
             .searchable(text: $search, prompt: "Cerca nel magazzino")
+            .onChange(of: search) { _, _ in cercaT = Date() }
             .refreshable { await Task { await sync() }.value }
-            .overlay { if loading { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
+            // V60: la lettura da Discogs la mostra la barra in alto; la rotella resta per le altre operazioni
+            .overlay { if loading && letturaT == nil { ProgressView("Attendi…").tint(Theme.accent) } }
             .toolbar { toolbarItems }
             .safeAreaInset(edge: .bottom) { deleteBar }
             .animation(.snappy, value: selected.isEmpty)
@@ -106,12 +134,13 @@ struct WarehouseView: View {
     @ToolbarContentBuilder private var toolbarItems: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Button(selecting ? "Fine" : "Seleziona") {
+                Suoni.testa()
                 selecting.toggle()
                 selected = []
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            Button { showStats = true } label: { Image(systemName: "chart.bar.xaxis") }
+            Button { Suoni.testa(); showStats = true } label: { Image(systemName: "chart.bar.xaxis") }
                 .accessibilityLabel("Statistiche")
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -125,6 +154,7 @@ struct WarehouseView: View {
                 Button("Cancella tutte le bozze", systemImage: "trash", role: .destructive) { confirmDeleteAll = true }
                 Link("Apri l'inventario su Discogs", destination: URL(string: "https://www.discogs.com/sell/manage")!)
             } label: { Image(systemName: "ellipsis.circle") }
+            .simultaneousGesture(TapGesture().onEnded { Suoni.testa() })
         }
     }
 
@@ -155,8 +185,8 @@ struct WarehouseView: View {
                 Button("Cancella le bozze", role: .destructive) { Task { await deleteAll() } }
             }
             .alert(message ?? "", isPresented: showingMessage) {}
-            .onChange(of: showStats) { _, on in if on { Suoni.apri() } }
             .onChange(of: editing?.id) { _, id in if id != nil { Suoni.apri() } }
+            .finestraAscolto($ascolta, seller: seller)
             .sheet(isPresented: $showStats) { StatsView(listings: listings) }
             .sheet(item: $editing) { l in
                 ListingEditor(target: .listing(l.id)) { after in
@@ -186,11 +216,14 @@ struct WarehouseView: View {
         await sync()
     }
 
-    private var total: String {
-        let sum = listings.filter { $0.status == "For Sale" }.compactMap { $0.price?.value }.reduce(0, +)
-        // formato italiano fatto a mano: punto per le migliaia, virgola per i decimali (2.345,50 €).
-        // NumberFormatter in italiano non mette il punto sotto i 10.000 (regola delle "cifre minime"): quindi niente formatter.
-        return Self.italian(sum) + (seller.currency == "EUR" ? " €" : " \(seller.currency)")
+    private var totalValue: Double {
+        listings.filter { $0.status == "For Sale" }.compactMap { $0.price?.value }.reduce(0, +)
+    }
+
+    // formato italiano fatto a mano: punto per le migliaia, virgola per i decimali (2.345,50 €).
+    // NumberFormatter in italiano non mette il punto sotto i 10.000 (regola delle "cifre minime"): quindi niente formatter.
+    private func euro(_ v: Double) -> String {
+        Self.italian(v) + (seller.currency == "EUR" ? " €" : " \(seller.currency)")
     }
 
     /// 2345.5 -> "2.345,50"
@@ -207,20 +240,35 @@ struct WarehouseView: View {
         return (value < 0 ? "-" : "") + groups.joined(separator: ".") + "," + decimals
     }
 
-    private func stat(_ value: String, _ label: String) -> some View {
+    /// V60 · p8: il numero conta da `partenza` al valore (mentre arrivano i dati, o quando un disco viene tolto).
+    private func statConta(_ valore: Double, _ partenza: Double, _ label: String,
+                           _ formato: @escaping (Double) -> String) -> some View {
         VStack(alignment: .leading) {
-            Text(value).font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.glow)
+            NumeroConta(valore: valore, da: contaT, partenza: partenza, ritardo: 0.15, durata: 0.9, formato: formato)
+                .font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.glow)
                 .lineLimit(1).minimumScaleFactor(0.5)          // sempre su una riga: € compreso
-                .contentTransition(.numericText())
             Text(label).font(.system(size: 13)).foregroundStyle(Theme.muted)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func row(_ l: Listing) -> some View {
+    /// V60 · p8: quando parte la stampa di ogni riga (oltre la dodicesima partono insieme: sono fuori schermo).
+    private func ritardoStampa(_ indice: Int) -> Double {
+        0.15 + Double(min(indice, 12)) * 0.09
+    }
+
+    private func row(_ l: Listing, indice: Int) -> some View {
         let draft = l.status == "Draft"
         let isSelected = selected.contains(l.id)
         return ListingRow(listing: l, disc: disc(for: l), selecting: selecting, isSelected: isSelected,
-                          currency: seller.currency, onEdit: { editing = l })
+                          currency: seller.currency, onEdit: { editing = l },
+                          onListen: { punto in
+                              apriFinestraAscolto(BersaglioAscolto(releaseID: l.release.id,
+                                                                  titolo: l.release.description ?? "",
+                                                                  origine: punto), in: $ascolta)
+                          },
+                          decodifica: stampaT, ritardoDecodifica: ritardoStampa(indice))
+        .stampa(stampaT, ritardo: ritardoStampa(indice))
+        .ritiro(ritiro[l.id])
         .contentShape(Rectangle())
         .onTapGesture {
             guard selecting else { return }              // fuori da Seleziona: titolo = Discogs, tasto a destra = scheda
@@ -248,18 +296,30 @@ struct WarehouseView: View {
         loading = true
         var done = 0
         var failed: [String] = []
+        var tolti: [Int] = []
         for id in ids {
             do {
                 try await seller.deleteListing(id, discs: discs)
                 done += 1
-                listings.removeAll { $0.id == id }
+                tolti.append(id)
             } catch { failed.append(error.localizedDescription) }
         }
         loading = false
+        // V60 · p8: le righe tolte si ritirano dietro la riga verde, poi il totale scala
+        if !tolti.isEmpty {
+            Suoni.svuota()
+            let ora = Date()
+            for id in tolti { ritiro[id] = ora }
+            try? await Task.sleep(for: .milliseconds(560))
+            let prima = Conteggi(online: Double(forSaleCount), bozze: Double(draftCount), euro: totalValue)
+            listings.removeAll { tolti.contains($0.id) }
+            for id in tolti { ritiro[id] = nil }
+            contaDa = prima
+            contaT = Date()
+        }
         selected = []
         selecting = false
         toDelete = []
-        Suoni.riconosciuto()
         message = failed.isEmpty ? (done == 1 ? "Disco eliminato da Discogs" : "Dischi eliminati da Discogs: \(done)")
                                  : "Eliminate \(done), non riuscite \(failed.count): \(failed.first ?? "")"
     }
@@ -274,9 +334,33 @@ struct WarehouseView: View {
 
     private func sync() async {
         loading = true
+        letturaT = Date()
+        letturaFine = nil
         defer { loading = false }
-        do { listings = try await seller.syncInventory(discs: discs) } catch {
+        do {
+            listings = try await seller.syncInventory(discs: discs)
+            stampaRighe()
+        } catch {
+            letturaT = nil
             if !error.isCancellation { message = error.localizedDescription }
+        }
+    }
+
+    /// V60 · p8: i dati sono arrivati: la barra va al 100%, le righe si stampano e i numeri contano da zero.
+    private func stampaRighe() {
+        let ora = Date()
+        letturaFine = ora
+        stampaT = ora
+        contaDa = Conteggi(online: 0, bozze: 0, euro: 0)
+        contaT = ora
+        let righe = min(shown.count, 13)
+        Suoni.chatCarica()
+        let durata = (righe > 0 ? ritardoStampa(righe - 1) : 0) + 0.35
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(Int(durata * 1000)))
+            Suoni.chatPronta()
+            try? await Task.sleep(for: .milliseconds(900))
+            if letturaFine == ora { letturaT = nil }            // la barra sparisce
         }
     }
 }
@@ -290,6 +374,11 @@ struct ListingRow: View {
     let currency: String
     /// Tasto di fianco al prezzo: apre la scheda annuncio. Il titolo invece apre l'annuncio su Discogs.
     var onEdit: (() -> Void)? = nil
+    /// V60 · p15: il tasto ▶ sulla copertina apre la finestra Ascolto (dal punto toccato).
+    var onListen: ((CGPoint) -> Void)? = nil
+    /// V60 · p8: mentre la riga si stampa il titolo si decodifica (da quando, e con che ritardo).
+    var decodifica: Date? = nil
+    var ritardoDecodifica: Double = 0
 
     private var draft: Bool { listing.status == "Draft" }
     private var checkColor: Color {
@@ -339,6 +428,18 @@ struct ListingRow: View {
     @ViewBuilder private var titleView: some View {
         if selecting {
             Text(titleText).font(.system(size: 16, weight: .semibold)).lineLimit(2)
+        } else if let decodifica, Date().timeIntervalSince(decodifica) < ritardoDecodifica + 1.2 {
+            // V60 · p8: mentre la riga si stampa il titolo esce come simboli e si sistema
+            Link(destination: URL(string: "https://www.discogs.com/sell/item/\(listing.id)")!) {
+                HStack(spacing: 4) {
+                    TestoDecodifica(testo: titleText, da: decodifica, ritardo: ritardoDecodifica + 0.2, durata: 0.42)
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                    Image(systemName: "arrow.up.right").foregroundStyle(Theme.accent)
+                }
+                .font(.system(size: 15, weight: .semibold))
+            }
+            .buttonStyle(.borderless)
         } else {
             Link(destination: URL(string: "https://www.discogs.com/sell/item/\(listing.id)")!) {
                 (Text(titleText) + Text(" ") + Text(Image(systemName: "arrow.up.right")).foregroundColor(Theme.accent))
@@ -366,6 +467,12 @@ struct ListingRow: View {
         .frame(width: 52, height: 52)
         .clipShape(Circle())
         .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
+        .overlay {
+            // V60 · p15: tutta la copertina è il tasto ▶ che apre la finestra Ascolto (non in Seleziona)
+            if !selecting, let onListen {
+                TastoAscolta(nome: titleText, azione: onListen)
+            }
+        }
     }
 
     /// La posizione: quella scritta su Discogs, altrimenti quella dell'app.

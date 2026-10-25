@@ -156,7 +156,7 @@ struct FinestraAscolto: View {
             contenuto(k: k)
                 .frame(width: w, height: h)
                 .background(Color(red: 6 / 255, green: 12 / 255, blue: 8 / 255).opacity(0.97))
-                .overlay(righeScansione)
+                .overlay { righeScansione }
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.glow.opacity(0.6), lineWidth: 1))
                 .shadow(color: Theme.glow.opacity(0.18), radius: 15)

@@ -13,6 +13,7 @@ struct StatsView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var bars = false                     // le barre si riempiono quando i conti sono pronti
+    @State private var contaT: Date?                     // V60 · p10: i valori contano e il grafico si disegna da qui
 
     var body: some View {
         NavigationStack {
@@ -22,6 +23,7 @@ struct StatsView: View {
                         ProgressView("Leggo gli ordini…").tint(Theme.accent).frame(maxWidth: .infinity).padding(.top, 60)
                     } else {
                         month
+                        grafico
                         speed
                         bands
                         stale
@@ -31,7 +33,7 @@ struct StatsView: View {
                 }
                 .padding()
             }
-            .background(Theme.bg)
+            .sfondoHUD()
             .navigationTitle("Statistiche")
             .navigationBarTitleDisplayMode(.large)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fatto") { dismiss() } } }
@@ -49,15 +51,22 @@ struct StatsView: View {
 
     private func load() async {
         loading = true
-        Suoni.elaboro()
-        defer { loading = false; Suoni.pronto() }
+        Suoni.schedaApre()                                // V60 · p10: carica…
+        defer { loading = false }
         do {
             let first = try await seller.client.orders(page: 1)
             var all = first.orders
             if first.pagination.pages > 1, let second = try? await seller.client.orders(page: 2) { all += second.orders }
             withAnimation(.snappy) { orders = all }
             withAnimation(.timingCurve(0.2, 0.9, 0.3, 1, duration: 1.1).delay(0.25)) { bars = true }
+            contaT = Date()
+            // … è pronto quando il grafico ha finito di disegnarsi
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(Int(GraficoVendite.fine * 1000)))
+                Suoni.schedaPronta()
+            }
         } catch {
+            Suoni.errore()
             self.error = error.localizedDescription
         }
     }
@@ -89,9 +98,9 @@ struct StatsView: View {
         let avg = prices.isEmpty ? 0 : prices.reduce(0, +) / Double(prices.count)
         return card("QUESTO MESE") {
             HStack {
-                stat("\(items.count)", "venduti")
-                stat(money(cashed), "incasso")
-                stat(prices.isEmpty ? "—" : money(avg), "prezzo medio")
+                statConta(Double(items.count), "venduti") { String(Int($0.rounded())) }
+                statConta(cashed, "incasso") { money($0) }
+                if prices.isEmpty { stat("—", "prezzo medio") } else { statConta(avg, "prezzo medio") { money($0) } }
             }
         }
     }
@@ -174,8 +183,8 @@ struct StatsView: View {
         let value = old.compactMap { $0.price?.value }.reduce(0, +)
         return card("FERMI DA PIÙ DI 60 GIORNI") {
             HStack {
-                stat("\(old.count)", "annunci")
-                stat(money(value), "valore")
+                statConta(Double(old.count), "annunci") { String(Int($0.rounded())) }
+                statConta(value, "valore") { money($0) }
                 stat(forSale.isEmpty ? "—" : "\(Int((Double(old.count) / Double(forSale.count) * 100).rounded()))%", "del magazzino")
             }
             if !old.isEmpty {
@@ -183,6 +192,40 @@ struct StatsView: View {
                     .font(.system(size: 12)).foregroundStyle(Theme.muted)
             }
         }
+    }
+
+    /// V60 · p10: le vendite degli ultimi 30 giorni (dischi venduti al giorno, dagli ordini), il grafico si disegna da sinistra.
+    private var grafico: some View {
+        let cal = Calendar.current
+        let oggi = cal.startOfDay(for: Date())
+        var conti = [Int](repeating: 0, count: 30)
+        for pair in soldItems {
+            guard let d = Self.date(pair.order.created) else { continue }
+            let giorni = cal.dateComponents([.day], from: cal.startOfDay(for: d), to: oggi).day ?? 99
+            if giorni >= 0 && giorni < 30 { conti[29 - giorni] += 1 }
+        }
+        let inizio = cal.date(byAdding: .day, value: -29, to: oggi) ?? oggi
+        let meta = cal.date(byAdding: .day, value: -15, to: oggi) ?? oggi
+        return card("VENDITE · ULTIMI 30 GIORNI") {
+            GraficoVendite(conti: conti, da: contaT)
+                .frame(height: 150)
+            HStack {
+                Text(Self.giorno(inizio))
+                Spacer()
+                Text(Self.giorno(meta))
+                Spacer()
+                Text(Self.giorno(oggi))
+            }
+            .font(Theme.mono(9)).foregroundStyle(Theme.muted)
+        }
+    }
+
+    /// "26 SET"
+    static func giorno(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateFormat = "d MMM"
+        return f.string(from: d).uppercased().replacingOccurrences(of: ".", with: "")
     }
 
     private func card<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
@@ -195,6 +238,17 @@ struct StatsView: View {
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
     }
 
+    /// V60 · p10: un valore che conta da zero quando i conti sono pronti.
+    private func statConta(_ valore: Double, _ label: String, _ formato: @escaping (Double) -> String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            NumeroConta(valore: valore, da: contaT, durata: 1.2, formato: formato)
+                .font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.glow)
+                .lineLimit(1).minimumScaleFactor(0.5)
+            Text(label).font(.system(size: 12)).foregroundStyle(Theme.muted)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func stat(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value).font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.glow)
@@ -203,5 +257,72 @@ struct StatsView: View {
             Text(label).font(.system(size: 12)).foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// V60 · p10: il grafico delle vendite (griglia leggera, area, linea verde e punto finale) che si disegna da sinistra.
+struct GraficoVendite: View {
+    let conti: [Int]
+    let da: Date?
+    /// Secondi dopo `da` in cui il grafico è finito.
+    static let fine = 1.5
+
+    var body: some View {
+        let fermo = da.map { Date().timeIntervalSince($0) > GraficoVendite.fine + 0.05 } ?? true
+        TimelineView(.animation(minimumInterval: 1 / 60, paused: fermo)) { ctx in
+            let k = avanzamento(ctx.date)
+            Canvas { gc, size in disegna(gc, size, k) }
+        }
+        .accessibilityLabel("Grafico delle vendite degli ultimi 30 giorni: \(conti.reduce(0, +)) dischi venduti")
+    }
+
+    private func avanzamento(_ ora: Date) -> Double {
+        guard let da else { return 1 }
+        let passato = max(ora.timeIntervalSince(da), Date().timeIntervalSince(da))
+        return min(1, max(0, (passato - 0.2) / 1.3))
+    }
+
+    private func disegna(_ gc: GraphicsContext, _ size: CGSize, _ k: Double) {
+        let n = conti.count
+        guard n > 1 else { return }
+        let w = Double(size.width), h = Double(size.height)
+        let massimo = Double(max((conti.max() ?? 0) + 1, 3))
+        // griglia
+        var griglia = Path()
+        for q in [0.25, 0.5, 0.75] {
+            griglia.move(to: CGPoint(x: 0, y: h * q))
+            griglia.addLine(to: CGPoint(x: w, y: h * q))
+        }
+        gc.stroke(griglia, with: .color(Theme.glow.opacity(0.10)), lineWidth: 1)
+        // i punti
+        var punti: [CGPoint] = []
+        for i in 0..<n {
+            let x = Double(i) * w / Double(n - 1)
+            let y = h - 8 - Double(conti[i]) / massimo * (h - 20)
+            punti.append(CGPoint(x: x, y: y))
+        }
+        // fin dove è arrivato il disegno
+        let fin = k * Double(n - 1)
+        let pieni = Int(fin.rounded(.down))
+        var linea = Path()
+        linea.move(to: punti[0])
+        if pieni >= 1 {
+            for i in 1...min(pieni, n - 1) { linea.addLine(to: punti[i]) }
+        }
+        var ultimo = punti[min(pieni, n - 1)]
+        if pieni < n - 1 {
+            let a = punti[pieni], b = punti[pieni + 1]
+            let f = fin - Double(pieni)
+            ultimo = CGPoint(x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f)
+            linea.addLine(to: ultimo)
+        }
+        var area = linea
+        area.addLine(to: CGPoint(x: ultimo.x, y: h))
+        area.addLine(to: CGPoint(x: 0, y: h))
+        area.closeSubpath()
+        gc.fill(area, with: .color(Theme.glow.opacity(0.10)))
+        gc.stroke(linea, with: .color(Theme.glow), style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+        let punto = Path(ellipseIn: CGRect(x: ultimo.x - 4, y: ultimo.y - 4, width: 8, height: 8))
+        gc.fill(punto, with: .color(Theme.glow))
     }
 }
