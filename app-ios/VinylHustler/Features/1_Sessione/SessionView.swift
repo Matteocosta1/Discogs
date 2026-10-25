@@ -99,7 +99,7 @@ struct SessionView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(Theme.bg.ignoresSafeArea())
+            .sfondoHUD()                                       // V60: griglia e bagliore HUD dietro la pagina
             .ignoresSafeArea(.keyboard, edges: .bottom)       // la tastiera copre la fotocamera, non sposta la pagina
             .contentShape(Rectangle())
             .onTapGesture { scrivo = false }

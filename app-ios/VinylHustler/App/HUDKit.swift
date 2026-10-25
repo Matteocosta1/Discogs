@@ -23,14 +23,27 @@ struct TestoDecodifica: View {
     var da: Date
     var ritardo: Double = 0
     var durata: Double = 0.5
+    /// A decodifica finita il TimelineView si ferma (non gira per niente).
+    @State private var finito = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: Date().timeIntervalSince(da) > ritardo + durata + 0.1)) { ctx in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: finito)) { ctx in
             let t = ctx.date.timeIntervalSince(da) - ritardo
             let quanto = t <= 0 ? 1 : max(0, 1 - t / durata)
-            Text(Glifi.rimescola(testo, quanto))
+            Text(Glifi.rimescola(testo, finito ? 0 : quanto))
+        }
+        .task(id: TestoDecodifica.chiave(testo, da)) {
+            let resta = ritardo + durata - Date().timeIntervalSince(da)
+            if resta > 0 {
+                finito = false
+                try? await Task.sleep(for: .milliseconds(Int(resta * 1000) + 60))
+                if Task.isCancelled { return }
+            }
+            finito = true
         }
     }
+
+    private static func chiave(_ testo: String, _ da: Date) -> String { "\(testo)|\(da.timeIntervalSinceReferenceDate)" }
 }
 
 /// Curva morbida 0…1 (come `morbido` nel mock-up).

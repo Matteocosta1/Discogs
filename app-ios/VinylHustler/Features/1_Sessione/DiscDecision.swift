@@ -38,8 +38,7 @@ struct DiscRow: View {
                 Spacer(minLength: 0)
                 if compact { DeleteDiscButton(disc: disc, wide: false) }     // Elimina sempre in vista
             }
-            DiscActions(disc: disc, onRetake: onRetake, compact: compact,
-                        onRitiro: compact ? { si in ritira(si) } : nil)
+            DiscActions(disc: disc, onRetake: onRetake, compact: compact, onRitiro: ritiroAzione)
             if !compact { DeleteDiscButton(disc: disc, wide: true) }
         }
         .padding(14)
@@ -92,6 +91,12 @@ struct DiscRow: View {
             try? await Task.sleep(for: .milliseconds(250))
             if stampaDa == da { stampaDa = nil }           // finita: niente più da ridisegnare
         }
+    }
+
+    /// Solo nella fotocamera la scheda si ritira (nella Sessione resta, con «Online su Discogs»).
+    private var ritiroAzione: ((Bool) -> Void)? {
+        guard compact else { return nil }
+        return { si in ritira(si) }
     }
 
     /// V60: Vendi / Bozza: si ritira (true); se Discogs non lo prende, torna com'era (false).
@@ -595,9 +600,13 @@ struct StampaRitiro: ViewModifier {
             let via: Double = ritiroDa.map { morbido(ctx.date.timeIntervalSince($0) / 0.52) } ?? 0
             content
                 .mask {
+                    // a riposo la maschera è più grande della scheda: il bagliore attorno (lampo, ombra) resta intero
                     GeometryReader { g in
+                        let intera = st >= 1 && via <= 0
                         Rectangle()
-                            .frame(width: g.size.width * CGFloat(1 - via), height: g.size.height * CGFloat(st))
+                            .frame(width: intera ? g.size.width + 80 : g.size.width * CGFloat(1 - via),
+                                   height: intera ? g.size.height + 80 : g.size.height * CGFloat(st))
+                            .offset(x: intera ? -40 : 0, y: intera ? -40 : 0)
                     }
                 }
                 .overlay {
