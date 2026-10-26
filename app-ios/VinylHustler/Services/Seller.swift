@@ -26,6 +26,8 @@ final class Seller {
     /// V59: il prezzo si calcola appena il disco è riconosciuto, prima di Vendi o Bozza.
     var prezzoInCorso: Set<UUID> = []
     var prezzoMancante: Set<UUID> = []
+    /// V60: i dischi riconosciuti dal REC: sulla loro scheda la condizione si sceglie disco per disco.
+    var dalVideo: Set<UUID> = []
     var lastError: String?
 
     private let queue = SerialQueue()

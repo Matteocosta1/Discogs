@@ -327,7 +327,8 @@ struct OcchioView: View {
                             withAnimation(.snappy) { proxy.scrollTo(id, anchor: .leading) }
                         }
                     }
-                    .frame(height: 244)                         // V59: c'è anche il prezzo sopra i tasti
+                    // V59: c'è anche il prezzo sopra i tasti; V60: i dischi del video hanno anche la condizione
+                    .frame(height: pending.contains(where: { seller.dalVideo.contains($0.id) }) ? 312 : 244)
                 }
                 // V59: il lettore piccolo delle tracce del disco: si tira su (o si tocca) per aprire quello grande
                 if attuale != nil && (ascolto.cercando || !ascolto.brani.isEmpty) {
@@ -495,6 +496,7 @@ struct OcchioView: View {
             Task { @MainActor in
                 guard let foto else { rec.fotografata(id, disco: nil); return }
                 let d = seller.shoot([foto], video: false, place: posto, media: m, sleeve: s, context: context)
+                seller.dalVideo.insert(d.id)
                 rec.fotografata(id, disco: d.id)
             }
         }

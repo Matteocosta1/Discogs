@@ -190,6 +190,7 @@ struct DiscActions: View {
                 // Nella fotocamera (compact): tutti in fila, il cestino è in alto a destra.
                 let layout = compact ? AnyLayout(HStackLayout(spacing: 6)) : AnyLayout(VStackLayout(spacing: 8))
                 VStack(spacing: 8) {
+                  if seller.dalVideo.contains(disc.id) { condizioneVideo }   // V60: dal REC la condizione è del singolo disco
                   prezzoSubito                          // V59: prima il prezzo, poi si decide
                   layout {
                     // Vendi: conferma, calcola il prezzo e lo mette subito online su Discogs
@@ -340,6 +341,50 @@ struct DiscActions: View {
 
     /// Release sbagliata? Si riscrive il numero (anche dopo averlo inserito), finché il disco non è su Discogs.
     /// V59: il prezzo calcolato appena riconosciuto, sopra Vendi / Bozza / Versioni.
+    /// V60: la condizione di un disco riconosciuto dal video (Vinile e Copertina), partendo da quella scelta in Foto.
+    /// Cambiando il vinile il prezzo si ricalcola subito con la stessa regola (Discogs lo suggerisce per grado del vinile);
+    /// la copertina va nell'annuncio.
+    private var condizioneVideo: some View {
+        VStack(spacing: 6) {
+            rigaCondizione("VINILE", attuale: disc.media) { g in
+                guard g != disc.media else { return }
+                disc.mediaRaw = g.rawValue
+                disc.price = nil
+                Task { await seller.anteprimaPrezzo(disc) }
+            }
+            rigaCondizione("COPERTINA", attuale: disc.sleeve) { g in
+                disc.sleeveRaw = g.rawValue
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func rigaCondizione(_ titolo: String, attuale: Grade, scegli: @escaping (Grade) -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text(titolo).font(Theme.mono(9, .bold)).tracking(1.2).foregroundStyle(Theme.glow)
+                .frame(width: 74, alignment: .leading)
+            HStack(spacing: 4) {
+                ForEach(Grade.allCases) { g in
+                    let on = attuale == g
+                    Button {
+                        Suoni.tocco()
+                        scegli(g)
+                    } label: {
+                        Text(g.rawValue)
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: 26)
+                            .foregroundStyle(on ? Color.black : Theme.text)
+                            .background(on ? Theme.accent : Theme.panelHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(titolo.lowercased()) \(g.rawValue)")
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+        }
+    }
+
     @ViewBuilder private var prezzoSubito: some View {
         HStack(alignment: .lastTextBaseline) {
             Text("Prezzo").font(.system(size: 15)).foregroundStyle(Theme.muted)
