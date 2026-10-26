@@ -106,6 +106,8 @@ struct PannelloDisco: View {
 
 struct LettorePiccolo: View {
     let ascolto: Ascolto
+    /// V63: con più dischi da decidere, quale suona («2/3»).
+    var numero: String = ""
     let apri: () -> Void
 
     var body: some View {
@@ -118,7 +120,7 @@ struct LettorePiccolo: View {
                     if let b = ascolto.corrente {
                         Text(b.posizione.isEmpty ? b.titolo : "\(b.posizione) · \(b.titolo)")
                             .font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
-                        Text(Ascolto.scritta(ascolto.fonteMostrata))
+                        Text(numero.isEmpty ? Ascolto.scritta(ascolto.fonteMostrata) : numero + " · " + Ascolto.scritta(ascolto.fonteMostrata))
                             .font(Theme.mono(9, .semibold)).tracking(1.5).foregroundStyle(Theme.glow).lineLimit(1)
                     } else {
                         Text("CERCO LE TRACCE…")
@@ -164,6 +166,10 @@ struct LettoreGrande: View {
     /// La maniglia: il dito che tira giù (di quanto) e quando lascia.
     var trascinando: (CGFloat) -> Void = { _ in }
     var rilasciato: (CGFloat) -> Void = { _ in }
+    /// V63: i dischi da decidere (con il REC possono essere più di uno): si sceglie quale ascoltare.
+    var dischi: [DiscoFila] = []
+    var attivo: UUID? = nil
+    var scegli: (UUID) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -199,10 +205,39 @@ struct LettoreGrande: View {
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 12) {
+                    if dischi.count > 1 { filaDischi }
                     oraSuona
                     tracce
                 }
                 .padding(.horizontal, 14).padding(.bottom, 30)
+            }
+        }
+    }
+
+    /// «DISCHI · 3» e le copertine tonde: quella che suona ha l'anello verde acceso.
+    private var filaDischi: some View {
+        HStack(spacing: 10) {
+            Text("DISCHI · \(dischi.count)")
+                .font(Theme.mono(9, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
+                .fixedSize()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(dischi) { d in
+                        let on = d.id == attivo
+                        Button { scegli(d.id) } label: {
+                            AsyncImage(url: d.copertina) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                                .frame(width: 40, height: 40)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(on ? Theme.glow : Theme.glow.opacity(0.25), lineWidth: 1.5))
+                                .shadow(color: Theme.glow.opacity(on ? 0.6 : 0), radius: 6)
+                                .opacity(on ? 1 : 0.6)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(d.titolo)
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
+                }
+                .padding(.vertical, 4)
             }
         }
     }
@@ -514,4 +549,11 @@ struct VideoYouTube: UIViewRepresentable {
         </script></body></html>
         """
     }
+}
+
+/// V63: un disco nella fila del lettore grande.
+struct DiscoFila: Identifiable {
+    let id: UUID
+    let copertina: URL?
+    let titolo: String
 }

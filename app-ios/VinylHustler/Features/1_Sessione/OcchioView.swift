@@ -44,6 +44,9 @@ struct OcchioView: View {
     @State private var analisiFine: Date?
     // V60 · proposta 11: il REC dal vivo con gli ologrammi
     @State private var rec = RECVivo()
+    // V63: la scheda attiva (il lettore la segue) e la posizione della fila di schede
+    @State private var attivoID: UUID?
+    @State private var vista: UUID?
 
     private let tinta = Theme.accent
 
@@ -53,9 +56,20 @@ struct OcchioView: View {
     }
     private static func done(_ d: Disc) -> Bool { d.status == .inVendita || d.status == .bozza }
 
-    /// V59: il disco riconosciuto più recente, ancora da decidere: è quello del riquadro in alto e del lettore.
+    /// I dischi riconosciuti ancora da decidere (il più recente prima).
+    private var candidati: [Disc] {
+        seen.filter { ($0.status == .daConfermare || $0.status == .pronto) && $0.releaseID != nil }
+    }
+    /// V59: il disco del riquadro in alto e del lettore. V63: quello della scheda attiva (scorrendo o toccando le schede,
+    /// o scegliendolo nel lettore grande); se non c'è, il più recente.
     private var attuale: Disc? {
-        seen.first { ($0.status == .daConfermare || $0.status == .pronto) && $0.releaseID != nil }
+        candidati.first { $0.id == attivoID } ?? candidati.first
+    }
+    /// «2/3» nel lettore piccolo quando i dischi da decidere sono più di uno.
+    private var numeroAttuale: String {
+        let c = candidati
+        guard c.count > 1, let a = attuale, let i = c.firstIndex(where: { $0.id == a.id }) else { return "" }
+        return "\(i + 1)/\(c.count)"
     }
     private var schedaAttuale: Release? { attuale?.releaseID.flatMap { seller.schede[$0] } }
     private var versioneAttuale: String {
@@ -313,17 +327,36 @@ struct OcchioView: View {
                                             .controlSize(.small)
                                     }
                                     .frame(width: 350)
+                                    // V63: con più dischi, la scheda attiva ha il bordo verde acceso; toccandola diventa attiva
+                                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .stroke(Theme.glow.opacity(candidati.count > 1 && disc.id == attuale?.id ? 0.75 : 0), lineWidth: 1.5)
+                                        .allowsHitTesting(false))
+                                    .simultaneousGesture(TapGesture().onEnded {
+                                        guard disc.id != attuale?.id, candidati.contains(where: { $0.id == disc.id }) else { return }
+                                        Suoni.tocco()
+                                        attivoID = disc.id
+                                        withAnimation(.snappy) { proxy.scrollTo(disc.id, anchor: .center) }
+                                    })
                                     .id(disc.id)
                                     .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
                                                             removal: .scale(scale: 0.6).combined(with: .opacity)))
                                 }
                             }
+                            .scrollTargetLayout()                   // V63: per sapere quale scheda è al centro
                             .animation(.spring(duration: 0.45, bounce: 0.25), value: pending.map(\.id))
                             .padding(.horizontal, 12)
+                        }
+                        // V63: scorrendo le schede, quella che si ferma al centro diventa attiva
+                        .scrollPosition(id: $vista, anchor: .center)
+                        .onChange(of: vista) { _, id in
+                            guard let id, id != attuale?.id, candidati.contains(where: { $0.id == id }) else { return }
+                            Suoni.tocco()
+                            attivoID = id
                         }
                         // disco nuovo: la striscia torna all'inizio, dove compare
                         .onChange(of: seen.first?.id) { _, id in
                             guard let id else { return }
+                            attivoID = nil                      // disco nuovo: è lui quello attivo
                             withAnimation(.snappy) { proxy.scrollTo(id, anchor: .leading) }
                         }
                     }
@@ -332,7 +365,7 @@ struct OcchioView: View {
                 }
                 // V59: il lettore piccolo delle tracce del disco: si tira su (o si tocca) per aprire quello grande
                 if attuale != nil && (ascolto.cercando || !ascolto.brani.isEmpty) {
-                    LettorePiccolo(ascolto: ascolto) { apriLettore() }
+                    LettorePiccolo(ascolto: ascolto, numero: numeroAttuale) { apriLettore() }
                         .padding(.horizontal, 12)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -364,6 +397,14 @@ struct OcchioView: View {
                               trascinando: { dy in trascina = max(0, dy) },
                               rilasciato: { dy in
                                   if dy > 90 { chiudiLettore() } else { withAnimation(.spring(duration: 0.35)) { trascina = 0 } }
+                              },
+                              dischi: candidati.map { DiscoFila(id: $0.id, copertina: $0.coverURL, titolo: $0.releaseTitle) },
+                              attivo: attuale?.id,
+                              scegli: { id in
+                                  guard id != attuale?.id else { return }
+                                  Suoni.tocco()
+                                  attivoID = id
+                                  withAnimation(.snappy) { vista = id }   // la fila di schede sotto va su quel disco
                               })
                     .frame(height: H)
                     .frame(maxWidth: 560)
