@@ -375,7 +375,7 @@ struct ListingRow: View {
     let currency: String
     /// Tasto di fianco al prezzo: apre la scheda annuncio. Il titolo invece apre l'annuncio su Discogs.
     var onEdit: (() -> Void)? = nil
-    /// V60 · p15: il tasto ▶ sulla copertina apre la finestra Ascolto (dal punto toccato).
+    /// V60 · p15 (V65: a lato, dopo l'annuncio): il tasto ▶ apre la finestra Ascolto (dal punto toccato).
     var onListen: ((CGPoint) -> Void)? = nil
     /// V60 · p8: mentre la riga si stampa il titolo si decodifica (da quando, e con che ritardo).
     var decodifica: Date? = nil
@@ -419,6 +419,11 @@ struct ListingRow: View {
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Modifica l'annuncio")
+            }
+            // V65: Ascolto a lato, dopo prezzo e annuncio (non in Seleziona)
+            if !selecting, let onListen {
+                TastoAscolta(nome: titleText, azione: onListen)
+                    .frame(width: 38, height: 38)
             }
         }
     }
@@ -468,12 +473,6 @@ struct ListingRow: View {
         .frame(width: 52, height: 52)
         .clipShape(Circle())
         .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
-        .overlay {
-            // V60 · p15: tutta la copertina è il tasto ▶ che apre la finestra Ascolto (non in Seleziona)
-            if !selecting, let onListen {
-                TastoAscolta(nome: titleText, azione: onListen)
-            }
-        }
     }
 
     /// La posizione: quella scritta su Discogs, altrimenti quella dell'app.

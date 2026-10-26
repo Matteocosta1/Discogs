@@ -257,7 +257,7 @@ struct DraftRow: View {
     let onEdit: () -> Void
     let onSell: () -> Void
     let onDelete: () -> Void
-    /// V60 · p15: il tasto ▶ sulla copertina apre la finestra Ascolto (dal punto toccato).
+    /// V60 · p15 (V65: a lato, prima di Vendi): il tasto ▶ apre la finestra Ascolto (dal punto toccato).
     var onListen: ((CGPoint) -> Void)? = nil
 
     @State private var sheen = false
@@ -271,11 +271,6 @@ struct DraftRow: View {
                 .brightness(lit ? 0 : -0.15)
                 .overlay(Circle().stroke(lit ? Theme.glow : Color.clear, lineWidth: 2))
                 .shadow(color: Theme.glow.opacity(lit ? 0.7 : 0), radius: 8)
-                .overlay {
-                    if let onListen, !lit {
-                        TastoAscolta(nome: listing.release.description ?? "", azione: onListen)
-                    }
-                }
             VStack(alignment: .leading, spacing: 4) {
                 Link(destination: URL(string: "https://www.discogs.com/sell/item/\(listing.id)")!) {
                     (Text(listing.release.description ?? "Release \(listing.release.id)") + Text(" ↗").foregroundColor(Theme.accent))
@@ -287,8 +282,10 @@ struct DraftRow: View {
                         .padding(.horizontal, 7).padding(.vertical, 2)
                         .foregroundStyle(lit ? Theme.money : Theme.warn)
                         .background(lit ? Theme.military : Theme.warnSoft, in: Capsule())
+                        .lineLimit(1).fixedSize()           // V65: «Bozza» mai tagliata
                     Text([ListingRow.short(listing.condition), ListingRow.short(listing.sleeveCondition)].filter { !$0.isEmpty }.joined(separator: " / "))
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.glow)
+                        .lineLimit(1).minimumScaleFactor(0.85)   // V65: «VG+ / VG» sempre su una riga
                     if !lit {
                         // V52: lucina ferma (quella che lampeggiava faceva ondeggiare le righe)
                         Circle().fill(Theme.warn).frame(width: 6, height: 6)
@@ -312,6 +309,11 @@ struct DraftRow: View {
                             .frame(width: 30, height: 30).background(Theme.military, in: Circle())
                     }
                     .buttonStyle(.plain).accessibilityLabel("Modifica l'annuncio")
+                    // V65: Ascolto a lato, dopo cestino e annuncio, prima di Vendi
+                    if let onListen, !lit {
+                        TastoAscolta(nome: listing.release.description ?? "", azione: onListen)
+                            .frame(width: 30, height: 30)
+                    }
                     Button(action: onSell) {
                         Text("Vendi").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
                             .lineLimit(1).fixedSize()          // V54: mai "V…", anche sugli schermi più stretti

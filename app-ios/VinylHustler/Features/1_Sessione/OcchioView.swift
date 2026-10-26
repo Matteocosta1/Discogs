@@ -298,13 +298,15 @@ struct OcchioView: View {
         TimelineView(.periodic(from: inizioVideo, by: 0.5)) { ctx in
             let s = Int(ctx.date.timeIntervalSince(inizioVideo))
             HStack(spacing: 8) {
-                Circle().fill(Color.red).frame(width: 10, height: 10).shadow(color: .red, radius: 6)
+                // V65: il video è verde come il resto (niente rosso mentre registra)
+                Circle().fill(Theme.glow).frame(width: 10, height: 10).shadow(color: Theme.glow, radius: 6)
                 Text(String(format: "REC %02d:%02d", s / 60, s % 60))
-                    .font(Theme.mono(14, .bold)).tracking(2).foregroundStyle(.white)
+                    .font(Theme.mono(14, .bold)).tracking(2).foregroundStyle(Theme.glow)
             }
             .padding(.horizontal, 14).padding(.vertical, 7)
             .background(Color.black.opacity(0.55))
             .clipShape(Capsule())
+            .overlay(Capsule().stroke(Theme.glow.opacity(0.5), lineWidth: 1))
         }
     }
 
@@ -329,9 +331,12 @@ struct OcchioView: View {
             Spacer()
             Button { registrando ? fermaREC() : registra() } label: {
                 ZStack {
-                    Circle().stroke(Color.white.opacity(0.9), lineWidth: 3).frame(width: 62, height: 62)
+                    Circle().stroke(registrando ? Theme.glow : Color.white.opacity(0.9), lineWidth: 3).frame(width: 62, height: 62)
+                        .shadow(color: Theme.glow.opacity(registrando ? 0.55 : 0), radius: 8)
                     if registrando {
-                        RoundedRectangle(cornerRadius: 5).fill(Color.red).frame(width: 24, height: 24)
+                        // V65: «stop» verde mentre registra
+                        RoundedRectangle(cornerRadius: 5).fill(Theme.glow).frame(width: 24, height: 24)
+                            .shadow(color: Theme.glow, radius: 6)
                     } else {
                         Circle().fill(Color.red).frame(width: 48, height: 48)
                         Text("REC").font(Theme.mono(11, .bold)).foregroundStyle(.white)
@@ -741,7 +746,7 @@ struct MirinoOcchio: View {
                     Text(etichetta).contentTransition(.opacity)
                 }
                 .font(Theme.mono(9, .bold)).tracking(1.5)
-                .foregroundStyle((scattando ? Theme.warn : (preso ? Theme.glow : tinta)).opacity(0.85))
+                .foregroundStyle((scattando ? Theme.glow : (preso ? Theme.glow : tinta)).opacity(0.85))   // V65: niente rosso col video
                 .frame(width: lato * scala)
                 .position(x: geo.size.width / 2, y: CGFloat(m.y0) + lato * (1 - scala) / 2 - 12)
             }
@@ -757,7 +762,7 @@ struct MirinoOcchio: View {
             let m = Self.misure(w, h)
             let lato = m.lato
             let c = CGPoint(x: w / 2, y: m.y0 + lato / 2)
-            let colore = scattando ? Theme.warn : (preso ? Theme.glow : tinta)
+            let colore = scattando ? Theme.glow : (preso ? Theme.glow : tinta)
             let x0 = m.x0, y0 = m.y0
             let braccio = lato * 0.15
             let r = 10.0                                          // angoli arrotondati

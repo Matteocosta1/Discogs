@@ -17,7 +17,7 @@ final class RECVivo {
         var ultimo: Date
         var fermoDa: Date
         var agganciato: Date?
-        var ordine = 0                  // 0, 1, 2… nell'ordine di aggancio (cartellini ad altezze alterne)
+        var ordine = 0                  // 0, 1, 2… nell'ordine di aggancio (sfasa giro e scansione dell'ologramma)
         var discID: UUID?
     }
 
@@ -124,14 +124,15 @@ struct HologrammiREC: View {
         var errore: Bool
     }
 
-    private static let neon: [(ms: Double, luce: Double)] = [(0, 0), (60, 0.9), (100, 0.15), (150, 1), (220, 0.4), (270, 1)]
+    // V65: tutto più lento (come nel mock-up approvato)
+    private static let neon: [(ms: Double, luce: Double)] = [(0, 0), (110, 0.9), (180, 0.15), (270, 1), (400, 0.4), (490, 1)]
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
             let tracce = rec.tracce
             let schede = cartellini(per: tracce)
-            Canvas { gc, _ in
-                for t in tracce { disegna(gc, t, schede[t.id], ora: ctx.date) }
+            Canvas { gc, size in
+                for t in tracce { disegna(gc, t, schede[t.id], ora: ctx.date, largoVista: size.width) }
             }
         }
         .allowsHitTesting(false)
@@ -167,28 +168,34 @@ struct HologrammiREC: View {
 
     private func verde(_ a: Double) -> Color { Theme.glow.opacity(a) }
 
-    private func disegna(_ gc: GraphicsContext, _ t: RECVivo.Traccia, _ c: Cartellino?, ora: Date) {
+    private func disegna(_ gc: GraphicsContext, _ t: RECVivo.Traccia, _ c: Cartellino?, ora: Date, largoVista: CGFloat) {
         var gc = gc
         let q = t.angoli
         guard q.count == 4 else { return }
+        // V65: uno alla volta: si vede solo il disco al centro; quelli che vanno verso i lati si spengono piano
+        let mezzo = largoVista * 0.18
+        let distanza = abs(t.centro.x - largoVista / 2)
+        let fuoco = 1 - min(1, max(0, Double((distanza - mezzo) / max(1, mezzo))))
+        guard fuoco > 0 else { return }
         guard let quando = t.agganciato else {
             // vista ma non ancora agganciata: angoli tenui (si vede che la sta guardando)
-            if t.visti >= 2 { angoli(&gc, q, scala: 1.0, alfa: 0.35) }
+            if t.visti >= 2 { angoli(&gc, q, scala: 1.0, alfa: 0.35 * fuoco) }
             return
         }
         let tt = ora.timeIntervalSince(quando) * 1000
         var luce = 1.0
         for passo in Self.neon where tt >= passo.ms { luce = passo.luce }
+        luce *= fuoco
         gc.opacity = luce
         // 1 · angoli che agganciano la copertina (si stringono sul disco)
-        let scala = CGFloat(1.28 - 0.28 * morbido(tt / 320))
+        let scala = CGFloat(1.28 - 0.28 * morbido(tt / 650))
         var luminoso = gc
         luminoso.addFilter(.shadow(color: verde(0.9), radius: 6))
         angoli(&luminoso, q, scala: scala, alfa: 0.95)
         // 2 · il fascio di luce e 3 · il vinile a fil di ferro sopra il bordo alto
         let alto = CGPoint(x: (q[0].x + q[1].x) / 2, y: (q[0].y + q[1].y) / 2)
         let latoAlto = hypot(q[1].x - q[0].x, q[1].y - q[0].y)
-        let ap = morbido(tt / 380)
+        let ap = morbido(tt / 700)
         let rx = max(36, min(64, latoAlto * 0.42)) * CGFloat(ap), ry = rx * 0.29
         let hy = alto.y - 62
         if ap > 0.05 {
@@ -233,9 +240,10 @@ struct HologrammiREC: View {
             }
         }
         // 4 · il cartellino sopra l'ologramma
-        guard let c, tt > 250 else { return }
-        let a = morbido((tt - 250) / 260)
-        let mescola: Double = c.analisi ? 0.55 : 0
+        guard let c, tt > 500 else { return }
+        let a = morbido((tt - 500) / 450)
+        // il testo esce come simboli e si sistema (0,8 s dopo l'aggancio, in 0,9 s); in analisi resta mescolato
+        let mescola: Double = c.analisi ? 0.55 : max(0, 1 - (tt - 800) / 900)
         let colore: Color = c.errore ? Theme.warn : Theme.glow
         let t1 = gc.resolve(Text(Glifi.rimescola(c.riga1, mescola)).font(Theme.mono(10, .bold)).foregroundStyle(Color(hex: 0xEAFFEA)))
         let t2 = gc.resolve(Text(Glifi.rimescola(c.riga2, mescola)).font(Theme.mono(9, .bold)).foregroundStyle(colore))
@@ -243,7 +251,7 @@ struct HologrammiREC: View {
         let s2 = t2.measure(in: CGSize(width: 220, height: 40))
         let larghezza = min(220, max(s1.width, s2.width)) + 18
         let altezza = s1.height + (c.riga2.isEmpty ? 0 : s2.height + 2) + 12
-        let base = hy - ry - 10 - (t.ordine % 2 == 1 ? 40 : 0)                         // altezze alterne
+        let base = hy - ry - 10                                                          // V65: uno alla volta, niente altezze alterne
         let rett = CGRect(x: alto.x - larghezza / 2, y: base - altezza, width: larghezza, height: altezza)
         var cg = gc
         cg.opacity = luce * a
