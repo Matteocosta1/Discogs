@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 
 /// V60 · proposta 7 — l'avvio come JARVIS: finita la scritta d'apertura, le cinque icone in basso entrano una dopo
-/// l'altra (ogni 150 ms, con un tick leggero e una vibrazione leggera) e «VINYL HUSTLER · IN LINEA» si decodifica
-/// al centro, piccola. È una copia della barra disegnata sopra quella vera: alla fine sfuma e resta quella di Apple.
+/// l'altra (ogni 150 ms, con un tick leggero e una vibrazione leggera); «VINYL HUSTLER · IN LINEA» si decodifica
+/// in Foto, accanto a FOTOCAMERA, e lì resta (V62). Qui c'è una copia della barra disegnata sopra quella vera: alla fine sfuma e resta quella di Apple.
 struct AvvioIcone: View {
     let da: Date
     let selezionata: Int
@@ -18,16 +18,6 @@ struct AvvioIcone: View {
             // tutta la copia sfuma negli ultimi 0,3 s
             let via = t > Self.durata - 0.3 ? max(0, (Self.durata - t) / 0.3) : 1
             ZStack {
-                GeometryReader { g in
-                    Text(Glifi.rimescola("VINYL HUSTLER · IN LINEA", 1 - min(1, max(0, (t - 0.7) / 0.6))))
-                        .font(Theme.mono(10, .bold))
-                        .tracking(2.5)
-                        .foregroundStyle(Theme.glow)
-                        .shadow(color: Theme.glow.opacity(0.6), radius: 4)
-                        .opacity(t > 1.9 ? max(0, 1 - (t - 1.9) / 0.4) : 1)
-                        .position(x: g.size.width / 2, y: g.size.height * 0.44)
-                }
-                .ignoresSafeArea()
                 VStack(spacing: 0) {
                     Spacer(minLength: 0)
                     HStack(spacing: 0) {
@@ -68,4 +58,9 @@ struct AvvioIcone: View {
             leggera.impactOccurred()
         }
     }
+}
+
+/// Quando è partita l'app: la scritta «IN LINEA» in Foto si decodifica al passo dell'avvio (fine della scritta d'apertura).
+enum Avvio {
+    static let quando = Date()
 }

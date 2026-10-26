@@ -56,6 +56,7 @@ struct RootView: View {
         .task { seller.startup(context: context) }
         .task {
             // all'apertura il marchio si accende come un neon, con il suono d'apertura, poi sfuma
+            _ = Avvio.quando                                // il momento dell'avvio (per «IN LINEA» in Foto)
             Suoni.apertura()
             try? await Task.sleep(for: .milliseconds(1700))
             // V60: la barra in basso si copre subito, poi le icone entrano una dopo l'altra mentre la scritta sfuma

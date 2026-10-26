@@ -91,6 +91,18 @@ struct SessionView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     InfoHeader(title: "Fotocamera") { info = .fotocamera }
+                        // V62: «VINYL HUSTLER · IN LINEA» piccola, a destra, sulla riga di FOTOCAMERA: si decodifica
+                        // all'avvio (dopo la scritta d'apertura) e poi resta
+                        .overlay(alignment: .trailing) {
+                            TestoDecodifica(testo: "VINYL HUSTLER · IN LINEA", da: Avvio.quando, ritardo: 2.4, durata: 0.6)
+                                .font(Theme.mono(8, .bold))
+                                .tracking(1.5)
+                                .foregroundStyle(Theme.glow)
+                                .shadow(color: Theme.glow.opacity(0.6), radius: 3)
+                                .lineLimit(1)
+                                .allowsHitTesting(false)
+                                .accessibilityLabel("Vinyl Hustler in linea")
+                        }
                     cameraButton
                     if !aiReady { AISignInRow { aiReady = true } }
                 }
