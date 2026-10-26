@@ -7,6 +7,8 @@ import SwiftUI
 /// finché non li sistemi. Quelli in vendita stanno nel Magazzino.
 struct DraftsView: View {
     @Environment(Seller.self) private var seller
+    /// V68: la barra delle sezioni tiene vive le pagine: si ricarica ogni volta che si torna su Bozze (come prima).
+    @Environment(\.sezioneVisibile) private var visibile
     @Query(sort: \Disc.createdAt, order: .reverse) private var discs: [Disc]
     @State private var drafts: [Listing] = []          // le bozze su Discogs
     @State private var loading = false
@@ -84,7 +86,7 @@ struct DraftsView: View {
             .searchable(text: $search, prompt: "Titolo, artista, scatola…")
             .overlay { if loading && drafts.isEmpty { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
             .refreshable { await Task { await loadDrafts() }.value }
-            .task { await Task { await loadDrafts() }.value }
+            .task(id: visibile) { guard visibile else { return }; await Task { await loadDrafts() }.value }
             .safeAreaInset(edge: .bottom) {
                 if publishing && total > 0 {
                     barraSvuota

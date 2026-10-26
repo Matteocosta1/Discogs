@@ -58,11 +58,13 @@ struct SfondoHUD: View {
     /// false = sotto la fotocamera a tutto schermo: lo sfondo non si vede e si ferma.
     var attivo = true
     @Environment(\.accessibilityReduceMotion) private var fermo
+    /// V68: sezione non guardata (la barra le tiene vive): lo sfondo si ferma.
+    @Environment(\.sezioneVisibile) private var sezioneVisibile
     /// Le pagine delle sezioni non guardate restano vive nel TabView: lì lo sfondo si ferma (batteria).
     @State private var visibile = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: fermo || !visibile || !attivo)) { ctx in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: fermo || !visibile || !attivo || !sezioneVisibile)) { ctx in
             let t = fermo ? 0 : ctx.date.timeIntervalSinceReferenceDate
             Canvas { gc, size in
                 // il bagliore in alto che respira (9 s)

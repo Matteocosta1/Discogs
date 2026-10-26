@@ -1,5 +1,7 @@
+import Combine
 import SwiftData
 import SwiftUI
+import UIKit
 
 @main
 struct VinylHustlerApp: App {
@@ -26,7 +28,7 @@ struct VinylHustlerApp: App {
     }
 }
 
-/// Le 5 sezioni: Foto, Bozze, Magazzino, Ordini, Settings.
+/// Le 6 sezioni: Foto, Bozze, Magazzino, Ordini, Chat, Settings (V68: barra disegnata da noi, la barra di Apple su iPhone ne tiene 5).
 struct RootView: View {
     @Environment(Seller.self) private var seller
     @Environment(\.modelContext) private var context
@@ -37,6 +39,9 @@ struct RootView: View {
     /// V60 · proposta 7: quando parte l'entrata delle icone (nil = finita o non c'è).
     @State private var avvio: Date?
     @Environment(\.horizontalSizeClass) private var larghezza
+    /// Le sezioni già aperte restano vive (come faceva la barra di Apple).
+    @State private var viste: Set<Int> = []
+    @State private var tastiera = false
 
     var body: some View {
         Group {
@@ -45,10 +50,6 @@ struct RootView: View {
             } else {
                 tabs
             }
-        }
-        .overlay {
-            // sull'iPad la barra delle sezioni è in alto: lì la copia della barra in basso non serve
-            if let avvio, seller.isLoggedIn, larghezza != .regular { AvvioIcone(da: avvio, selezionata: tab) }
         }
         .overlay {
             if splash { SplashView().transition(.opacity) }
@@ -68,22 +69,110 @@ struct RootView: View {
         }
         .onChange(of: tab) { _, _ in Suoni.tocco() }
         .onChange(of: seller.lastError) { _, e in if e != nil { Suoni.nego() } }
-        .onAppear { if !(0...4).contains(tab) { tab = 0 } }
+        .onAppear { if !(0...5).contains(tab) { tab = 0 } }
         .alert(seller.lastError ?? "", isPresented: Binding(get: { seller.lastError != nil },
                                                             set: { if !$0 { seller.lastError = nil } })) {}
     }
 
     private var tabs: some View {
-        TabView(selection: $tab) {
-            SessionView().tabItem { Label("Foto", systemImage: "camera.fill") }.tag(0)
-            DraftsTab().tabItem { Label("Bozze", systemImage: "tray.full") }.tag(1)
-                .badge(toCheck.count)
-            WarehouseView().tabItem { Label("Magazzino", systemImage: "square.stack.3d.up") }.tag(2)
-            OrdersView().tabItem { Label("Ordini", systemImage: "shippingbox") }.tag(3)
-            ConsoleView().tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
+        ZStack {
+            ForEach(0..<6, id: \.self) { i in
+                if viste.contains(i) || tab == i {
+                    sezione(i)
+                        .opacity(tab == i ? 1 : 0)
+                        .allowsHitTesting(tab == i)
+                        .accessibilityHidden(tab != i)
+                        .environment(\.sezioneVisibile, tab == i)
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !tastiera {
+                BarraSezioni(tab: $tab, avvio: avvio, badge: [1: toCheck.count, 4: ChatStore.shared.nonLetti])
+            }
+        }
+        .onChange(of: tab, initial: true) { _, t in viste.insert(t) }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in tastiera = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in tastiera = false }
+        .task { ChatStore.shared.avvia(nome: seller.username) }      // i non letti della Chat anche dalle altre sezioni
+    }
+
+    @ViewBuilder private func sezione(_ i: Int) -> some View {
+        switch i {
+        case 0: SessionView()
+        case 1: DraftsTab()
+        case 2: WarehouseView()
+        case 3: OrdersView()
+        case 4: ChatView()
+        default: ConsoleView()
         }
     }
 }
+
+/// V68 — la barra delle sei sezioni, uguale a quella di Apple (nero, riga sottile in alto, icona e nome),
+/// con l'entrata delle icone all'avvio (proposta 7: una dopo l'altra, ogni 150 ms).
+struct BarraSezioni: View {
+    @Binding var tab: Int
+    let avvio: Date?
+    let badge: [Int: Int]
+
+    private static let nomi = ["Foto", "Bozze", "Magazzino", "Ordini", "Chat", "Settings"]
+    private static let simboli = ["camera.fill", "tray.full", "square.stack.3d.up", "shippingbox", "bubble.left.and.text.bubble.right", "gearshape"]
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 60, paused: avvio == nil)) { ctx in
+            HStack(spacing: 0) {
+                ForEach(0..<6, id: \.self) { k in
+                    Button { tab = k } label: { icona(k, t: avvio.map { ctx.date.timeIntervalSince($0) }) }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(Self.nomi[k])
+                        .accessibilityAddTraits(tab == k ? .isSelected : [])
+                }
+            }
+            .frame(height: 49)
+            .padding(.top, 1)
+            .background(alignment: .top) { Rectangle().fill(Color.white.opacity(0.08)).frame(height: 0.5) }
+            .background(Color.black.ignoresSafeArea(edges: .bottom))
+        }
+    }
+
+    private func icona(_ k: Int, t: Double?) -> some View {
+        let p = t.map { morbido(($0 - 0.15 - Double(k) * 0.15) / 0.35) } ?? 1
+        let n = badge[k] ?? 0
+        return VStack(spacing: 3) {
+            Image(systemName: Self.simboli[k]).font(.system(size: 21, weight: .regular))
+                .frame(height: 24)
+                .overlay(alignment: .topTrailing) {
+                    if n > 0 {
+                        Text("\(n)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                            .padding(.horizontal, 5).frame(minWidth: 17, minHeight: 17)
+                            .background(Theme.warn, in: Capsule())
+                            .offset(x: 12, y: -5)
+                    }
+                }
+            Text(Self.nomi[k]).font(.system(size: 10, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .foregroundStyle(k == tab ? Theme.accent : Theme.muted)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .scaleEffect(0.4 + 0.6 * p)
+        .offset(y: 26 * (1 - p))
+        .opacity(p)
+    }
+}
+
+private struct SezioneVisibileKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// V68: false nelle sezioni tenute vive ma non guardate (la barra delle sezioni).
+    var sezioneVisibile: Bool {
+        get { self[SezioneVisibileKey.self] }
+        set { self[SezioneVisibileKey.self] = newValue }
+    }
+}
+
 
 /// Primo avvio: collegare l'account Discogs.
 struct LoginView: View {

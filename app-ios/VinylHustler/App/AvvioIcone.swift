@@ -52,7 +52,7 @@ struct AvvioIcone: View {
     /// I tick e le vibrazioni, uno per icona, al passo dell'animazione.
     @MainActor static func suona() async {
         let leggera = UIImpactFeedbackGenerator(style: .light)
-        for _ in 0..<5 {
+        for _ in 0..<6 {
             try? await Task.sleep(for: .milliseconds(150))
             Suoni.icona()
             leggera.impactOccurred()

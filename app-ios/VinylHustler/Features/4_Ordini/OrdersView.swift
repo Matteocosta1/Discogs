@@ -15,6 +15,8 @@ import UserNotifications
 /// finché l'acquirente non ha pagato Spedito è bloccato (Sollecita / Annulla); ogni scheda mostra il netto.
 struct OrdersView: View {
     @Environment(Seller.self) private var seller
+    /// V68: si rilegge ogni volta che si torna su Ordini (come prima).
+    @Environment(\.sezioneVisibile) private var visibile
     @Query private var discs: [Disc]
     @State private var orders: [Order] = []
     @State private var error: String?
@@ -133,7 +135,7 @@ struct OrdersView: View {
             .senzaTitolo("Ordini")
             .refreshable { await Task { await load() }.value }   // Task a parte: il gesto non la interrompe
             .overlay { if loading && orders.isEmpty { ProgressView("Leggo gli ordini…").tint(Theme.accent) } }
-            .task { await Task { await load() }.value; await OrderWatcher.requestPermission() }
+            .task(id: visibile) { guard visibile else { return }; await Task { await load() }.value; await OrderWatcher.requestPermission() }
             .onReceive(timer) { _ in Task { await load() } }
             .sheet(item: $detail) { o in
                 OrderDetail(order: o, box: box(for: o))
