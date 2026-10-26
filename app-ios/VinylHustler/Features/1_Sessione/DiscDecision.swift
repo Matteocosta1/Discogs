@@ -349,6 +349,7 @@ struct DiscActions: View {
             rigaCondizione("VINILE", attuale: disc.media) { g in
                 guard g != disc.media else { return }
                 disc.mediaRaw = g.rawValue
+                guard disc.releaseID != nil else { return }   // senza disco riconosciuto il prezzo resta com'è
                 disc.price = nil
                 Task { await seller.anteprimaPrezzo(disc) }
             }

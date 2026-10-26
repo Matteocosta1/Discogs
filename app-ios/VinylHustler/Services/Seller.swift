@@ -28,6 +28,7 @@ final class Seller {
     var prezzoMancante: Set<UUID> = []
     /// V60: i dischi riconosciuti dal REC: sulla loro scheda la condizione si sceglie disco per disco.
     var dalVideo: Set<UUID> = []
+    @ObservationIgnored private var prezzoGiro: [UUID: Int] = [:]
     var lastError: String?
 
     private let queue = SerialQueue()
@@ -299,11 +300,14 @@ final class Seller {
     /// V59: appena riconosciuto, il prezzo con la regola di sempre, senza cambiare stato: il venditore lo vede
     /// sulla scheda e poi decide Vendi o Bozza. Vendi / Bozza lo ricalcolano (stesse risposte, già in cache).
     func anteprimaPrezzo(_ disc: Disc) async {
-        guard let rid = disc.releaseID, disc.status == .daConfermare else { return }
+        guard let rid = disc.releaseID, disc.status == .daConfermare else { prezzoInCorso.remove(disc.id); return }
         let grado = disc.media                          // V61: se intanto il grado cambia, questo prezzo non vale più
+        // V61: ogni richiesta ha il suo numero; la rotella si spegne solo alla fine dell'ultima
+        let giro = (prezzoGiro[disc.id] ?? 0) + 1
+        prezzoGiro[disc.id] = giro
         prezzoInCorso.insert(disc.id)
         prezzoMancante.remove(disc.id)
-        defer { if disc.media == grado { prezzoInCorso.remove(disc.id) } }
+        defer { if prezzoGiro[disc.id] == giro { prezzoInCorso.remove(disc.id) } }
         do {
             let suggestions = try await client.priceSuggestions(rid)
             guard let suggested = suggestions[grado.discogs]?.value, let release = await scheda(rid) else {
