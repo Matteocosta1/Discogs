@@ -49,6 +49,17 @@ struct OcchioView: View {
     @State private var vista: UUID?
 
     private let tinta = Theme.accent
+    // V64: le misure della zona fotocamera, per tenere il mirino nello spazio libero e stringere il riquadro se serve
+    @State private var altoTutto: CGFloat = 0
+    @State private var altoSopra: CGFloat = 0
+    @State private var altoSotto: CGFloat = 0
+    @State private var stretto = 0
+    /// Lo spazio che resta al mirino: zona fotocamera meno margini (12 + 12), scritta in alto, comandi, spazi (10 + 10).
+    private var spazioLibero: CGFloat { altoTutto - 24 - altoSopra - altoSotto - 20 }
+    /// Disco riconosciuto (riquadro in alto aperto) e nessuna «Altra foto» in corso.
+    private var discoAperto: Bool { schedaAttuale != nil && attachTo == nil }
+    /// Con il disco riconosciuto il mirino si spegne dopo il «LOCK»; torna mentre riconosce un'altra foto o durante il REC.
+    private var mirinoSpento: Bool { discoAperto && !preso && !registrando && seller.working == 0 }
 
     /// I dischi fotografati da quando hai aperto la fotocamera (il più recente prima).
     private var seen: [Disc] {
@@ -82,11 +93,21 @@ struct OcchioView: View {
         VStack(spacing: 0) {
             ZStack {
                 Color.black
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { altoTutto = $0 }
                 AnteprimaOcchio(motore: motore, rec: rec)
                     .opacity(agganciato ? 1 : 0)
                     .animation(.easeOut(duration: 0.4), value: agganciato)
+                // V64: il mirino sta nello spazio libero tra la scritta in alto (e il riquadro del disco) e i comandi:
+                // mai sopra le scritte o i bottoni. Con il disco riconosciuto, dopo il «LOCK» si spegne.
+                // (Resta sotto ologrammi, caricamento e lampo, come prima.)
                 MirinoOcchio(agganciato: agganciato, scattando: registrando, analizzo: seller.working > 0,
-                             preso: preso, tinta: tinta)
+                             preso: preso, tinta: tinta, spento: mirinoSpento)
+                    .frame(height: max(0, spazioLibero))
+                    .padding(.horizontal, 18)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .offset(y: 12 + altoSopra + 10)
+                    .opacity(mirinoSpento ? 0 : 1)
+                    .animation(.easeOut(duration: 0.4), value: mirinoSpento)
                     .allowsHitTesting(false)
                 // V60: gli ologrammi del REC sopra le copertine agganciate
                 if registrando || rec.haTracce {
@@ -101,7 +122,9 @@ struct OcchioView: View {
                 Color.white.opacity(lampo ? 0.85 : 0).allowsHitTesting(false)
                 VStack(spacing: 10) {
                     topBar
-                    Spacer()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { altoSopra = $0 }
+                    Spacer(minLength: 0)                    // qui sotto, nello stesso spazio, c'è il mirino
+                  VStack(spacing: 10) {
                     if registrando {
                         HStack(spacing: 8) {
                             recBadge
@@ -132,7 +155,11 @@ struct OcchioView: View {
                         .padding(.horizontal, 12).padding(.vertical, 6)
                         .background(Color.black.opacity(0.5))
                         .clipShape(Capsule())
+                        // V64: con la scheda aperta «INQUADRA UN DISCO» non serve (lo dice la scheda); gli avvisi restano
+                        .opacity(stato == "INQUADRA UN DISCO" && discoAperto ? 0 : 1)
                     controls
+                  }
+                  .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { altoSotto = $0 }
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
@@ -144,6 +171,15 @@ struct OcchioView: View {
         .overlay { lettoreGrande }
         .statusBarHidden()
         .task { await prepara() }
+        // V64: telefoni piccoli (iPhone SE) con la scheda aperta: se lo spazio non basta, il riquadro del disco si stringe
+        // (prima via cartellini e formato, poi la riga DISCO / VERSIONE). Riparte pieno quando cambia lo spazio o il disco.
+        .onChange(of: spazioLibero) { _, l in
+            if l < 0, stretto < 2, let r = schedaAttuale {
+                stretto = (stretto == 0 && !PannelloDisco.haExtra(r)) ? 2 : stretto + 1
+            }
+        }
+        .onChange(of: altoTutto - altoSotto) { old, new in if new > old { stretto = 0 } }   // solo se lo spazio cresce
+        .onChange(of: schedaAttuale?.id) { _, _ in stretto = 0 }
         .onDisappear {
             motore.ferma()
             ascolto.chiudi()
@@ -227,7 +263,7 @@ struct OcchioView: View {
             .shadow(color: tinta.opacity(0.6), radius: 6)
             // V59: il riquadro del disco riconosciuto, sotto la scritta (come il Satellite di JARVIS)
             if let r = schedaAttuale {
-                PannelloDisco(release: r, versione: versioneAttuale)
+                PannelloDisco(release: r, versione: versioneAttuale, stretto: stretto)
                     .id(r.id)
                     .transition(.scale(scale: 0.3, anchor: .topLeading).combined(with: .opacity))
             }
@@ -669,6 +705,14 @@ struct MirinoOcchio: View {
     /// Disco appena riconosciuto: la cornice si allarga un filo e si accende ("LOCK").
     var preso = false
     var tinta: Color = Theme.accent
+    /// V64: spento (scheda aperta): non si disegna più (batteria).
+    var spento = false
+
+    /// V64: lato e angolo in alto a sinistra della cornice, dentro lo spazio che ha: sopra resta posto per AF · AUTO.
+    static func misure(_ w: Double, _ h: Double) -> (lato: Double, x0: Double, y0: Double) {
+        let lato = max(0, min(w * 0.78, h - 26))
+        return (lato, (w - lato) / 2, max(22, (h - lato) / 2))
+    }
 
     private var scala: CGFloat { analizzo ? 0.9 : (preso ? 1.03 : 1) }
     private var etichetta: String {
@@ -680,12 +724,16 @@ struct MirinoOcchio: View {
 
     var body: some View {
         GeometryReader { geo in
-            let lato = min(geo.size.width, geo.size.height) * 0.78
+            let m = Self.misure(Double(geo.size.width), Double(geo.size.height))
+            let lato = CGFloat(m.lato)
+            let centroY: CGFloat = geo.size.height > 0 ? CGFloat(m.y0 + m.lato / 2) / geo.size.height : 0.5
+            let ancora = UnitPoint(x: 0.5, y: centroY)
             ZStack {
-                TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
+                TimelineView(.animation(minimumInterval: 1 / 30, paused: spento || m.lato < 120)) { ctx in
                     disegno(t: ctx.date.timeIntervalSinceReferenceDate)
                 }
-                .scaleEffect(scala)
+                // si stringe e si allarga attorno al centro della cornice (che non sempre è il centro della vista)
+                .scaleEffect(scala, anchor: ancora)
                 // le scritte sopra gli angoli della cornice
                 HStack {
                     Text("AF · AUTO")
@@ -695,8 +743,9 @@ struct MirinoOcchio: View {
                 .font(Theme.mono(9, .bold)).tracking(1.5)
                 .foregroundStyle((scattando ? Theme.warn : (preso ? Theme.glow : tinta)).opacity(0.85))
                 .frame(width: lato * scala)
-                .position(x: geo.size.width / 2, y: (geo.size.height - lato * scala) / 2 - 12)
+                .position(x: geo.size.width / 2, y: CGFloat(m.y0) + lato * (1 - scala) / 2 - 12)
             }
+            .opacity(m.lato < 120 ? 0 : 1)                       // spazio troppo piccolo: niente mirino
             .animation(.spring(duration: 0.45, bounce: 0.35), value: scala)
             .animation(.easeOut(duration: 0.2), value: etichetta)
         }
@@ -705,10 +754,11 @@ struct MirinoOcchio: View {
     private func disegno(t: Double) -> some View {
         Canvas { gc, size in
             let w = Double(size.width), h = Double(size.height)
-            let c = CGPoint(x: w / 2, y: h / 2)
-            let lato = min(w, h) * 0.78
+            let m = Self.misure(w, h)
+            let lato = m.lato
+            let c = CGPoint(x: w / 2, y: m.y0 + lato / 2)
             let colore = scattando ? Theme.warn : (preso ? Theme.glow : tinta)
-            let x0 = (w - lato) / 2, y0 = (h - lato) / 2
+            let x0 = m.x0, y0 = m.y0
             let braccio = lato * 0.15
             let r = 10.0                                          // angoli arrotondati
             // respiro della luce: lento a riposo, veloce mentre aggancia

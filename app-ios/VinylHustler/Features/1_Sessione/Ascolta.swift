@@ -9,6 +9,8 @@ import WebKit
 struct PannelloDisco: View {
     let release: Release
     let versione: String
+    /// V64: 0 = pieno; 1 = senza cartellini e formato (telefoni piccoli); 2 = anche senza la riga DISCO / VERSIONE.
+    var stretto = 0
     /// Quando il riquadro è comparso: da qui partono le decodifiche (una nuova release = un riquadro nuovo, con .id).
     @State private var aperto = Date()
     @State private var scan: CGFloat = 0
@@ -16,6 +18,11 @@ struct PannelloDisco: View {
 
     private var artista: String {
         release.artist.replacingOccurrences(of: #" \(\d+\)$"#, with: "", options: .regularExpression)
+    }
+    /// V64: ha righe che si possono togliere quando lo spazio non basta (cartellini o formato)?
+    static func haExtra(_ r: Release) -> Bool {
+        let p = PannelloDisco(release: r, versione: "")
+        return !p.cartellini.isEmpty || !p.etichettaFormato.isEmpty
     }
     private var cartellini: [String] {
         [release.year.map(String.init) ?? "", release.country ?? "", release.labels?.first?.catno ?? ""]
@@ -27,6 +34,7 @@ struct PannelloDisco: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
+            if stretto < 2 {
             riga(0) {
                 HStack {
                     Text("● DISCO")
@@ -34,6 +42,7 @@ struct PannelloDisco: View {
                     if !versione.isEmpty { decodifica("VERSIONE \(versione)", 0) }
                 }
                 .font(Theme.mono(9, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
+            }
             }
             riga(1) {
                 decodifica(release.title.uppercased(), 1)
@@ -45,7 +54,7 @@ struct PannelloDisco: View {
                     .font(Theme.mono(11, .bold)).tracking(1.5)
                     .foregroundStyle(Theme.accent).lineLimit(1)
             }
-            if !cartellini.isEmpty {
+            if !cartellini.isEmpty && stretto == 0 {
                 riga(3) {
                     HStack(spacing: 6) {
                         ForEach(cartellini, id: \.self) { c in
@@ -58,7 +67,7 @@ struct PannelloDisco: View {
                     }
                 }
             }
-            if !etichettaFormato.isEmpty {
+            if !etichettaFormato.isEmpty && stretto == 0 {
                 riga(4) {
                     decodifica(etichettaFormato, 4)
                         .font(Theme.mono(9, .semibold)).tracking(1.2)
