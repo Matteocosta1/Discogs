@@ -119,17 +119,21 @@ final class Seller {
             working -= 1
             try? context.save()
         }
+        // V67: eliminato mentre aspettava il suo turno: non si riconosce nemmeno (niente costo, niente voce)
+        guard disc.status != .tolto else { return }
         Suoni.guardo()
         let signedIn = await Backend.shared.accessToken() != nil
         let recognizer = Recognizer(client: client, ai: signedIn ? AIService() : nil)
         let outcome = await recognizer.scan(images, video: video)
+        // V67: eliminato mentre lo stava riconoscendo: il risultato si butta, il disco non torna più
+        guard disc.status != .tolto else { return }
         let share = outcome.found.isEmpty ? outcome.aiCost : outcome.aiCost / Double(outcome.found.count)
         disc.aiCost += share
         guard let first = outcome.found.first else {
             disc.status = .daControllare
             disc.reason = outcome.note
             Suoni.errore()
-            announce([])
+            announce([], dalREC: dalVideo.contains(disc.id))
             return
         }
         // Il primo disco va in quello già creato; gli altri (video con più dischi) diventano dischi nuovi,
@@ -155,14 +159,21 @@ final class Seller {
             disc.photoKinds = first.images.compactMap { disc.photoKinds[safe: $0] }
         }
         if discs.contains(where: { $0.status == .daConfermare }) { Suoni.riconosciuto() } else { Suoni.errore() }
-        announce(discs)
+        announce(discs, dalREC: dalVideo.contains(disc.id))
     }
 
     /// La voce parte appena finito il suono di "riconosciuto", per non accavallarsi.
-    private func announce(_ discs: [Disc]) {
+    /// V67: i dischi del REC si leggono in fila, dal primo riconosciuto in poi: il successivo parte quando
+    /// il precedente ha finito (niente frasi che si interrompono a vicenda).
+    private func announce(_ discs: [Disc], dalREC: Bool = false) {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(450))
-            Voice.shared.say(found: discs)
+            if dalREC {
+                let titoli = discs.compactMap { d in d.status == .daConfermare ? Voice.spoken(d.releaseTitle) : nil }
+                Voice.shared.inFila(titoli.isEmpty ? ["Disco non riconosciuto."] : titoli.map { "\($0)." })
+            } else {
+                Voice.shared.say(found: discs)
+            }
         }
     }
 

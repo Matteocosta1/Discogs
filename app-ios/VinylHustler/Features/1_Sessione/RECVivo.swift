@@ -1,11 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// V60 · proposta 11 — il REC dal vivo, con gli ologrammi alla JARVIS (scelta 1 di Alessandro, 25 ott).
+/// V60 · proposta 11 — il REC dal vivo (V67: con l'aggancio alla Tony Stark, vedi HologrammiREC).
 /// Mentre si filma, il telefono trova le copertine nell'inquadratura (gratis, sul telefono: CopertineVive).
-/// Una copertina vista in almeno 3 fotogrammi e ferma per un attimo si «aggancia»: angoli verdi, fascio di luce,
-/// vinile olografico; intanto se ne prende il fotogramma e parte il riconoscimento (come uno scatto).
-/// Quando arriva la risposta il cartellino si riempie con artista, titolo e prezzo.
+/// Una copertina vista in almeno 3 fotogrammi e ferma per un attimo si «aggancia»: intanto se ne prende
+/// il fotogramma e parte il riconoscimento (come uno scatto). Quando arriva la risposta l'etichetta si riempie
+/// con artista, titolo e prezzo.
 @MainActor @Observable
 final class RECVivo {
     struct Traccia: Identifiable {
@@ -17,7 +17,7 @@ final class RECVivo {
         var ultimo: Date
         var fermoDa: Date
         var agganciato: Date?
-        var ordine = 0                  // 0, 1, 2… nell'ordine di aggancio (sfasa giro e scansione dell'ologramma)
+        var ordine = 0                  // 0, 1, 2… nell'ordine di aggancio (il numero «01» dell'etichetta)
         var discID: UUID?
     }
 
@@ -110,47 +110,55 @@ final class RECVivo {
     }
 }
 
-/// Gli ologrammi sopra le copertine agganciate (stesso disegno del mock-up approvato, in verde Vinyl Hustler).
+/// V67 — l'AGGANCIO alla Tony Stark (al posto degli ologrammi, come nel mock-up approvato il 26 ott):
+/// · cerca: sulle copertine viste ma non ancora agganciate quattro angoli tenui, un po' larghi, che respirano;
+/// · aggancio: gli angoli scattano sulla copertina in 0,22 s (con un filo di rimbalzo) e al centro il mirino
+///   ruota di un quarto di giro e si blocca;
+/// · etichetta sopra l'angolo in alto a sinistra: «01 · LOCK / ANALISI…», poi artista, titolo e prezzo che si decodificano.
+/// Tutti insieme: ogni disco resta agganciato finché è nell'inquadratura. Niente linee, niente fasci, niente vinile.
 struct HologrammiREC: View {
     let rec: RECVivo
     let dischi: [Disc]
     var valuta = "EUR"
+    /// Quando ogni cartellino ha avuto i dati veri (per farli decodificare in quel momento).
+    @State private var pronti: [UUID: Date] = [:]
 
-    /// Quello che dice il cartellino di un disco agganciato.
+    /// Quello che dice l'etichetta di un disco agganciato.
     private struct Cartellino {
         var riga1: String
         var riga2: String
         var analisi: Bool
-        var errore: Bool
     }
 
-    // V65: tutto più lento (come nel mock-up approvato)
-    private static let neon: [(ms: Double, luce: Double)] = [(0, 0), (110, 0.9), (180, 0.15), (270, 1), (400, 0.4), (490, 1)]
-
     var body: some View {
+        let schede = cartellini(per: rec.tracce)
+        let conDati = Set(schede.filter { !$0.value.analisi }.map(\.key))
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
             let tracce = rec.tracce
-            let schede = cartellini(per: tracce)
             Canvas { gc, size in
-                for t in tracce { disegna(gc, t, schede[t.id], ora: ctx.date, largoVista: size.width) }
+                for t in tracce { disegna(gc, t, schede[t.id], ora: ctx.date, larghezza: size.width) }
             }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .onChange(of: conDati, initial: true) { _, nuovi in
+            let ora = Date()
+            for id in nuovi where pronti[id] == nil { pronti[id] = ora }
+        }
     }
 
     private func cartellini(per tracce: [RECVivo.Traccia]) -> [UUID: Cartellino] {
         var out: [UUID: Cartellino] = [:]
         for t in tracce where t.agganciato != nil {
             guard let id = t.discID, let d = dischi.first(where: { $0.id == id }) else {
-                out[t.id] = Cartellino(riga1: "AGGANCIATO", riga2: "ANALISI", analisi: true, errore: false)
+                out[t.id] = Cartellino(riga1: "LOCK", riga2: "ANALISI…", analisi: true)
                 continue
             }
             switch d.status {
             case .inLavorazione:
-                out[t.id] = Cartellino(riga1: "ANALISI DEL DISCO", riga2: "DISCOGS", analisi: true, errore: false)
+                out[t.id] = Cartellino(riga1: "LOCK", riga2: "ANALISI…", analisi: true)
             case .daControllare, .bloccato:
-                out[t.id] = Cartellino(riga1: "NON RICONOSCIUTO", riga2: "RIPROVA CON UNA FOTO", analisi: false, errore: true)
+                out[t.id] = Cartellino(riga1: "NON RICONOSCIUTO", riga2: "RIPROVA CON UNA FOTO", analisi: false)
             default:
                 // il titolo è «Artista - Titolo (Etichetta, Paese, Anno)»: via la parentesi finale, poi artista e titolo
                 let base = d.releaseTitle.replacingOccurrences(of: #"\s*\([^)]*\)$"#, with: "", options: .regularExpression)
@@ -160,117 +168,76 @@ struct HologrammiREC: View {
                 let titolo = parti.count > 1 ? parti.dropFirst().joined(separator: trattino) : ""
                 let prezzo = d.price.map { $0.formatted(.currency(code: valuta).precision(.fractionLength(0...2))) } ?? ""
                 let riga2 = [titolo, prezzo].filter { !$0.isEmpty }.joined(separator: " · ")
-                out[t.id] = Cartellino(riga1: artista.uppercased(), riga2: riga2.uppercased(), analisi: false, errore: false)
+                out[t.id] = Cartellino(riga1: artista.uppercased(), riga2: riga2.uppercased(), analisi: false)
             }
         }
         return out
     }
 
-    private func verde(_ a: Double) -> Color { Theme.glow.opacity(a) }
+    private func verde(_ a: Double) -> Color { Theme.glow.opacity(max(0, min(1, a))) }
 
-    private func disegna(_ gc: GraphicsContext, _ t: RECVivo.Traccia, _ c: Cartellino?, ora: Date, largoVista: CGFloat) {
+    /// Curva con un filo di rimbalzo (lo «scatto» degli angoli).
+    private static func scatto(_ x: Double) -> Double {
+        let c = min(1, max(0, x)), c1 = 1.70158, c3 = c1 + 1
+        return 1 + c3 * pow(c - 1, 3) + c1 * pow(c - 1, 2)
+    }
+
+    private func disegna(_ gc: GraphicsContext, _ t: RECVivo.Traccia, _ c: Cartellino?, ora: Date, larghezza: CGFloat) {
         var gc = gc
         let q = t.angoli
         guard q.count == 4 else { return }
-        // V65: uno alla volta: si vede solo il disco al centro; quelli che vanno verso i lati si spengono piano
-        let mezzo = largoVista * 0.18
-        let distanza = abs(t.centro.x - largoVista / 2)
-        let fuoco = 1 - min(1, max(0, Double((distanza - mezzo) / max(1, mezzo))))
-        guard fuoco > 0 else { return }
         guard let quando = t.agganciato else {
-            // vista ma non ancora agganciata: angoli tenui (si vede che la sta guardando)
-            if t.visti >= 2 { angoli(&gc, q, scala: 1.0, alfa: 0.35 * fuoco) }
+            // cerca: angoli tenui un po' larghi che respirano
+            guard t.visti >= 2 else { return }
+            let r = 0.5 + 0.5 * sin(ora.timeIntervalSinceReferenceDate * 6.25)
+            angoli(&gc, q, scala: 1.12 + 0.02 * CGFloat(r), alfa: 0.25 + 0.2 * r, spessore: 1.4)
             return
         }
         let tt = ora.timeIntervalSince(quando) * 1000
-        var luce = 1.0
-        for passo in Self.neon where tt >= passo.ms { luce = passo.luce }
-        luce *= fuoco
-        gc.opacity = luce
-        // 1 · angoli che agganciano la copertina (si stringono sul disco)
-        let scala = CGFloat(1.28 - 0.28 * morbido(tt / 650))
+        // 1 · gli angoli scattano sulla copertina
+        let scala = CGFloat(1.35 - 0.35 * Self.scatto(tt / 220))
         var luminoso = gc
         luminoso.addFilter(.shadow(color: verde(0.9), radius: 6))
-        angoli(&luminoso, q, scala: scala, alfa: 0.95)
-        // 2 · il fascio di luce e 3 · il vinile a fil di ferro sopra il bordo alto
-        let alto = CGPoint(x: (q[0].x + q[1].x) / 2, y: (q[0].y + q[1].y) / 2)
-        let latoAlto = hypot(q[1].x - q[0].x, q[1].y - q[0].y)
-        let ap = morbido(tt / 700)
-        let rx = max(36, min(64, latoAlto * 0.42)) * CGFloat(ap), ry = rx * 0.29
-        let hy = alto.y - 62
-        if ap > 0.05 {
-            var fascio = Path()
-            fascio.move(to: CGPoint(x: alto.x - 20, y: alto.y))
-            fascio.addLine(to: CGPoint(x: alto.x + 20, y: alto.y))
-            fascio.addLine(to: CGPoint(x: alto.x + rx, y: hy))
-            fascio.addLine(to: CGPoint(x: alto.x - rx, y: hy))
-            fascio.closeSubpath()
-            gc.fill(fascio, with: .linearGradient(Gradient(colors: [verde(0.22), verde(0.04)]),
-                                                 startPoint: CGPoint(x: 0, y: alto.y), endPoint: CGPoint(x: 0, y: hy)))
-            let centro = CGPoint(x: alto.x, y: hy)
-            let ellisse = { (r: CGFloat, dy: CGFloat) -> Path in
-                Path(ellipseIn: CGRect(x: centro.x - rx * r, y: centro.y + dy - ry * r, width: 2 * rx * r, height: 2 * ry * r))
-            }
-            gc.fill(ellisse(1, 0), with: .color(verde(0.07)))                         // il velo
-            gc.stroke(ellisse(1, 4), with: .color(verde(0.35)), lineWidth: 1)         // lo spessore
-            gc.stroke(ellisse(1, 0), with: .color(verde(0.95)), lineWidth: 1.6)       // il bordo
-            for r in [0.86, 0.74, 0.62, 0.5] as [CGFloat] {                           // i solchi
-                gc.stroke(ellisse(r, 0), with: .color(verde(0.4)), lineWidth: 0.8)
-            }
-            gc.fill(ellisse(0.3, 0), with: .color(verde(0.28)))                       // l'etichetta
-            let giro = tt / 1000 * 1.7 + Double(t.ordine)
-            for s in 0..<12 {                                                         // i raggi: si vede che gira
-                let an = giro + Double(s) * Double.pi / 6
-                let cs = CGFloat(cos(an)), sn = CGFloat(sin(an))
-                var raggio = Path()
-                raggio.move(to: CGPoint(x: centro.x + cs * rx * 0.3, y: centro.y + sn * ry * 0.3))
-                raggio.addLine(to: CGPoint(x: centro.x + cs * rx, y: centro.y + sn * ry))
-                gc.stroke(raggio, with: .color(verde(0.15 + 0.45 * Double(sn + 1) / 2)), lineWidth: 0.8)
-            }
-            // la riga di scansione che attraversa l'ologramma
-            let p = (ora.timeIntervalSinceReferenceDate / 1.4 + Double(t.ordine) * 0.37).truncatingRemainder(dividingBy: 1)
-            let ys = hy - ry - 4 + (2 * ry + 12) * CGFloat(p)
-            let k = (ys - hy) / (ry + 4)
-            let lx = rx * sqrt(max(0, 1 - k * k))
-            if lx > 2 {
-                var riga = Path()
-                riga.move(to: CGPoint(x: centro.x - lx, y: ys))
-                riga.addLine(to: CGPoint(x: centro.x + lx, y: ys))
-                gc.stroke(riga, with: .color(verde(0.55)), lineWidth: 1)
-            }
+        angoli(&luminoso, q, scala: scala, alfa: 0.95, spessore: 2.6)
+        // 2 · il mirino (target): quattro archi che ruotano di un quarto di giro e si bloccano
+        let centro = t.centro
+        let lato = (hypot(q[1].x - q[0].x, q[1].y - q[0].y) + hypot(q[3].x - q[0].x, q[3].y - q[0].y)) / 2
+        let ap = morbido(tt / 260)
+        let giro = (1 - morbido(tt / 320)) * Double.pi / 2
+        let raggio = lato * (0.18 + 0.08 * CGFloat(1 - ap))
+        let alfaMirino = (tt < 700 ? 0.85 : 0.85 - 0.5 * min(1, (tt - 700) / 400)) * ap
+        for k in 0..<4 {
+            let a0 = giro + Double(k) * Double.pi / 2 + 0.35
+            var arco = Path()
+            arco.addArc(center: centro, radius: raggio, startAngle: .radians(a0), endAngle: .radians(a0 + Double.pi / 2 - 0.7), clockwise: false)
+            luminoso.stroke(arco, with: .color(verde(alfaMirino)), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
         }
-        // 4 · il cartellino sopra l'ologramma
-        guard let c, tt > 500 else { return }
-        let a = morbido((tt - 500) / 450)
-        // il testo esce come simboli e si sistema (0,8 s dopo l'aggancio, in 0,9 s); in analisi resta mescolato
-        let mescola: Double = c.analisi ? 0.55 : max(0, 1 - (tt - 800) / 900)
-        let colore: Color = c.errore ? Theme.warn : Theme.glow
-        let t1 = gc.resolve(Text(Glifi.rimescola(c.riga1, mescola)).font(Theme.mono(10, .bold)).foregroundStyle(Color(hex: 0xEAFFEA)))
-        let t2 = gc.resolve(Text(Glifi.rimescola(c.riga2, mescola)).font(Theme.mono(9, .bold)).foregroundStyle(colore))
-        let s1 = t1.measure(in: CGSize(width: 220, height: 40))
-        let s2 = t2.measure(in: CGSize(width: 220, height: 40))
-        let larghezza = min(220, max(s1.width, s2.width)) + 18
-        let altezza = s1.height + (c.riga2.isEmpty ? 0 : s2.height + 2) + 12
-        let base = hy - ry - 10                                                          // V65: uno alla volta, niente altezze alterne
-        let rett = CGRect(x: alto.x - larghezza / 2, y: base - altezza, width: larghezza, height: altezza)
+        luminoso.fill(Path(ellipseIn: CGRect(x: centro.x - 1.8, y: centro.y - 1.8, width: 3.6, height: 3.6)), with: .color(verde(alfaMirino)))
+        // 3 · l'etichetta sopra l'angolo in alto a sinistra
+        guard let c, tt > 180 else { return }
+        let a = morbido((tt - 180) / 220)
+        let numero = String(format: "%02d", t.ordine + 1)
+        let mescola: Double = c.analisi ? 0 : pronti[t.id].map { max(0, 1 - ora.timeIntervalSince($0) / 0.42) } ?? 1
+        let t1 = gc.resolve(Text("\(numero) · " + Glifi.rimescola(c.riga1, mescola)).font(Theme.mono(10, .bold)).foregroundStyle(Color(hex: 0xEAFFEA)))
+        let t2 = gc.resolve(Text(Glifi.rimescola(c.riga2, mescola)).font(Theme.mono(9, .bold)).foregroundStyle(Theme.glow))
+        let s1 = t1.measure(in: CGSize(width: 230, height: 40))
+        let s2 = t2.measure(in: CGSize(width: 230, height: 40))
+        let larga = min(230, max(s1.width, s2.width)) + 16
+        let alta = s1.height + s2.height + 12
+        let sinistra = q.min(by: { $0.x + $0.y < $1.x + $1.y }) ?? q[0]          // l'angolo in alto a sinistra
+        let x = min(max(4, sinistra.x - 5), max(4, larghezza - larga - 4))
+        let rett = CGRect(x: x, y: sinistra.y - 8 - alta, width: larga, height: alta)
         var cg = gc
-        cg.opacity = luce * a
-        let forma = Path(roundedRect: rett, cornerRadius: 9)
+        cg.opacity = a
+        let forma = Path(roundedRect: rett, cornerRadius: 7)
         cg.fill(forma, with: .color(Color(red: 4 / 255, green: 10 / 255, blue: 6 / 255).opacity(0.82)))
-        cg.stroke(forma, with: .color(colore.opacity(0.75)), lineWidth: 1)
-        // asta corta dal cartellino all'ologramma
-        var asta = Path()
-        asta.move(to: CGPoint(x: alto.x, y: base))
-        asta.addLine(to: CGPoint(x: alto.x, y: hy - ry))
-        cg.stroke(asta, with: .color(verde(0.6)), lineWidth: 1.5)
-        cg.draw(t1, in: CGRect(x: rett.minX + 9, y: rett.minY + 6, width: larghezza - 18, height: s1.height))
-        if !c.riga2.isEmpty {
-            cg.draw(t2, in: CGRect(x: rett.minX + 9, y: rett.minY + 6 + s1.height + 2, width: larghezza - 18, height: s2.height))
-        }
+        cg.stroke(forma, with: .color(verde(0.75)), lineWidth: 1)
+        cg.draw(t1, in: CGRect(x: rett.minX + 8, y: rett.minY + 5, width: larga - 16, height: s1.height))
+        cg.draw(t2, in: CGRect(x: rett.minX + 8, y: rett.minY + 7 + s1.height, width: larga - 16, height: s2.height))
     }
 
     /// Gli angoli verdi sulla copertina (lungo i suoi lati, anche se è storta), allargati di `scala` intorno al centro.
-    private func angoli(_ gc: inout GraphicsContext, _ q: [CGPoint], scala: CGFloat, alfa: Double) {
+    private func angoli(_ gc: inout GraphicsContext, _ q: [CGPoint], scala: CGFloat, alfa: Double, spessore: CGFloat) {
         let c = RECVivo.centro(q)
         let p = q.map { CGPoint(x: c.x + ($0.x - c.x) * scala, y: c.y + ($0.y - c.y) * scala) }
         var tratti = Path()
@@ -284,6 +251,6 @@ struct HologrammiREC: View {
                 tratti.addLine(to: CGPoint(x: a.x + dx / l * braccio, y: a.y + dy / l * braccio))
             }
         }
-        gc.stroke(tratti, with: .color(verde(alfa)), style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+        gc.stroke(tratti, with: .color(verde(alfa)), style: StrokeStyle(lineWidth: spessore, lineCap: .round, lineJoin: .round))
     }
 }

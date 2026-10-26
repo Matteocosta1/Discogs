@@ -44,6 +44,48 @@ final class Voice {
 
     func say(_ text: String) { speak([text]) }
 
+    // MARK: - V67 · in fila (i dischi del REC)
+
+    private var fila: [String] = []
+    private var filaAttiva = false
+
+    /// Mette le frasi in fila: si dicono una dopo l'altra, ognuna quando la precedente ha finito.
+    /// Una frase normale (say) interrompe la fila e la svuota.
+    func inFila(_ frasi: [String]) {
+        guard enabled, !frasi.isEmpty else { return }
+        fila += frasi
+        guard !filaAttiva else { return }
+        filaAttiva = true
+        Task { @MainActor in
+            while !fila.isEmpty {
+                let frase = fila.removeFirst()
+                turn += 1
+                let mine = turn
+                // la frase della fila non si sovrappone a quella che sta finendo
+                player?.stop()
+                if engineReady { node.stop() }
+                if synth.isSpeaking { synth.stopSpeaking(at: .word) }
+                var detta = false
+                if useEleven, Backend.shared.isConfigured { detta = await sayEleven(frase, turn: mine) }
+                if !detta {
+                    guard mine == turn else { break }
+                    sayApple(frase)
+                    // aspetta che la voce del telefono finisca (al massimo 12 s)
+                    try? await Task.sleep(for: .milliseconds(150))
+                    var attesa = 0
+                    while synth.isSpeaking && attesa < 120 {
+                        try? await Task.sleep(for: .milliseconds(100))
+                        attesa += 1
+                    }
+                }
+                guard mine == turn else { break }          // nel frattempo ha parlato qualcos'altro: la fila si ferma
+            }
+            filaAttiva = false
+            // arrivate altre frasi proprio mentre la fila si fermava: ripartono
+            if !fila.isEmpty { let resto = fila; fila = []; inFila(resto) }
+        }
+    }
+
     // MARK: - Voce ElevenLabs (la voce di Vinyl Hustler)
 
     var useEleven: Bool { mode == .eleven }
@@ -65,6 +107,7 @@ final class Voice {
     /// Dice i pezzi uno dopo l'altro. Una frase nuova interrompe quella in corso.
     private func speak(_ parts: [String]) {
         guard enabled else { return }
+        fila.removeAll()                                    // V67: una frase normale svuota la fila del REC
         turn += 1
         let mine = turn
         player?.stop()
