@@ -174,8 +174,7 @@ struct DraftsView: View {
         let list = shownDrafts
         total = ready.count + list.count
         done = 0
-        Suoni.pubblico()
-        Suoni.svuota()
+        Suoni.svuota()                                  // V61: un suono solo (prima tick e svuota insieme)
         await seller.publishReady(ready)
         done = ready.count
         for l in list.reversed() { await sell(l, insieme: true) }       // dal basso verso l'alto

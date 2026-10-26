@@ -55,12 +55,14 @@ func morbido(_ x: Double) -> Double {
 /// Sfondo HUD (proposta 6): dietro le sezioni un bagliore verde che respira e una griglia a quadretti appena visibile
 /// che scorre. Tutto guidato da TimelineView, quindi non tocca la disposizione della pagina.
 struct SfondoHUD: View {
+    /// false = sotto la fotocamera a tutto schermo: lo sfondo non si vede e si ferma.
+    var attivo = true
     @Environment(\.accessibilityReduceMotion) private var fermo
     /// Le pagine delle sezioni non guardate restano vive nel TabView: lì lo sfondo si ferma (batteria).
     @State private var visibile = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: fermo || !visibile)) { ctx in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: fermo || !visibile || !attivo)) { ctx in
             let t = fermo ? 0 : ctx.date.timeIntervalSinceReferenceDate
             Canvas { gc, size in
                 // il bagliore in alto che respira (9 s)
@@ -89,7 +91,7 @@ struct SfondoHUD: View {
 
 extension View {
     /// Fondo nero dell'app con sopra lo sfondo HUD (proposta 6): per le pagine principali delle cinque sezioni.
-    func sfondoHUD() -> some View {
-        self.background { ZStack { Theme.bg; SfondoHUD() }.ignoresSafeArea() }
+    func sfondoHUD(attivo: Bool = true) -> some View {
+        self.background { ZStack { Theme.bg; SfondoHUD(attivo: attivo) }.ignoresSafeArea() }
     }
 }

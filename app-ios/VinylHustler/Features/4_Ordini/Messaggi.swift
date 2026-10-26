@@ -182,6 +182,15 @@ enum ChatOrdini {
         return Date(timeIntervalSince1970: s)
     }
 
+    /// La prima volta che l'app legge i messaggi (V61): quelli arrivati prima non contano come «non letti».
+    static var inizio: Date {
+        let k = "chatInizio"
+        if let t = UserDefaults.standard.object(forKey: k) as? Double { return Date(timeIntervalSince1970: t) }
+        let ora = Date()
+        UserDefaults.standard.set(ora.timeIntervalSince1970, forKey: k)
+        return ora
+    }
+
     static func segnaLetta(_ id: String) {
         var d = (UserDefaults.standard.dictionary(forKey: chiave) as? [String: Double]) ?? [:]
         d[id] = Date().timeIntervalSince1970
@@ -190,7 +199,7 @@ enum ChatOrdini {
 
     /// I messaggi dell'acquirente arrivati dopo l'ultima lettura.
     static func nonLetti(_ messaggi: [OrderMessage], ordine: Order) -> Int {
-        let soglia = letta(ordine.id) ?? .distantPast
+        let soglia = letta(ordine.id) ?? inizio
         let lui = ordine.buyer.username.lowercased()
         return messaggi.filter { m in
             (m.type ?? "message") == "message"

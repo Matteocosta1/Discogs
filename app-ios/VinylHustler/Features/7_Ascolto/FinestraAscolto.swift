@@ -109,6 +109,7 @@ struct FinestraAscolto: View {
         }
         .ignoresSafeArea()
         .task { await apri() }
+        .onDisappear { ascolto.chiudi() }               // comunque si chiuda, la musica si ferma
     }
 
     // MARK: - Apertura e chiusura
@@ -124,7 +125,8 @@ struct FinestraAscolto: View {
                 Suoni.chatPronta()
             }
         }
-        if let r = await seller.scheda(bersaglio.releaseID) {
+        if let r = await seller.scheda(bersaglio.releaseID), !Task.isCancelled {
+            if case .chiude(_) = fase { return }        // chiusa mentre arrivava la scheda: niente tracce caricate
             await ascolto.prepara(r)
         }
     }

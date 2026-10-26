@@ -66,6 +66,7 @@ struct StatsView: View {
                 Suoni.schedaPronta()
             }
         } catch {
+            if error.isCancellation { return }          // chiusa mentre caricava: non è un errore
             Suoni.errore()
             self.error = error.localizedDescription
         }

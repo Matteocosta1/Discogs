@@ -75,8 +75,8 @@ struct OcchioView: View {
                              preso: preso, tinta: tinta)
                     .allowsHitTesting(false)
                 // V60: gli ologrammi del REC sopra le copertine agganciate
-                if registrando || !rec.tracce.isEmpty {
-                    HologrammiREC(rec: rec, dischi: seen)
+                if registrando || rec.haTracce {
+                    HologrammiREC(rec: rec, dischi: seen, valuta: seller.currency)
                 }
                 // V60: mentre riconosce, al centro del mirino il caricamento alla JARVIS
                 if let da = analisiDa, !registrando {           // durante il REC parlano gli ologrammi
@@ -800,7 +800,7 @@ struct AnteprimaOcchio: UIViewRepresentable {
         // V60 · REC dal vivo: le copertine dalla fotocamera ai punti dell'anteprima, poi al tracker
         let tracker = rec
         motore.suCopertine = { [weak v, weak tracker] quadri in
-            Task { @MainActor in
+            Task { @MainActor [v, tracker] in
                 guard let v, let tracker else { return }
                 tracker.aggiorna(quadri.map { q in q.map { v.anteprima.layerPointConverted(fromCaptureDevicePoint: $0) } },
                                  camera: quadri)
@@ -960,7 +960,8 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         sessione.addInput(ingresso)
         guard sessione.canAddOutput(foto) else { sessione.commitConfiguration(); return false }
         sessione.addOutput(foto)
-        if sessione.canAddOutput(video) { sessione.addOutput(video) }
+        // V60: il REC lavora sui fotogrammi dal vivo, non scrive più un file: l'uscita video non serve
+        // (video-file e fotogrammi insieme non vanno d'accordo su tutti gli iPhone)
         // V57: tolto il riquadro verde dal vivo (inventava rombi e forme che saltavano): niente analisi dei fotogrammi
         for output in [foto, video] as [AVCaptureOutput] {   // verticale, come tieni il telefono
             if let c = output.connection(with: .video), c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }

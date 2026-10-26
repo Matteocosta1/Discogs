@@ -21,7 +21,11 @@ final class RECVivo {
         var discID: UUID?
     }
 
-    private(set) var tracce: [Traccia] = []
+    private(set) var tracce: [Traccia] = [] {
+        didSet { if haTracce != !tracce.isEmpty { haTracce = !tracce.isEmpty } }
+    }
+    /// Cambia solo quando le tracce passano da zero ad almeno una (la fotocamera non si ridisegna a ogni fotogramma).
+    private(set) var haTracce = false
     private(set) var agganciati = 0
     /// La copertina di cui serve il fotogramma da riconoscere (una alla volta).
     private(set) var daFotografare: UUID?
@@ -110,6 +114,7 @@ final class RECVivo {
 struct HologrammiREC: View {
     let rec: RECVivo
     let dischi: [Disc]
+    var valuta = "EUR"
 
     /// Quello che dice il cartellino di un disco agganciato.
     private struct Cartellino {
@@ -146,10 +151,13 @@ struct HologrammiREC: View {
             case .daControllare, .bloccato:
                 out[t.id] = Cartellino(riga1: "NON RICONOSCIUTO", riga2: "RIPROVA CON UNA FOTO", analisi: false, errore: true)
             default:
-                let parti = d.releaseTitle.components(separatedBy: " – ")
-                let artista = parti.count > 1 ? parti[0] : d.releaseTitle
-                let titolo = parti.count > 1 ? parti.dropFirst().joined(separator: " – ") : ""
-                let prezzo = d.price.map { String(format: "%.0f €", $0) } ?? ""
+                // il titolo è «Artista - Titolo (Etichetta, Paese, Anno)»: via la parentesi finale, poi artista e titolo
+                let base = d.releaseTitle.replacingOccurrences(of: #"\s*\([^)]*\)$"#, with: "", options: .regularExpression)
+                let trattino = base.contains(" - ") ? " - " : " – "
+                let parti = base.components(separatedBy: trattino)
+                let artista = parti.count > 1 ? parti[0] : base
+                let titolo = parti.count > 1 ? parti.dropFirst().joined(separator: trattino) : ""
+                let prezzo = d.price.map { $0.formatted(.currency(code: valuta).precision(.fractionLength(0...2))) } ?? ""
                 let riga2 = [titolo, prezzo].filter { !$0.isEmpty }.joined(separator: " · ")
                 out[t.id] = Cartellino(riga1: artista.uppercased(), riga2: riga2.uppercased(), analisi: false, errore: false)
             }

@@ -36,6 +36,7 @@ struct RootView: View {
     @State private var splash = true
     /// V60 · proposta 7: quando parte l'entrata delle icone (nil = finita o non c'è).
     @State private var avvio: Date?
+    @Environment(\.horizontalSizeClass) private var larghezza
 
     var body: some View {
         Group {
@@ -46,7 +47,8 @@ struct RootView: View {
             }
         }
         .overlay {
-            if let avvio, seller.isLoggedIn { AvvioIcone(da: avvio, selezionata: tab) }
+            // sull'iPad la barra delle sezioni è in alto: lì la copia della barra in basso non serve
+            if let avvio, seller.isLoggedIn, larghezza != .regular { AvvioIcone(da: avvio, selezionata: tab) }
         }
         .overlay {
             if splash { SplashView().transition(.opacity) }

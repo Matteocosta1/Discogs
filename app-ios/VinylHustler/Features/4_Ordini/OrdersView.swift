@@ -67,7 +67,7 @@ struct OrdersView: View {
 
     private var testata: String {
         let mese = Date().formatted(.dateTime.month(.wide).locale(Locale(identifier: "it_IT"))).uppercased()
-        let netto = nettoMese.formatted(.currency(code: seller.currency).precision(.fractionLength(2)).locale(Locale(identifier: "it_IT")))
+        let netto = soldiIT(nettoMese, seller.currency)
         return "APERTI · \(open.count) · NETTO DI \(mese) \(netto)"
     }
 
@@ -206,7 +206,7 @@ struct OrdersView: View {
         }
         guard n > step(o) else { Suoni.tocco(); return }        // un passo già fatto non si disfa
         Suoni.tocco()
-        if n == 2 && stato == .pagato {
+        if n == 2 && stato == .pagato && puo(o, "In Progress") {
             // Imballato: su Discogs l'ordine diventa «In preparazione» (l'acquirente riceve l'avviso)
             lavoro.insert(o.id)
             Task { @MainActor in
@@ -227,6 +227,9 @@ struct OrdersView: View {
             note[o.id] = n == 1 ? "PRESO · SEGNATO SUL TELEFONO" : "IMBALLATO · SEGNATO SUL TELEFONO"
         }
     }
+
+    /// Si può portare l'ordine in quello stato adesso? (Discogs lo dice in next_status; se non lo dice, si prova.)
+    private func puo(_ o: Order, _ stato: String) -> Bool { o.nextStatus?.contains(stato) ?? true }
 
     /// Discogs ha accettato «Shipped»: il furgoncino arriva in fondo, poi la scheda esce.
     private func spedito(_ o: Order) {
@@ -268,6 +271,12 @@ struct OrdersView: View {
         lavoro.insert(o.id)
         defer { lavoro.remove(o.id) }
         let stato = nonPagato ? "Cancelled (Non-Paying Buyer)" : "Cancelled (Item Unavailable)"
+        guard puo(o, stato) else {
+            Suoni.nego()
+            note[o.id] = nonPagato ? "NON ANCORA POSSIBILE SU DISCOGS: L'ACQUIRENTE HA ANCORA TEMPO PER PAGARE"
+                                   : "NON ANCORA POSSIBILE SU DISCOGS"
+            return
+        }
         do {
             try await seller.client.setOrderStatus(o.id, status: stato)
         } catch {
@@ -308,11 +317,21 @@ struct OrdersView: View {
         attivitaLetta[o.id] = nil
     }
 
+    /// Una lettura per volta: se ne arriva un'altra mentre legge, si rilegge una volta alla fine.
+    @State private var rileggi = false
+
     private func load() async {
+        guard !loading else { rileggi = true; return }
         loading = true
-        defer { loading = false }
+        defer {
+            loading = false
+            if rileggi { rileggi = false; Task { await load() } }
+        }
         do {
             let page = try await seller.client.orders()
+            // lo stato su Discogs è cambiato (per esempio ha pagato): la riga sotto la pista riparte pulita
+            let vecchi = Dictionary(orders.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
+            for o in page.orders where vecchi[o.id] != nil && vecchi[o.id] != o.status { note[o.id] = nil }
             await OrderWatcher.notifyNew(page.orders)
             let before = Set(orders.map(\.id))
             if !orders.isEmpty, page.orders.contains(where: { !before.contains($0.id) && !OrderStyle.closed($0.status) }) {
@@ -475,7 +494,7 @@ struct OpenOrderCard: View {
                     }
                     Spacer(minLength: 4)
                     if let t = order.total {
-                        Text(t.value, format: .currency(code: t.currency ?? currency))
+                        Text(soldiIT(t.value, t.currency ?? currency))
                             .font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.money)
                     }
                 }
@@ -521,9 +540,9 @@ struct OpenOrderCard: View {
         let tot = OrderCifre.totale(order), fee = OrderCifre.commissione(order)
         let valuta = order.total?.currency ?? currency
         return HStack(spacing: 6) {
-            cifra("TOTALE", Text(tot, format: .currency(code: valuta)), Theme.text)
-            cifra("DISCOGS", Text("−") + Text(fee, format: .currency(code: valuta)), Color(hex: 0xFF9F0A))
-            cifra("NETTO", Text(tot - fee, format: .currency(code: valuta)), Theme.money)
+            cifra("TOTALE", Text(soldiIT(tot, valuta)), Theme.text)
+            cifra("DISCOGS", Text("−" + soldiIT(fee, valuta)), Color(hex: 0xFF9F0A))
+            cifra("NETTO", Text(soldiIT(tot - fee, valuta)), Theme.money)
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
         .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -782,7 +801,7 @@ enum OrderWatcher {
         var t = o.items.first?.release.description ?? "Ordine \(o.id)"
         if o.items.count > 1 { t += " + altri \(o.items.count - 1)" }
         if let tot = o.total {
-            let prezzo = tot.value.formatted(.currency(code: tot.currency ?? "EUR").locale(Locale(identifier: "it_IT")))
+            let prezzo = soldiIT(tot.value, tot.currency ?? "EUR")
             t += " · " + prezzo
         }
         return t
@@ -819,4 +838,20 @@ enum OrderWatcher {
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)   // iOS decide quando, di solito non prima
         try? BGTaskScheduler.shared.submit(request)
     }
+}
+
+/// V61: soldi all'italiana sempre uguali (1.234,50 €), come nel Magazzino: il formattatore di sistema sotto i 10.000
+/// non mette il punto delle migliaia e segue la lingua del telefono.
+func soldiIT(_ valore: Double, _ valuta: String) -> String {
+    // stessa regola di WarehouseView.italian, scritta qui: questa funzione si usa anche fuori dalle viste
+    let centesimi = Int((abs(valore) * 100).rounded())
+    var intero = String(centesimi / 100)
+    var gruppi: [String] = []
+    while intero.count > 3 {
+        gruppi.insert(String(intero.suffix(3)), at: 0)
+        intero.removeLast(3)
+    }
+    gruppi.insert(intero, at: 0)
+    let testo = (valore < 0 ? "-" : "") + gruppi.joined(separator: ".") + "," + String(format: "%02d", centesimi % 100)
+    return testo + (valuta == "EUR" ? " €" : " \(valuta)")
 }

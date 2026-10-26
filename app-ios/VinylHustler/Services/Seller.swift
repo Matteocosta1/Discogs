@@ -300,26 +300,27 @@ final class Seller {
     /// sulla scheda e poi decide Vendi o Bozza. Vendi / Bozza lo ricalcolano (stesse risposte, già in cache).
     func anteprimaPrezzo(_ disc: Disc) async {
         guard let rid = disc.releaseID, disc.status == .daConfermare else { return }
+        let grado = disc.media                          // V61: se intanto il grado cambia, questo prezzo non vale più
         prezzoInCorso.insert(disc.id)
         prezzoMancante.remove(disc.id)
-        defer { prezzoInCorso.remove(disc.id) }
+        defer { if disc.media == grado { prezzoInCorso.remove(disc.id) } }
         do {
             let suggestions = try await client.priceSuggestions(rid)
-            guard let suggested = suggestions[disc.media.discogs]?.value, let release = await scheda(rid) else {
-                prezzoMancante.insert(disc.id)
+            guard let suggested = suggestions[grado.discogs]?.value, let release = await scheda(rid) else {
+                if disc.media == grado { prezzoMancante.insert(disc.id) }
                 return
             }
             let stats = try await client.stats(rid, currency: currency)
             let market = MarketData(want: release.community?.want ?? 0, have: release.community?.have ?? 0,
                                     numForSale: stats.numForSale ?? 0, lowestPrice: stats.lowestPrice?.value,
                                     lowestCurrency: stats.lowestPrice?.currency ?? currency, formats: release.formatsText)
-            let (p, calc) = PriceEngine.compute(suggested: suggested, market: market, grade: disc.media,
+            let (p, calc) = PriceEngine.compute(suggested: suggested, market: market, grade: grado,
                                                 currency: currency, rules: rules)
-            guard disc.releaseID == rid, disc.status == .daConfermare else { return }   // nel frattempo ha deciso
+            guard disc.releaseID == rid, disc.status == .daConfermare, disc.media == grado else { return }   // nel frattempo ha deciso o cambiato grado
             disc.price = NSDecimalNumber(decimal: p).doubleValue
             disc.priceCalculation = calc
         } catch {
-            prezzoMancante.insert(disc.id)
+            if disc.media == grado { prezzoMancante.insert(disc.id) }
         }
     }
 
