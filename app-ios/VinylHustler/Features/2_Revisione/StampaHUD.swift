@@ -16,7 +16,7 @@ struct StampaRiga: ViewModifier {
     func body(content: Content) -> some View {
         if let da {
             let fine = ritardo + durata + 0.05
-            TimelineView(.animation(minimumInterval: 1 / 60, paused: finito)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / 120, paused: finito)) { ctx in
                 let passato = max(ctx.date.timeIntervalSince(da), Date().timeIntervalSince(da))
                 let f = morbido((passato - ritardo) / durata)
                 content
@@ -59,7 +59,7 @@ struct RitiroRiga: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if let da {
-            TimelineView(.animation(minimumInterval: 1 / 60, paused: finito)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / 120, paused: finito)) { ctx in
                 let passato = max(ctx.date.timeIntervalSince(da), Date().timeIntervalSince(da))
                 let v = morbido(passato / durata)
                 content
@@ -113,7 +113,7 @@ struct NumeroConta: View {
 
     var body: some View {
         if let da {
-            TimelineView(.animation(minimumInterval: 1 / 30, paused: finito)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / 120, paused: finito)) { ctx in
                 let passato = max(ctx.date.timeIntervalSince(da), Date().timeIntervalSince(da))
                 let k = morbido((passato - ritardo) / durata)
                 Text(formato(partenza + (valore - partenza) * k))
@@ -138,7 +138,7 @@ struct BarraLettura: View {
     let testoFine: String
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: fine != nil)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: fine != nil)) { ctx in
             let t = max(0, ctx.date.timeIntervalSince(inizio))
             let pct = fine == nil ? 90 * (1 - exp(-t / 1.2)) : 100
             VStack(alignment: .leading, spacing: 6) {

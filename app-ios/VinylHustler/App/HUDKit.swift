@@ -27,7 +27,7 @@ struct TestoDecodifica: View {
     @State private var finito = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: finito)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: finito)) { ctx in
             let t = ctx.date.timeIntervalSince(da) - ritardo
             let quanto = t <= 0 ? 1 : max(0, 1 - t / durata)
             Text(Glifi.rimescola(testo, finito ? 0 : quanto))
@@ -64,7 +64,7 @@ struct SfondoHUD: View {
     @State private var visibile = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: fermo || !visibile || !attivo || !sezioneVisibile)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: fermo || !visibile || !attivo || !sezioneVisibile)) { ctx in
             let t = fermo ? 0 : ctx.date.timeIntervalSinceReferenceDate
             Canvas { gc, size in
                 // il bagliore in alto che respira (9 s)

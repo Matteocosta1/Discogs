@@ -54,7 +54,7 @@ struct ConsoleView: View {
                 .padding(.vertical, 12)
                 // la pagina si stampa dall'alto, una volta, quando si apre
                 .mask {
-                    TimelineView(.animation(minimumInterval: 1 / 60, paused: stampaFinita)) { ctx in
+                    TimelineView(.animation(minimumInterval: 1.0 / 120, paused: stampaFinita)) { ctx in
                         let x = stampaFinita ? 1 : min(1, max(0, ctx.date.timeIntervalSince(stampaDa) / 0.9))
                         let p = 1 - pow(1 - x, 2.2)
                         GeometryReader { g in

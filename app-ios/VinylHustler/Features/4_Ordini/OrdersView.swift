@@ -423,7 +423,7 @@ enum OrderCifre {
 /// Un radar piccolo (come un'icona): il fascio gira piano, l'app sta controllando gli ordini.
 struct MiniRadar: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120)) { ctx in
             let giro = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3.2) / 3.2 * 360
             ZStack {
                 Circle().fill(Color(red: 0.04, green: 0.07, blue: 0.05))

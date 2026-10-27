@@ -97,7 +97,7 @@ struct FinestraAscolto: View {
 
     var body: some View {
         GeometryReader { g in
-            TimelineView(.animation(minimumInterval: 1 / 60, paused: !animando)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / 120, paused: !animando)) { ctx in
                 let k = avanzamento(ctx.date)
                 ZStack {
                     Color.black.opacity(0.6 * min(1, k * 1.6))

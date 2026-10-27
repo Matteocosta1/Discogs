@@ -87,7 +87,7 @@ struct VinylMark: View {
 
     var body: some View {
         ZStack {
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !spinning)) { t in
+            TimelineView(.animation(minimumInterval: 1.0 / 120, paused: !spinning)) { t in
                 disc.rotationEffect(.degrees(spinning ? t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 5) / 5 * 360 : 0))
             }
             Circle()
@@ -246,7 +246,7 @@ struct Pulsa<Content: View>: View {
     @ViewBuilder var content: (Double) -> Content
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30)) { t in
+        TimelineView(.animation(minimumInterval: 1.0 / 120)) { t in
             let x = t.date.timeIntervalSinceReferenceDate / periodo
             content((1 - cos(x * 2 * .pi)) / 2)
         }

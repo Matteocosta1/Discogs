@@ -633,7 +633,7 @@ struct HUDAnalisi: View {
     private static func avanzamento(_ t: Double) -> Double { 0.95 * (1 - exp(-max(0, t) / 2.2)) }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120)) { ctx in
             let t = ctx.date.timeIntervalSince(da)
             let p: Double = {
                 guard let fine else { return Self.avanzamento(t) }
@@ -734,7 +734,7 @@ struct MirinoOcchio: View {
             let centroY: CGFloat = geo.size.height > 0 ? CGFloat(m.y0 + m.lato / 2) / geo.size.height : 0.5
             let ancora = UnitPoint(x: 0.5, y: centroY)
             ZStack {
-                TimelineView(.animation(minimumInterval: 1 / 30, paused: spento || m.lato < 120)) { ctx in
+                TimelineView(.animation(minimumInterval: 1.0 / 120, paused: spento || m.lato < 120)) { ctx in
                     disegno(t: ctx.date.timeIntervalSinceReferenceDate)
                 }
                 // si stringe e si allarga attorno al centro della cornice (che non sempre è il centro della vista)

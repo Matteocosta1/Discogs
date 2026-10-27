@@ -270,7 +270,7 @@ struct GraficoVendite: View {
     @State private var finito = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 60, paused: finito || da == nil)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: finito || da == nil)) { ctx in
             let k = avanzamento(ctx.date)
             Canvas { gc, size in disegna(gc, size, k) }
         }

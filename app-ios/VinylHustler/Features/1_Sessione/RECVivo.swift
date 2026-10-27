@@ -133,7 +133,7 @@ struct HologrammiREC: View {
     var body: some View {
         let schede = cartellini(per: rec.tracce)
         let conDati = Set(schede.filter { !$0.value.analisi }.map(\.key))
-        TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120)) { ctx in
             let tracce = rec.tracce
             Canvas { gc, size in
                 for t in tracce { disegna(gc, t, schede[t.id], ora: ctx.date, larghezza: size.width) }

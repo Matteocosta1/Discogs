@@ -120,7 +120,7 @@ struct BarraSezioni: View {
     private static let simboli = ["camera.fill", "tray.full", "square.stack.3d.up", "shippingbox", "bubble.left.and.text.bubble.right", "gearshape"]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 60, paused: avvio == nil)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: avvio == nil)) { ctx in
             HStack(spacing: 0) {
                 ForEach(0..<6, id: \.self) { k in
                     Button { tab = k } label: { icona(k, t: avvio.map { ctx.date.timeIntervalSince($0) }) }

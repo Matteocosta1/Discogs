@@ -13,7 +13,7 @@ struct AvvioIcone: View {
     private static let simboli = ["camera.fill", "tray.full", "square.stack.3d.up", "shippingbox", "gearshape"]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 60)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120)) { ctx in
             let t = ctx.date.timeIntervalSince(da)
             // tutta la copia sfuma negli ultimi 0,3 s
             let via = t > Self.durata - 0.3 ? max(0, (Self.durata - t) / 0.3) : 1

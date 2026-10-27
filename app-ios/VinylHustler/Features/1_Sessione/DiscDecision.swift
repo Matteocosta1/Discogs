@@ -641,7 +641,7 @@ struct StampaRitiro: ViewModifier {
     let ritiroDa: Date?
 
     func body(content: Content) -> some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: stampaDa == nil && ritiroDa == nil)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: stampaDa == nil && ritiroDa == nil)) { ctx in
             let st: Double = stampaDa.map { morbido((ctx.date.timeIntervalSince($0) - 0.15) / 0.7) } ?? 1
             let via: Double = ritiroDa.map { morbido(ctx.date.timeIntervalSince($0) / 0.52) } ?? 0
             content
@@ -688,7 +688,7 @@ struct PrezzoConta: View {
     @State private var finito = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: finito)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: finito)) { ctx in
             let k = finito ? 1 : morbido(ctx.date.timeIntervalSince(da) / 0.7)
             Text(valore * k, format: .currency(code: valuta))
                 .font(.system(size: size, weight: .bold))

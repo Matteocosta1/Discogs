@@ -128,7 +128,7 @@ struct SpedizioneSheet: View {
                     .shadow(color: Theme.glow.opacity(0.5), radius: 7)
                     .padding(.horizontal, 60).padding(.vertical, 16)
             } else {
-                TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
+                TimelineView(.animation(minimumInterval: 1.0 / 120)) { ctx in
                     let p = ctx.date.timeIntervalSince(aperta).truncatingRemainder(dividingBy: 0.9) / 0.9
                     GeometryReader { g in
                         Rectangle().fill(Theme.glow)

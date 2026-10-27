@@ -394,7 +394,7 @@ struct DiscoGira: View {
     let gira: Bool
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !gira)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: !gira)) { ctx in
             let gradi = gira ? ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 6) / 6 * 360 : 0
             AsyncImage(url: copertina) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
                 .clipShape(Circle())
@@ -414,7 +414,7 @@ struct DiscoAscolto: View {
     var body: some View {
         GeometryReader { g in
             let W = min(g.size.width, g.size.height)
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !gira)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / 120, paused: !gira)) { ctx in
                 let t = ctx.date.timeIntervalSinceReferenceDate
                 ZStack {
                     Canvas { gc, _ in DiscoAscolto.anelli(gc, W: W, t: t, suona: gira) }
@@ -466,7 +466,7 @@ struct DiscoAscolto: View {
 /// Le tre barrette che saltano mentre suona.
 struct BarreSuono: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 120)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(0..<3, id: \.self) { k in

@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>DISCOGS_CONSUMER_KEY</key>
 	<string>$(DISCOGS_CONSUMER_KEY)</string>
 	<key>DISCOGS_CONSUMER_SECRET</key>
