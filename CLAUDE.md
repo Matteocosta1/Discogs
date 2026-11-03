@@ -3,7 +3,7 @@
 App iOS in `app-ios/` (progetto `VinylHustler.xcodeproj`) + gli script Python dello stesso repo. Backend su Supabase. Ci lavorano Alessandro e Matteo: Matteo può proporre idee anche quando Alessandro non c'è.
 
 - **Ramo di Xcode:** `claude/ciao-ttimyc` (il ramo principale del repo).
-- Ogni modifica si numera **V1, V2, V3…** (oggi siamo a V69) e Alessandro deve sapere ogni volta cosa è cambiato, così si può togliere una sola versione sbagliata.
+- Ogni modifica si numera **V1, V2, V3…** (oggi siamo a V73) e Alessandro deve sapere ogni volta cosa è cambiato, così si può togliere una sola versione sbagliata.
 - L'app sul telefono di Alessandro deve essere identica a quella sul telefono di Matteo.
 
 ## Come si lavora con Alessandro (valido per ogni sessione)
@@ -30,6 +30,10 @@ App iOS in `app-ios/` (progetto `VinylHustler.xcodeproj`) + gli script Python de
 2. Zero errori **e zero warning**: anche gli avvisi di Xcode vanno tolti.
 3. Lanciare il controllo di compilazione su GitHub: fare il push con **`[compila]`** nel messaggio del commit, poi leggere il risultato del workflow **Compila** (scheda Actions del repo). Consegnare solo se è verde. Ogni controllo consuma minuti Mac di GitHub (circa 200 al mese gratis): usarlo solo quando una build è davvero da consegnare.
 4. Mai dire "risolto" se il risultato non è esattamente quello che vuole lui: dire chiaro cosa è fatto, cosa no e cosa va verificato sul telefono.
+
+**Supabase (progetto «Vinyl Hustler»)**
+- Dal 3 nov 2026 (V73) le tabelle, funzioni e sequenze nuove in `public` NON ricevono più permessi automatici: ogni migrazione deve dare i `GRANT` espliciti (di solito solo a `authenticated` e, se servono alle funzioni del server, a `service_role`), insieme a RLS e alle politiche. Dopo ogni modifica: advisor di sicurezza e prestazioni.
+- Le migrazioni applicate si copiano anche in `app-ios/supabase/migrations/` (numerate 001, 002…).
 
 **Nell'app**
 - Animazioni a 120 Hz (ProMotion), fatte bene ma funzionali: zero animazioni inutili.

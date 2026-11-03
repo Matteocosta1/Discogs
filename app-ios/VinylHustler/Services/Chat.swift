@@ -58,6 +58,9 @@ final class ChatStore {
 
     private var client: SupabaseClient? { Backend.shared.client }
     private var giro: Task<Void, Never>?
+    /// V73: giri fatti scaricando solo i messaggi nuovi, e se al prossimo giro si rilegge tutto.
+    private var giriDaCompleta = 0
+    private var completaSubito = true
     private var nomeRegistrato = ""
 
     var nonLetti: Int {
@@ -104,6 +107,7 @@ final class ChatStore {
 
     /// Dopo l'accesso con Apple: riparte subito.
     func riparti(nome: String) {
+        completaSubito = true                               // aprendo la Chat si rilegge tutto
         giro?.cancel()
         giro = nil
         avvia(nome: nome)
@@ -120,16 +124,29 @@ final class ChatStore {
                 nomeOccupato = esito == "occupato"
                 nomeRegistrato = nome
             }
-            let ultimi: [MsgChat] = try await client.from("chat_messaggi").select()
-                .order("creato", ascending: false).limit(500).execute().value
             let prima = nonLetti
-            messaggi = ultimi.reversed()
-            struct Contatto: Decodable { let contatto: UUID }
-            struct Blocco: Decodable { let bloccato: UUID }
-            let c: [Contatto] = try await client.from("chat_contatti").select("contatto").execute().value
-            let b: [Blocco] = try await client.from("chat_blocchi").select("bloccato").execute().value
-            contatti = Set(c.map(\.contatto))
-            bloccati = Set(b.map(\.bloccato))
+            // V73: di solito si scaricano solo i messaggi nuovi; ogni 8 giri (circa 30 s con la Chat aperta), aprendo
+            // la Chat o la prima volta si rilegge tutto (risposte alle schede, letti, contatti e blocchi)
+            if completaSubito || giriDaCompleta >= 7 || messaggi.isEmpty {
+                let ultimi: [MsgChat] = try await client.from("chat_messaggi").select()
+                    .order("creato", ascending: false).limit(500).execute().value
+                messaggi = ultimi.reversed()
+                struct Contatto: Decodable { let contatto: UUID }
+                struct Blocco: Decodable { let bloccato: UUID }
+                let c: [Contatto] = try await client.from("chat_contatti").select("contatto").execute().value
+                let b: [Blocco] = try await client.from("chat_blocchi").select("bloccato").execute().value
+                contatti = Set(c.map(\.contatto))
+                bloccati = Set(b.map(\.bloccato))
+                giriDaCompleta = 0
+                completaSubito = false
+            } else {
+                let ultimoID = messaggi.map(\.id).max() ?? 0
+                let nuovi: [MsgChat] = try await client.from("chat_messaggi").select()
+                    .gt("id", value: ultimoID).order("id", ascending: true).limit(200).execute().value
+                let gia = Set(messaggi.map(\.id))
+                messaggi.append(contentsOf: nuovi.filter { !gia.contains($0.id) })
+                giriDaCompleta += 1
+            }
             await caricaNomi()
             if nonLetti > prima { Suoni.schedaPronta() }
             errore = nil
@@ -192,14 +209,14 @@ final class ChatStore {
     func aggiungi(_ chi: UUID) async {
         guard let client, let io else { return }
         struct C: Encodable { let proprietario: UUID; let contatto: UUID }
-        _ = try? await client.from("chat_contatti").upsert(C(proprietario: io, contatto: chi)).execute()
+        _ = try? await client.from("chat_contatti").upsert(C(proprietario: io, contatto: chi), ignoreDuplicates: true).execute()
         contatti.insert(chi)
     }
 
     func blocca(_ chi: UUID) async {
         guard let client, let io else { return }
         struct B: Encodable { let chi: UUID; let bloccato: UUID }
-        _ = try? await client.from("chat_blocchi").upsert(B(chi: io, bloccato: chi)).execute()
+        _ = try? await client.from("chat_blocchi").upsert(B(chi: io, bloccato: chi), ignoreDuplicates: true).execute()
         bloccati.insert(chi)
     }
 
