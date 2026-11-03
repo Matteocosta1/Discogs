@@ -1,0 +1,64 @@
+name: Compila
+
+# Compila l'app su un Mac di GitHub con Xcode e fallisce se c'è anche un solo errore o warning.
+# Parte SOLO quando il messaggio del commit contiene [compila] (o a mano dalla scheda Actions),
+# per non consumare i minuti Mac gratuiti (circa 200 al mese) a ogni push.
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: compila-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compila:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[compila]')
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scegli l'Xcode più recente
+        run: |
+          XC=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
+          echo "Uso $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -E "iOS|watchOS" || true
+
+      - name: Compila
+        run: |
+          set -o pipefail
+          : > build.log
+          esito=0
+          echo "== VinylHustler (iOS, include l'app Watch se incorporata)" | tee -a build.log
+          xcodebuild -project "app-ios/VinylHustler.xcodeproj" -scheme "VinylHustler" -configuration Release -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO -skipPackagePluginValidation -skipMacroValidation build 2>&1 | tee -a build.log | grep -E "(error|warning): |BUILD (SUCCEEDED|FAILED)" || esito=1
+          exit $esito
+
+      - name: Controlla i warning
+        if: always()
+        run: |
+          grep -E ": (warning|error): " build.log | grep -F "$GITHUB_WORKSPACE" | sed "s#$GITHUB_WORKSPACE/##" | sort -u > problemi.txt || true
+          n_err=$(grep -c ": error: " problemi.txt || true)
+          n_warn=$(grep -c ": warning: " problemi.txt || true)
+          {
+            echo "## Risultato: $n_err errori, $n_warn warning"
+            echo
+            echo "Xcode: $(xcodebuild -version | head -1)"
+            echo
+            if [ -s problemi.txt ]; then echo '```'; head -200 problemi.txt; echo '```'; else echo "Compilazione pulita."; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat problemi.txt
+          [ "$n_err" = "0" ] && [ "$n_warn" = "0" ]
+
+      - name: Salva il registro completo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registro-compilazione
+          path: |
+            build.log
+            problemi.txt
+          retention-days: 7
