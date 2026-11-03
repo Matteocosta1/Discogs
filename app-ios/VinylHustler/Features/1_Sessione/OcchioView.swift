@@ -6,6 +6,7 @@ import SwiftData
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import Vision
 
 /// OCCHIO — la fotocamera di Vinyl Hustler, come gli occhi di JARVIS.
 ///   · tocchi lo scatto: una foto, e il disco viene riconosciuto subito (e te lo dice a voce);
@@ -31,6 +32,8 @@ struct OcchioView: View {
     @State private var lampo = false
     @State private var agganciato = false
     @State private var registrando = false
+    /// V72: REC appena fermato: per 2,2 s restano gli agganci, poi escono le schede (come nel mock-up).
+    @State private var recChiude = false
     @State private var inizioVideo = Date()
     @State private var preparo = false
     @State private var attachTo: Disc?              // "Altra foto": il prossimo scatto va a questo disco
@@ -111,10 +114,10 @@ struct OcchioView: View {
                     .allowsHitTesting(false)
                 // V60: gli ologrammi del REC sopra le copertine agganciate
                 if registrando || rec.haTracce {
-                    HologrammiREC(rec: rec, dischi: seen, valuta: seller.currency)
+                    HologrammiREC(rec: rec, dischi: seen, valuta: seller.currency, alias: seller.doppioneDi)
                 }
                 // V60: mentre riconosce, al centro del mirino il caricamento alla JARVIS
-                if let da = analisiDa, !registrando {           // durante il REC parlano gli ologrammi
+                if let da = analisiDa, !registrando, !recChiude {   // durante il REC parlano gli agganci
                     HUDAnalisi(da: da, fine: analisiFine)
                         .allowsHitTesting(false)
                         .transition(.opacity)
@@ -128,7 +131,8 @@ struct OcchioView: View {
                     if registrando {
                         HStack(spacing: 8) {
                             recBadge
-                            Text(rec.agganciati == 1 ? "1 DISCO" : "\(rec.agganciati) DISCHI")
+                            let quanti = rec.quanti(alias: seller.doppioneDi)
+                            Text(quanti == 1 ? "1 DISCO" : "\(quanti) DISCHI")
                                 .font(Theme.mono(10, .bold)).tracking(1.5)
                                 .foregroundStyle(Theme.glow)
                                 .padding(.horizontal, 9).padding(.vertical, 5)
@@ -262,7 +266,7 @@ struct OcchioView: View {
             .foregroundStyle(tinta)
             .shadow(color: tinta.opacity(0.6), radius: 6)
             // V59: il riquadro del disco riconosciuto, sotto la scritta (come il Satellite di JARVIS)
-            if let r = schedaAttuale {
+            if let r = schedaAttuale, !registrando, !recChiude {   // V72: durante il REC niente riquadro (l'inquadratura non si muove)
                 PannelloDisco(release: r, versione: versioneAttuale, stretto: stretto)
                     .id(r.id)
                     .transition(.scale(scale: 0.3, anchor: .topLeading).combined(with: .opacity))
@@ -354,7 +358,9 @@ struct OcchioView: View {
     /// Sotto la fotocamera, compatti (il mirino prende il resto dello schermo):
     ///   · i dischi da decidere, uno accanto all'altro (il più nuovo a sinistra); deciso Vendi o Bozza, spariscono.
     @ViewBuilder private var results: some View {
-        if seen.contains(where: { !Self.done($0) }) {
+        // V72: durante il REC (e mentre si chiude) la fila di schede non c'è: l'inquadratura resta grande e ferma,
+        // così gli agganci non saltano; le schede escono tutte quando il REC è finito
+        if !registrando && !recChiude && seen.contains(where: { !Self.done($0) }) {
             VStack(alignment: .leading, spacing: 6) {
                 let pending = seen.filter { !Self.done($0) }
                 if !pending.isEmpty {
@@ -541,6 +547,8 @@ struct OcchioView: View {
         let inizio = Date()
         inizioVideo = inizio
         registrando = true
+        recChiude = false
+        seller.inizioREC = inizio
         stato = "PASSA I DISCHI DAVANTI · TOCCA PER FERMARE"
         rec.inizia()
         motore.avviaScansione()
@@ -556,7 +564,8 @@ struct OcchioView: View {
         motore.fermaScansione()
         rec.ferma()
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-        let n = rec.agganciati
+        recChiude = true
+        let n = rec.quanti(alias: seller.doppioneDi)
         if n > 0 { Suoni.fatto() }
         let fine = n == 0 ? "NESSUN DISCO AGGANCIATO · RIPROVA" : (n == 1 ? "1 DISCO TROVATO" : "\(n) DISCHI TROVATI")
         stato = fine
@@ -564,6 +573,7 @@ struct OcchioView: View {
             try? await Task.sleep(for: .milliseconds(2200))
             if !registrando {
                 rec.pulisci()
+                withAnimation(.spring(duration: 0.45, bounce: 0.2)) { recChiude = false }
                 if stato == fine { stato = "INQUADRA UN DISCO" }
             }
         }
@@ -895,11 +905,13 @@ struct AnteprimaOcchio: UIViewRepresentable {
         }
         // V60 · REC dal vivo: le copertine dalla fotocamera ai punti dell'anteprima, poi al tracker
         let tracker = rec
-        motore.suCopertine = { [weak v, weak tracker] quadri in
+        motore.suCopertine = { [weak v, weak tracker] viste in
             Task { @MainActor [v, tracker] in
                 guard let v, let tracker else { return }
-                tracker.aggiorna(quadri.map { q in q.map { v.anteprima.layerPointConverted(fromCaptureDevicePoint: $0) } },
-                                 camera: quadri)
+                tracker.aggiorna(viste.map { c in
+                    RECVivo.Vista(id: c.id, angoli: c.angoli.map { v.anteprima.layerPointConverted(fromCaptureDevicePoint: $0) },
+                                  camera: c.angoli)
+                })
             }
         }
         return v
@@ -918,11 +930,14 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
     /// I fotogrammi dell'anteprima, per cercare la copertina dal vivo (riquadro verde nel mirino).
     private let fotogrammi = AVCaptureVideoDataOutput()
     private let codaRiquadro = DispatchQueue(label: "it.vinylhustler.app.riquadro")
-    private var ultimoRiquadro = Date.distantPast
+    /// V72 · REC: le copertine seguite fotogramma per fotogramma (solo sulla coda dei fotogrammi).
+    private var sequenza = VNSequenceRequestHandler()
+    private var inseguite: [(id: UUID, oss: VNRectangleObservation)] = []
+    private var ultimaRicerca = Date.distantPast
     /// Chi disegna il riquadro (l'anteprima). Riceve i 4 angoli in coordinate della fotocamera, o nil.
     var suRiquadro: (@Sendable ([CGPoint]?) -> Void)?
     /// V60 · REC dal vivo: le copertine di ogni fotogramma (coordinate della fotocamera).
-    var suCopertine: (@Sendable ([[CGPoint]]) -> Void)?
+    var suCopertine: (@Sendable ([CopertinaVista]) -> Void)?
     /// Usate solo sulla coda dei fotogrammi (codaRiquadro).
     private var scansione = false
     private var vogliaFotogramma: (@Sendable (UIImage?) -> Void)?
@@ -1111,7 +1126,13 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
                 if self.sessione.canAddOutput(self.fotogrammi) { self.sessione.addOutput(self.fotogrammi) }
                 self.sessione.commitConfiguration()
             }
-            self.codaRiquadro.async { self.scansione = true }
+            self.codaRiquadro.async {
+                // V72: ogni REC parte con l'inseguimento pulito
+                self.sequenza = VNSequenceRequestHandler()
+                self.inseguite = []
+                self.ultimaRicerca = .distantPast
+                self.scansione = true
+            }
         }
     }
 
@@ -1120,6 +1141,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
             // passa dalla stessa coda di avviaScansione: un REC brevissimo non lascia la scansione accesa
             self.codaRiquadro.async {
                 self.scansione = false
+                self.inseguite = []
                 let f = self.vogliaFotogramma
                 self.vogliaFotogramma = nil
                 f?(nil)
@@ -1163,7 +1185,8 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         return uscita
     }
 
-    /// Un fotogramma dell'anteprima (durante il REC): ~8 volte al secondo si cercano le copertine.
+    /// Un fotogramma dell'anteprima (durante il REC). V72: a ogni fotogramma (30 al secondo) le copertine già trovate
+    /// si seguono con Vision; 4 volte al secondo si cercano quelle nuove (fino a 4 in tutto).
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard scansione, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         if let f = vogliaFotogramma {
@@ -1173,10 +1196,40 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
                 .map { UIImage(cgImage: $0, scale: 1, orientation: .right) }
             f(foto)
         }
+        suCopertine?(insegui(buffer))
+    }
+
+    /// V72: segue le copertine già trovate e ne cerca di nuove. Ogni copertina tiene il suo id finché non si perde.
+    private func insegui(_ buffer: CVPixelBuffer) -> [CopertinaVista] {
+        let larghezza = CGFloat(CVPixelBufferGetWidth(buffer)), altezza = CGFloat(CVPixelBufferGetHeight(buffer))
+        // 1 · le copertine già trovate: una richiesta a testa (se una si perde, le altre non ne risentono)
+        var tenute: [(id: UUID, oss: VNRectangleObservation)] = []
+        for v in inseguite {
+            let r = VNTrackRectangleRequest(rectangleObservation: v.oss)
+            r.trackingLevel = .accurate
+            if (try? sequenza.perform([r], on: buffer, orientation: .up)) != nil,
+               let nuova = r.results?.first, nuova.confidence >= 0.4,
+               CopertineVive.quasiQuadrata(nuova, larghezza: larghezza, altezza: altezza) {
+                tenute.append((id: v.id, oss: nuova))
+            } else {
+                // persa: si libera l'inseguitore di Vision (ne tiene pochi)
+                let fine = VNTrackRectangleRequest(rectangleObservation: v.oss)
+                fine.isLastFrame = true
+                _ = try? sequenza.perform([fine], on: buffer, orientation: .up)
+            }
+        }
+        inseguite = tenute
+        // 2 · le copertine nuove, 4 volte al secondo, se non è già seguita una copertina nello stesso punto
         let ora = Date()
-        guard ora.timeIntervalSince(ultimoRiquadro) > 0.12 else { return }
-        ultimoRiquadro = ora
-        suCopertine?(CopertineVive.trova(in: buffer))
+        if inseguite.count < 4, ora.timeIntervalSince(ultimaRicerca) >= 0.25 {
+            ultimaRicerca = ora
+            for o in CopertineVive.cerca(in: buffer) where inseguite.count < 4 {
+                let c = CGPoint(x: o.boundingBox.midX, y: o.boundingBox.midY)
+                if inseguite.contains(where: { $0.oss.boundingBox.insetBy(dx: -0.03, dy: -0.03).contains(c) }) { continue }
+                inseguite.append((id: UUID(), oss: o))
+            }
+        }
+        return inseguite.map { CopertinaVista(id: $0.id, angoli: CopertineVive.angoli($0.oss)) }
     }
 
     /// Video vero, senza audio. Si ferma con fermaVideo() o da solo dopo `max` secondi.

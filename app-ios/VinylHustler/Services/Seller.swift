@@ -28,6 +28,10 @@ final class Seller {
     var prezzoMancante: Set<UUID> = []
     /// V60: i dischi riconosciuti dal REC: sulla loro scheda la condizione si sceglie disco per disco.
     var dalVideo: Set<UUID> = []
+    /// V72: quando è partito il REC in corso (per riconoscere i doppioni dello stesso video).
+    var inizioREC: Date?
+    /// V72: dischi del REC riconosciuti due volte nello stesso video: doppione → il primo (il doppione si toglie).
+    var doppioneDi: [UUID: UUID] = [:]
     @ObservationIgnored private var prezzoGiro: [UUID: Int] = [:]
     var lastError: String?
 
@@ -158,8 +162,26 @@ final class Seller {
             disc.photoFiles = first.images.compactMap { disc.photoFiles[safe: $0] }
             disc.photoKinds = first.images.compactMap { disc.photoKinds[safe: $0] }
         }
+        // V72: dal REC, lo stesso disco già riconosciuto in questo video (copertina persa e ritrovata, o ripassata
+        // davanti): il secondo si toglie senza suoni né voce, e la sua etichetta mostra il primo.
+        if dalVideo.contains(disc.id), discs.count == 1, let primo = primoUguale(a: disc, context: context) {
+            doppioneDi[disc.id] = primo.id
+            dalVideo.remove(disc.id)
+            discard(disc)
+            return
+        }
         if discs.contains(where: { $0.status == .daConfermare }) { Suoni.riconosciuto() } else { Suoni.errore() }
         announce(discs, dalREC: dalVideo.contains(disc.id))
+    }
+
+    /// V72: un altro disco dello stesso REC con la stessa release, ancora da decidere o già deciso (non tolto).
+    private func primoUguale(a disc: Disc, context: ModelContext) -> Disc? {
+        guard let inizio = inizioREC, let rid: Int = disc.releaseID else { return nil }
+        let cercata: Int? = rid
+        let stessi = (try? context.fetch(FetchDescriptor<Disc>(predicate: #Predicate<Disc> { $0.releaseID == cercata }))) ?? []
+        return stessi
+            .filter { $0.id != disc.id && dalVideo.contains($0.id) && $0.createdAt >= inizio && $0.status != .tolto && doppioneDi[$0.id] == nil }
+            .min { $0.createdAt < $1.createdAt }
     }
 
     /// La voce parte appena finito il suono di "riconosciuto", per non accavallarsi.

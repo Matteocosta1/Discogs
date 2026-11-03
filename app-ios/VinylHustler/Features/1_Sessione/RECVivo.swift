@@ -8,17 +8,30 @@ import UIKit
 /// con artista, titolo e prezzo.
 @MainActor @Observable
 final class RECVivo {
+    /// Una copertina di questo fotogramma, seguita dal motore (V72): id stabile, angoli nell'anteprima e nella fotocamera.
+    struct Vista {
+        let id: UUID
+        let angoli: [CGPoint]
+        let camera: [CGPoint]
+    }
+
     struct Traccia: Identifiable {
         let id = UUID()
-        var angoli: [CGPoint]           // nei punti dell'anteprima, smussati fotogramma dopo fotogramma
+        /// V72: l'id della copertina seguita dal motore (cambia solo se il telefono la perde e la ritrova).
+        var visione: UUID
+        var angoli: [CGPoint]           // nei punti dell'anteprima
         var angoliCamera: [CGPoint]     // gli stessi, in coordinate della fotocamera (0…1): servono a ritagliare la copertina
         var centro: CGPoint
         var visti = 1
         var ultimo: Date
+        /// V72: «ferma» = non si è allontanata più di 16 punti da qui da `fermoDa`.
+        var ancora: CGPoint
         var fermoDa: Date
         var agganciato: Date?
         var ordine = 0                  // 0, 1, 2… nell'ordine di aggancio (il numero «01» dell'etichetta)
         var discID: UUID?
+        /// V72: non si vede da questo momento (riflesso, mano davanti): se ricompare lì vicino è la stessa.
+        var persaDa: Date?
     }
 
     private(set) var tracce: [Traccia] = [] {
@@ -30,11 +43,14 @@ final class RECVivo {
     /// La copertina di cui serve il fotogramma da riconoscere (una alla volta).
     private(set) var daFotografare: UUID?
     private(set) var attivo = false
+    /// V72: i dischi nati da questo REC, nell'ordine di aggancio (per il numero «01» e per contarli senza doppioni).
+    private(set) var dischi: [UUID] = []
 
     func inizia() {
         tracce = []
         agganciati = 0
         daFotografare = nil
+        dischi = []
         attivo = true
     }
 
@@ -52,50 +68,80 @@ final class RECVivo {
         return CGPoint(x: x / CGFloat(q.count), y: y / CGFloat(q.count))
     }
 
-    /// Un fotogramma: le copertine trovate (4 angoli ciascuna, nei punti dell'anteprima).
-    /// `camera`: gli stessi quadri in coordinate della fotocamera (stesso ordine).
-    func aggiorna(_ quadri: [[CGPoint]], camera: [[CGPoint]]) {
+    /// I dischi trovati, contando una volta sola quelli uniti perché doppioni (`alias`: doppione → originale).
+    func quanti(alias: [UUID: UUID]) -> Int {
+        Set(dischi.map { alias[$0] ?? $0 }).count
+    }
+
+    /// Il numero dell'etichetta di un disco (01, 02…): quello del primo aggancio di quel disco.
+    func numero(disco: UUID, alias: [UUID: UUID]) -> Int? {
+        let vero = alias[disco] ?? disco
+        return dischi.firstIndex { (alias[$0] ?? $0) == vero }
+    }
+
+    /// Un fotogramma (V72: 30 al secondo): le copertine seguite dal motore, ognuna col suo id.
+    func aggiorna(_ viste: [Vista]) {
         guard attivo else { return }
         let ora = Date()
-        var libere = Array(tracce.indices)
-        for (indice, q) in quadri.enumerated() where q.count == 4 {
-            let qc = indice < camera.count ? camera[indice] : []
-            let c = RECVivo.centro(q)
-            var migliore: Int?
-            var distanza: CGFloat = 110
-            for i in libere {
-                let d = hypot(tracce[i].centro.x - c.x, tracce[i].centro.y - c.y)
-                if d < distanza { distanza = d; migliore = i }
-            }
-            if let i = migliore {
-                libere.removeAll { $0 == i }
+        for v in viste where v.angoli.count == 4 {
+            let c = RECVivo.centro(v.angoli)
+            if let i = tracce.firstIndex(where: { $0.visione == v.id }) {
                 var t = tracce[i]
-                if distanza > 10 { t.fermoDa = ora }         // si è mosso: il «fermo» riparte
-                var nuovi: [CGPoint] = []
-                for k in 0..<4 {
-                    let a = t.angoli[k], b = q[k]
-                    nuovi.append(CGPoint(x: a.x * 0.5 + b.x * 0.5, y: a.y * 0.5 + b.y * 0.5))
-                }
-                t.angoli = nuovi
-                t.centro = RECVivo.centro(nuovi)
-                if qc.count == 4 { t.angoliCamera = qc }
+                t.angoli = v.angoli                       // Vision la segue già fotogramma per fotogramma: niente media
+                t.centro = c
+                if v.camera.count == 4 { t.angoliCamera = v.camera }
+                if hypot(c.x - t.ancora.x, c.y - t.ancora.y) > 16 { t.ancora = c; t.fermoDa = ora }
                 t.visti += 1
                 t.ultimo = ora
+                t.persaDa = nil
+                tracce[i] = t
+            } else if let i = persaVicina(a: c) {
+                // ricomparsa lì vicino dopo un attimo: è la stessa copertina (resta agganciata, niente secondo disco)
+                var t = tracce[i]
+                t.visione = v.id
+                t.angoli = v.angoli
+                t.centro = c
+                if v.camera.count == 4 { t.angoliCamera = v.camera }
+                t.ancora = c
+                t.ultimo = ora
+                t.persaDa = nil
                 tracce[i] = t
             } else {
-                tracce.append(Traccia(angoli: q, angoliCamera: qc, centro: c, ultimo: ora, fermoDa: ora))
+                tracce.append(Traccia(visione: v.id, angoli: v.angoli, angoliCamera: v.camera, centro: c,
+                                      ultimo: ora, ancora: c, fermoDa: ora))
             }
         }
-        // uscita dall'inquadratura: dopo 1 s senza vederla la traccia sparisce
-        tracce.removeAll { ora.timeIntervalSince($0.ultimo) > 1.0 }
-        // aggancio: vista in almeno 3 fotogrammi e ferma da 0,45 s; una alla volta
+        // non più vista: per 1,5 s resta «persa» (non si disegna); se ricompare lì vicino è la stessa, poi sparisce
+        for i in tracce.indices where tracce[i].persaDa == nil && ora.timeIntervalSince(tracce[i].ultimo) > 0.3 {
+            tracce[i].persaDa = ora
+        }
+        tracce.removeAll { traccia in
+            guard let persa = traccia.persaDa else { return false }
+            return ora.timeIntervalSince(persa) > 1.5
+        }
+        // aggancio: seguita da almeno 8 fotogrammi e ferma da 0,4 s; una alla volta
         if daFotografare == nil,
-           let i = tracce.firstIndex(where: { $0.agganciato == nil && $0.visti >= 3 && ora.timeIntervalSince($0.fermoDa) >= 0.45 }) {
+           let i = tracce.firstIndex(where: { $0.agganciato == nil && $0.persaDa == nil && $0.visti >= 8
+                                              && ora.timeIntervalSince($0.fermoDa) >= 0.4 }) {
             tracce[i].agganciato = ora
             tracce[i].ordine = agganciati
             agganciati += 1
             daFotografare = tracce[i].id
         }
+    }
+
+    /// V72: la copertina persa per un attimo più vicina a `c`, se c'è: entro metà del suo lato (al massimo 140 punti),
+    /// così una copertina accanto non prende il posto di quella persa.
+    private func persaVicina(a c: CGPoint) -> Int? {
+        var migliore: Int?
+        var distanza = CGFloat.greatestFiniteMagnitude
+        for i in tracce.indices where tracce[i].persaDa != nil {
+            let q = tracce[i].angoli
+            let lato = q.count == 4 ? hypot(q[1].x - q[0].x, q[1].y - q[0].y) : 0
+            let d = hypot(tracce[i].centro.x - c.x, tracce[i].centro.y - c.y)
+            if d < min(140, max(50, lato * 0.5)), d < distanza { distanza = d; migliore = i }
+        }
+        return migliore
     }
 
     /// Gli angoli (coordinate della fotocamera) della copertina da fotografare.
@@ -106,6 +152,7 @@ final class RECVivo {
     /// Il fotogramma è partito per il riconoscimento (o non c'era: disco nil).
     func fotografata(_ id: UUID, disco: UUID?) {
         if let i = tracce.firstIndex(where: { $0.id == id }) { tracce[i].discID = disco }
+        if let disco { dischi.append(disco) }
         if daFotografare == id { daFotografare = nil }
     }
 }
@@ -120,6 +167,8 @@ struct HologrammiREC: View {
     let rec: RECVivo
     let dischi: [Disc]
     var valuta = "EUR"
+    /// V72: dischi riconosciuti due volte nello stesso video → il primo (doppione → originale).
+    var alias: [UUID: UUID] = [:]
     /// Quando ogni cartellino ha avuto i dati veri (per farli decodificare in quel momento).
     @State private var pronti: [UUID: Date] = [:]
 
@@ -136,7 +185,8 @@ struct HologrammiREC: View {
         TimelineView(.animation(minimumInterval: 1.0 / 120)) { ctx in
             let tracce = rec.tracce
             Canvas { gc, size in
-                for t in tracce { disegna(gc, t, schede[t.id], ora: ctx.date, larghezza: size.width) }
+                // V72: le copertine perse per un attimo non si disegnano (se ricompaiono restano le stesse)
+                for t in tracce where t.persaDa == nil { disegna(gc, t, schede[t.id], ora: ctx.date, larghezza: size.width) }
             }
         }
         .allowsHitTesting(false)
@@ -150,7 +200,7 @@ struct HologrammiREC: View {
     private func cartellini(per tracce: [RECVivo.Traccia]) -> [UUID: Cartellino] {
         var out: [UUID: Cartellino] = [:]
         for t in tracce where t.agganciato != nil {
-            guard let id = t.discID, let d = dischi.first(where: { $0.id == id }) else {
+            guard let preso = t.discID, let d = dischi.first(where: { $0.id == (alias[preso] ?? preso) }) else {
                 out[t.id] = Cartellino(riga1: "LOCK", riga2: "ANALISI…", analisi: true)
                 continue
             }
@@ -188,7 +238,7 @@ struct HologrammiREC: View {
         guard q.count == 4 else { return }
         guard let quando = t.agganciato else {
             // cerca: angoli tenui un po' larghi che respirano
-            guard t.visti >= 2 else { return }
+            guard t.visti >= 8 else { return }
             let r = 0.5 + 0.5 * sin(ora.timeIntervalSinceReferenceDate * 6.25)
             angoli(&gc, q, scala: 1.12 + 0.02 * CGFloat(r), alfa: 0.25 + 0.2 * r, spessore: 1.4)
             return
@@ -216,7 +266,9 @@ struct HologrammiREC: View {
         // 3 · l'etichetta sopra l'angolo in alto a sinistra
         guard let c, tt > 180 else { return }
         let a = morbido((tt - 180) / 220)
-        let numero = String(format: "%02d", t.ordine + 1)
+        // V72: il numero è quello del disco (un doppione mostra il numero del primo aggancio)
+        let n = t.discID.flatMap { rec.numero(disco: $0, alias: alias) } ?? t.ordine
+        let numero = String(format: "%02d", n + 1)
         let mescola: Double = c.analisi ? 0 : pronti[t.id].map { max(0, 1 - ora.timeIntervalSince($0) / 0.42) } ?? 1
         let t1 = gc.resolve(Text("\(numero) · " + Glifi.rimescola(c.riga1, mescola)).font(Theme.mono(10, .bold)).foregroundStyle(Color(hex: 0xEAFFEA)))
         let t2 = gc.resolve(Text(Glifi.rimescola(c.riga2, mescola)).font(Theme.mono(9, .bold)).foregroundStyle(Theme.glow))
