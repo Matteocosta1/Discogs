@@ -1208,7 +1208,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
             let r = VNTrackRectangleRequest(rectangleObservation: v.oss)
             r.trackingLevel = .accurate
             if (try? sequenza.perform([r], on: buffer, orientation: .up)) != nil,
-               let nuova = r.results?.first, nuova.confidence >= 0.4,
+               let nuova = r.results?.first as? VNRectangleObservation, nuova.confidence >= 0.4,
                CopertineVive.quasiQuadrata(nuova, larghezza: larghezza, altezza: altezza) {
                 tenute.append((id: v.id, oss: nuova))
             } else {
