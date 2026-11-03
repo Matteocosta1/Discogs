@@ -576,10 +576,13 @@ final class Seller {
 }
 
 /// Esegue un lavoro alla volta, nell'ordine di arrivo (i dischi si riconoscono uno dopo l'altro).
-actor SerialQueue {
+/// V70: gira sul thread principale come Seller, così i lavori possono usare il disco e il contesto
+/// del database senza passarli tra thread diversi (erano 6 warning di Xcode in questo file).
+@MainActor
+final class SerialQueue {
     private var tail: Task<Void, Never>?
 
-    func run(_ job: @escaping @Sendable () async -> Void) async {
+    func run(_ job: @escaping @MainActor () async -> Void) async {
         let previous = tail
         let task = Task { await previous?.value; await job() }
         tail = task
