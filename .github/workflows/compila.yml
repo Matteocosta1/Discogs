@@ -15,16 +15,13 @@ concurrency:
 jobs:
   compila:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[compila]')
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - name: Scegli l'Xcode più recente
+      - name: Versione di Xcode
         run: |
-          XC=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
-          echo "Uso $XC"
-          sudo xcode-select -s "$XC"
           xcodebuild -version
           xcodebuild -showsdks | grep -E "iOS|watchOS" || true
 
