@@ -45,6 +45,11 @@ jobs:
             echo
             echo "Xcode: $(xcodebuild -version | head -1)"
             echo
+            echo "Parti compilate:"
+            echo '```'
+            grep -ohE "in target '[^']+'" build.log | sort | uniq -c || true
+            echo '```'
+            echo
             if [ -s problemi.txt ]; then echo '```'; head -200 problemi.txt; echo '```'; else echo "Compilazione pulita."; fi
           } >> "$GITHUB_STEP_SUMMARY"
           cat problemi.txt
