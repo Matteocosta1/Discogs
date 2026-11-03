@@ -12,7 +12,14 @@ final class Backend: @unchecked Sendable {
 
     private init() {
         if let url = AppConfig.supabaseURL, !AppConfig.supabaseAnonKey.isEmpty {
-            client = SupabaseClient(supabaseURL: url, supabaseKey: AppConfig.supabaseAnonKey)
+            // V71: comportamento nuovo della sessione (lo chiede Supabase, toglie l'avviso viola all'avvio).
+            // Sicuro qui: l'app non ascolta l'evento di sessione iniziale, chiede sempre `auth.session`,
+            // che Supabase rinnova da solo se è scaduta.
+            client = SupabaseClient(
+                supabaseURL: url,
+                supabaseKey: AppConfig.supabaseAnonKey,
+                options: SupabaseClientOptions(auth: .init(emitLocalSessionAsInitialSession: true))
+            )
         } else {
             client = nil
         }
