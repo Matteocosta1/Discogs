@@ -51,7 +51,7 @@ jobs:
             echo '```'
             echo
             if [ -s problemi.txt ]; then echo '```'; head -200 problemi.txt; echo '```'; else echo "Compilazione pulita."; fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           cat problemi.txt
           [ "$n_err" = "0" ] && [ "$n_warn" = "0" ]
 
