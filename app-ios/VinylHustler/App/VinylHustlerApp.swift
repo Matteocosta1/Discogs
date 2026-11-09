@@ -94,7 +94,7 @@ struct RootView: View {
         .onChange(of: tab, initial: true) { _, t in viste.insert(t) }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in tastiera = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in tastiera = false }
-        .task { ChatStore.shared.avvia(nome: seller.username) }      // i non letti della Chat anche dalle altre sezioni
+        .task { ChatStore.shared.avvia(discogs: seller.username) }      // i non letti della Chat anche dalle altre sezioni
     }
 
     @ViewBuilder private func sezione(_ i: Int) -> some View {

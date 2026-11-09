@@ -31,6 +31,14 @@ struct ConsoleView: View {
                         RigaJarvis { Text("Versione dell'app"); Spacer(); valore(AppVersione.nome) }
                         accountRows
                     } piede: { accountFooter }
+                    // V74: come ti vedono e ti trovano nella Chat (il «Nome» qui sopra davanti all'account Discogs)
+                    GruppoJarvis("Chat") {
+                        RigaJarvis {
+                            Text("Nome in Chat")
+                            Spacer()
+                            valore(nomeInChat)
+                        }
+                    } piede: { EmptyView() }
                     GruppoJarvis("API Discogs · ultimo minuto") {
                         RigaJarvis {
                             Text("Richieste")
@@ -47,6 +55,10 @@ struct ConsoleView: View {
                     GruppoJarvis("Regole del prezzo") { prezzoRows } piede: {
                         Text("Base = più basso in vendita, mai sotto il suggerito per il grado. Premi: 0 copie +100%, 1-2 +50%, 3-5 +25%; want/have oltre 1 +10%, oltre 2 +25%, oltre 4 +50%. Arrotondato per eccesso alla griglia.")
                     }
+                    // V74: frase obbligatoria per le app che usano le API di Discogs
+                    Text("Questa app usa le API di Discogs ma non è affiliata, sponsorizzata o approvata da Discogs.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("VINYL HUSTLER · \(AppVersione.nome) · KR")
                         .font(Theme.mono(10)).tracking(1.5).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity)
@@ -86,6 +98,12 @@ struct ConsoleView: View {
 
     private func valore(_ t: String) -> some View {
         Text(t).font(Theme.mono(13)).foregroundStyle(Color(hex: 0xCFE9D3)).lineLimit(1).minimumScaleFactor(0.7)
+    }
+
+    private var nomeInChat: String {
+        let n = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let d = seller.username.isEmpty ? "—" : seller.username
+        return n.count >= 2 ? "\(n) · \(d)" : d
     }
 
     // Il corpo è diviso in pezzi: tutto insieme è troppo per il compilatore di Swift.

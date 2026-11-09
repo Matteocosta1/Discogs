@@ -1,18 +1,22 @@
 import AuthenticationServices
+import PhotosUI
 import SwiftData
 import SwiftUI
 import UIKit
 
 /// V68 — CHAT (sesta icona, dopo Ordini), come nel mock-up approvato:
 /// in alto «CHAT · N» e INVITA; cerca per nome Discogs (Aggiungi / Scrivi); elenco delle chat con
-/// CONTATTO / RICHIESTA e i non letti. Nella chat: testo e schede disco (Proponi / Parere),
-/// risposte con un tocco (Alza · Giusto · Abbassa, Mi interessa), Segnala e Blocca nel tasto ⋯.
+/// CONTATTO / RICHIESTA e i non letti. Nella chat: testo e schede disco, Segnala e Blocca nel tasto ⋯.
+/// V74: nome in Chat («Nome · account Discogs», chiesto la prima volta), tasto + con Foto · Galleria · Disco,
+/// foto private a schermo intero (Segnala), schede Annuncio (Apri su Discogs) e Parere (Alza · Giusto · Abbassa).
 struct ChatView: View {
     @Environment(Seller.self) private var seller
     private var store: ChatStore { ChatStore.shared }
     @State private var cerca = ""
     @State private var trovati: [UtenteChat] = []
     @State private var aperta: UUID?
+    @State private var chiediNome = false
+    @AppStorage("chatNomeConfermato") private var nomeConfermato = false
     @Environment(\.sezioneVisibile) private var visibile
 
     var body: some View {
@@ -22,7 +26,7 @@ struct ChatView: View {
                     Text(store.conversazioni.isEmpty ? "CHAT" : "CHAT · \(store.conversazioni.count)")
                         .font(Theme.mono(10, .bold)).tracking(2).foregroundStyle(Theme.glow)
                     Spacer()
-                    ShareLink(item: "Ciao! Uso Vinyl Hustler per vendere dischi su Discogs. Scaricala e cercami nella Chat: sono \(seller.username).") {
+                    ShareLink(item: "Ciao! Uso Vinyl Hustler per vendere dischi su Discogs. Scaricala e cercami nella Chat: sono \(store.mioNome.isEmpty ? seller.username : store.mioNome).") {
                         Text("INVITA").font(Theme.mono(10, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.glow.opacity(0.5), lineWidth: 1))
@@ -40,7 +44,7 @@ struct ChatView: View {
                     .padding(.horizontal, 12).frame(height: 38)
                     .background(Color(red: 0.46, green: 0.46, blue: 0.5).opacity(0.24), in: RoundedRectangle(cornerRadius: 12))
                     if store.nomeOccupato {
-                        Text("Il nome \(seller.username) è già usato da un altro account: gli altri non ti trovano.")
+                        Text("Il nome «\(ChatStore.nomeImpostato) · \(seller.username)» è già usato da un altro telefono: gli altri non ti trovano. Cambialo con «Nome» in Settings.")
                             .font(.system(size: 13)).foregroundStyle(Theme.warn)
                     }
                     ScrollView {
@@ -71,7 +75,11 @@ struct ChatView: View {
         }
         .onChange(of: visibile, initial: true) { _, v in
             store.visibile = v
-            if v { store.riparti(nome: seller.username) }      // aprendo la Chat si rilegge subito
+            if v { store.riparti(discogs: seller.username) }   // aprendo la Chat si rilegge subito
+            if v, store.accesso, !nomeConfermato { chiediNome = true }
+        }
+        .sheet(isPresented: $chiediNome, onDismiss: { nomeConfermato = true }) {
+            NomeChat(discogs: seller.username) { store.riparti(discogs: seller.username) }
         }
     }
 
@@ -130,7 +138,10 @@ struct ChatView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("La chat passa dal server di Vinyl Hustler: accedi con Apple una volta sola.")
                 .font(.system(size: 14)).foregroundStyle(Theme.muted)
-            AccessoApple { store.riparti(nome: seller.username) }
+            AccessoApple {
+                store.riparti(discogs: seller.username)
+                if !nomeConfermato { chiediNome = true }
+            }
             Spacer()
         }
         .padding(.top, 10)
@@ -138,7 +149,8 @@ struct ChatView: View {
 
     private func anteprima(_ m: MsgChat) -> String {
         let mio = m.da == store.io ? "Tu: " : ""
-        if let d = m.disco { return mio + (m.tipo == "parere" ? "Parere · " : "Proposta · ") + d.titolo }
+        if m.foto != nil { return mio + "Foto" }
+        if let d = m.disco { return mio + (m.tipo == "parere" ? "Parere · " : "Annuncio · ") + d.titolo }
         return mio + (m.testo ?? "")
     }
 }
@@ -154,6 +166,15 @@ struct ConversazioneView: View {
     @State private var scegliDisco = false
     @State private var menu = false
     @State private var segnalato = false
+    @State private var allega = false
+    @State private var dopoAllega: Allega?
+    @State private var fotocamera = false
+    @State private var galleria = false
+    @State private var scelta: PhotosPickerItem?
+    @State private var fotoAperta: MsgChat?
+    @State private var invioFoto = false
+
+    enum Allega { case foto, galleria, disco }
 
     private var bloccato: Bool { store.bloccati.contains(altro) }
     private var richiesta: Bool { store.conversazioni.first(where: { $0.id == altro })?.richiesta ?? false }
@@ -203,13 +224,17 @@ struct ConversazioneView: View {
             if let e = store.errore { Text(e).font(.system(size: 12)).foregroundStyle(Theme.warn).padding(.horizontal, 14) }
 
             HStack(spacing: 8) {
-                Button { Suoni.tocco(); scegliDisco = true } label: {
-                    Image(systemName: "record.circle").font(.system(size: 20)).foregroundStyle(Theme.glow)
-                        .frame(width: 42, height: 42)
-                        .overlay(Circle().stroke(Theme.glow.opacity(0.5), lineWidth: 1))
+                Button { Suoni.tocco(); allega = true } label: {
+                    ZStack {
+                        if invioFoto { ProgressView().tint(Theme.glow) }
+                        else { Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.glow) }
+                    }
+                    .frame(width: 42, height: 42)
+                    .overlay(Circle().stroke(Theme.glow.opacity(0.5), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Manda un disco")
+                .disabled(invioFoto)
+                .accessibilityLabel("Allega una foto o un disco")
                 TextField("Scrivi", text: $testo)
                     .font(.system(size: 16))
                     .padding(.horizontal, 14).frame(height: 42)
@@ -230,9 +255,41 @@ struct ConversazioneView: View {
         }
         .background(Theme.bg)
         .task { await store.segnaLetti(altro) }
+        .sheet(isPresented: $allega, onDismiss: {
+            // una sola schermata alla volta: quella scelta si apre quando ALLEGA è chiuso
+            switch dopoAllega {
+            case .foto: fotocamera = true
+            case .galleria: galleria = true
+            case .disco: scegliDisco = true
+            case nil: break
+            }
+            dopoAllega = nil
+        }) {
+            AllegaChat { dopoAllega = $0; allega = false }
+        }
         .sheet(isPresented: $scegliDisco) {
             SceltaDisco { disco, tipo in
                 Task { _ = await store.manda(a: altro, disco: disco, tipo: tipo) }
+            }
+        }
+        .fullScreenCover(isPresented: $fotocamera) {
+            ScattoChat { img in
+                fotocamera = false
+                if let img { mandaFoto(img) }
+            }
+            .ignoresSafeArea()
+        }
+        .photosPicker(isPresented: $galleria, selection: $scelta, matching: .images)
+        .onChange(of: scelta) { _, nuovo in
+            guard let nuovo else { return }
+            scelta = nil
+            Task {
+                if let dati = try? await nuovo.loadTransferable(type: Data.self), let img = UIImage(data: dati) { mandaFoto(img) }
+            }
+        }
+        .fullScreenCover(item: $fotoAperta) { m in
+            VistaFotoChat(m: m, mia: m.da == store.io) {
+                Task { segnalato = await store.segnala(altro, messaggio: m.id) }
             }
         }
         .confirmationDialog(store.nome(altro), isPresented: $menu, titleVisibility: .visible) {
@@ -269,7 +326,13 @@ struct ConversazioneView: View {
 
     @ViewBuilder private func riga(_ m: MsgChat) -> some View {
         let mia = m.da == store.io
-        if let d = m.disco {
+        if m.foto != nil {
+            HStack {
+                if mia { Spacer(minLength: 50) }
+                FotoBolla(m: m, mia: mia) { Suoni.tocco(); fotoAperta = m }
+                if !mia { Spacer(minLength: 50) }
+            }
+        } else if let d = m.disco {
             HStack {
                 if mia { Spacer(minLength: 50) }
                 CartaDisco(m: m, d: d, mia: mia) { valore in
@@ -281,8 +344,7 @@ struct ConversazioneView: View {
                         switch valore {
                         case "Giusto": frase = "Prezzo giusto per \(titolo)"
                         case "Alza": frase = "Io lo alzerei (\(titolo))"
-                        case "Abbassa": frase = "Io lo abbasserei (\(titolo))"
-                        default: frase = "Mi interessa \(titolo), a quanto me lo fai?"
+                        default: frase = "Io lo abbasserei (\(titolo))"
                         }
                         _ = await store.manda(a: altro, testo: frase)
                     }
@@ -307,6 +369,16 @@ struct ConversazioneView: View {
         }
     }
 
+    private func mandaFoto(_ img: UIImage) {
+        guard !invioFoto else { return }
+        invioFoto = true
+        Suoni.schedaApre()
+        Task {
+            if !(await store.mandaFoto(a: altro, immagine: img)) { Suoni.nego() }
+            invioFoto = false
+        }
+    }
+
     private func invia() {
         let t = testo.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, !invio else { return }
@@ -319,19 +391,41 @@ struct ConversazioneView: View {
     }
 }
 
-/// La scheda di un disco dentro la chat. Chi la riceve risponde con un tocco.
+/// La scheda di un disco dentro la chat. V74: i dati di Discogs (copertina, prezzo, stato dell'annuncio) non stanno
+/// nel messaggio: si rileggono da Discogs quando la scheda si vede (al massimo ogni 10 minuti, mai più vecchi di
+/// 6 ore come chiedono le regole delle API), con la fonte «Data provided by Discogs».
 struct CartaDisco: View {
     let m: MsgChat
     let d: DiscoChat
     let mia: Bool
     let risposta: (String) -> Void
+    @Environment(Seller.self) private var seller
+    @Environment(\.openURL) private var apriLink
+    @State private var dati: DatiDiscogs?
+
+    struct DatiDiscogs {
+        var copertina: String?
+        var prezzo: Double?
+        var valuta: String?
+        var inVendita = true
+        var quando = Date()
+    }
+    /// Dati già letti (per annuncio o disco), validi 10 minuti.
+    private static var letti: [String: DatiDiscogs] = [:]
+
+    private var annuncio: Bool { m.tipo == "annuncio" || m.tipo == "proposta" }
+    private var paginaDisco: URL? {
+        if let l = d.listing { return URL(string: "https://www.discogs.com/sell/item/\(l)") }
+        if let r = d.release { return URL(string: "https://www.discogs.com/release/\(r)") }
+        return nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(m.tipo == "parere" ? "PARERE SUL PREZZO" : "PROPOSTA")
+            Text(m.tipo == "parere" ? "PARERE SUL PREZZO" + (d.stato == "bozza" ? " · BOZZA" : "") : "ANNUNCIO SU DISCOGS")
                 .font(Theme.mono(9, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
             HStack(spacing: 10) {
-                AsyncImage(url: d.copertina.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                AsyncImage(url: (dati?.copertina ?? d.copertina).flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
                     .frame(width: 48, height: 48).clipShape(Circle())
                     .overlay(Circle().stroke(Theme.glow.opacity(0.5), lineWidth: 1))
                 VStack(alignment: .leading, spacing: 2) {
@@ -339,13 +433,26 @@ struct CartaDisco: View {
                     Text("\(d.cond) · \(d.posto)").font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                Text(soldiIT(d.prezzo, d.valuta)).font(.system(size: 16, weight: .heavy)).foregroundStyle(Theme.money)
+                Text(soldiIT(dati?.prezzo ?? d.prezzo, dati?.valuta ?? d.valuta)).font(.system(size: 16, weight: .heavy)).foregroundStyle(Theme.money)
                     .lineLimit(1).fixedSize()
             }
-            if !mia {
-                let scelte = m.tipo == "parere" ? ["Alza", "Giusto", "Abbassa"] : ["Mi interessa"]
+            if annuncio, d.listing != nil {
+                if dati?.inVendita == false {
+                    Text("NON PIÙ IN VENDITA").font(Theme.mono(9, .bold)).tracking(1.2).foregroundStyle(Theme.warn)
+                }
+                Button {
+                    Suoni.tocco()
+                    if let u = paginaDisco { apriLink(u) }
+                } label: {
+                    Text("Apri su Discogs").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.black)
+                        .frame(maxWidth: .infinity).frame(height: 32)
+                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+            if m.tipo == "parere" && !mia {
                 HStack(spacing: 6) {
-                    ForEach(scelte, id: \.self) { s in
+                    ForEach(["Alza", "Giusto", "Abbassa"], id: \.self) { s in
                         Button { if m.risposta == nil { risposta(s) } } label: {
                             Text(s).font(.system(size: 13, weight: .bold))
                                 .foregroundStyle(m.risposta == s ? Color.black : Theme.glow)
@@ -357,8 +464,14 @@ struct CartaDisco: View {
                         .disabled(m.risposta != nil && m.risposta != s)
                     }
                 }
-            } else if let r = m.risposta {
+            } else if mia, let r = m.risposta {
                 Text("RISPOSTA · \(r.uppercased())").font(Theme.mono(9, .bold)).tracking(1.2).foregroundStyle(Theme.glow)
+            }
+            if let u = paginaDisco {
+                Button { Suoni.tocco(); apriLink(u) } label: {
+                    Text("Data provided by Discogs").font(Theme.mono(8.5)).tracking(1).underline().foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
             }
             Text(ChatData.ora(m.creato)).font(Theme.mono(8.5)).tracking(1).foregroundStyle(Theme.muted)
         }
@@ -366,10 +479,31 @@ struct CartaDisco: View {
         .frame(maxWidth: 290)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(mia ? Theme.glow.opacity(0.45) : Color.white.opacity(0.14), lineWidth: 1))
+        .task(id: m.id) { await aggiorna() }
+    }
+
+    /// Rilegge da Discogs: l'annuncio (prezzo, copertina, se è ancora in vendita) o il disco (copertina).
+    private func aggiorna() async {
+        let chiave: String
+        if let l = d.listing { chiave = "l\(l)" } else if let r = d.release { chiave = "r\(r)" } else { return }
+        if let g = Self.letti[chiave], Date().timeIntervalSince(g.quando) < 600 { dati = g; return }
+        var nuovi = DatiDiscogs()
+        if let l = d.listing, let a = try? await seller.client.listing(l) {
+            nuovi.copertina = a.release.thumbnail
+            nuovi.prezzo = a.price?.value
+            nuovi.valuta = a.price?.currency
+            nuovi.inVendita = a.status == "For Sale"
+        } else if let r = d.release, let rel = try? await seller.client.release(r) {
+            nuovi.copertina = rel.images?.first(where: { $0.type == "primary" })?.uri150 ?? rel.images?.first?.uri150
+        } else {
+            return
+        }
+        Self.letti[chiave] = nuovi
+        dati = nuovi
     }
 }
 
-/// Il disco da mandare (quelli messi in vendita o in bozza con l'app), poi Proponi o Parere.
+/// Il disco da mandare. Annuncio: solo i dischi in vendita su Discogs (si apre l'annuncio vero). Parere: anche le bozze.
 struct SceltaDisco: View {
     let manda: (DiscoChat, String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -377,8 +511,17 @@ struct SceltaDisco: View {
     @Query(sort: \Disc.createdAt, order: .reverse) private var tutti: [Disc]
     @State private var scelto: Disc?
 
-    private var dischi: [Disc] {
-        tutti.filter { ($0.status == .inVendita || $0.status == .bozza) && !$0.releaseTitle.isEmpty }
+    private var inVendita: [Disc] {
+        tutti.filter { $0.status == .inVendita && $0.listingID != nil && !$0.releaseTitle.isEmpty }
+    }
+    private var bozze: [Disc] {
+        tutti.filter { $0.status == .bozza && !$0.releaseTitle.isEmpty }
+    }
+    private var sceltoInVendita: Bool { scelto.map { $0.status == .inVendita && $0.listingID != nil } ?? false }
+    private var nota: String {
+        guard let scelto else { return "Annuncio: solo i dischi in vendita su Discogs. Parere: anche le bozze." }
+        return scelto.status == .bozza ? "È una bozza: si può chiedere solo un parere sul prezzo."
+                                       : "Annuncio apre l\u{2019}annuncio vero su Discogs. Parere chiede cosa ne pensa del prezzo."
     }
 
     var body: some View {
@@ -390,38 +533,24 @@ struct SceltaDisco: View {
                     .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
             }
             ScrollView {
-                LazyVStack(spacing: 8) {
-                    if dischi.isEmpty {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if inVendita.isEmpty && bozze.isEmpty {
                         Text("Nessun disco in vendita o in bozza fatto con l\u{2019}app.")
                             .font(.system(size: 14)).foregroundStyle(Theme.muted).padding(.top, 20)
                     }
-                    ForEach(dischi) { d in
-                        Button { Suoni.tocco(); scelto = d } label: {
-                            HStack(spacing: 12) {
-                                AsyncImage(url: d.coverURL) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                                    .frame(width: 40, height: 40).clipShape(Circle())
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(d.releaseTitle).font(.system(size: 14, weight: .semibold)).lineLimit(1)
-                                    Text("\(d.gradeText) · \(d.box)").font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
-                                }
-                                Spacer(minLength: 4)
-                                if let p = d.price { Text(soldiIT(p, seller.currency)).font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.money) }
-                            }
-                            .padding(10)
-                            .background(Theme.panel, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(scelto?.id == d.id ? Theme.accent : Color.clear, lineWidth: 1.5))
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    if !inVendita.isEmpty { sezione("IN VENDITA · \(inVendita.count)") }
+                    ForEach(inVendita) { rigaDisco($0) }
+                    if !bozze.isEmpty { sezione("BOZZE · \(bozze.count)") }
+                    ForEach(bozze) { rigaDisco($0) }
                 }
             }
+            Text(nota).font(.system(size: 12)).foregroundStyle(Theme.muted).frame(minHeight: 16, alignment: .topLeading)
             HStack(spacing: 8) {
-                Button("Proponi") { invia("proposta") }.buttonStyle(PillolaChat(piena: false, alta: true))
+                Button("Annuncio") { invia("annuncio") }.buttonStyle(PillolaChat(piena: false, alta: true))
+                    .disabled(!sceltoInVendita).opacity(sceltoInVendita ? 1 : 0.35)
                 Button("Parere") { invia("parere") }.buttonStyle(PillolaChat(piena: false, alta: true))
+                    .disabled(scelto == nil).opacity(scelto == nil ? 0.35 : 1)
             }
-            .disabled(scelto == nil)
-            .opacity(scelto == nil ? 0.35 : 1)
         }
         .padding(18)
         .background(Color(red: 0.043, green: 0.059, blue: 0.047))
@@ -429,12 +558,238 @@ struct SceltaDisco: View {
         .presentationDetents([.large])
     }
 
+    private func sezione(_ t: String) -> some View {
+        Text(t).font(Theme.mono(10, .bold)).tracking(1.8).foregroundStyle(Theme.glow).padding(.top, 4).padding(.leading, 2)
+    }
+
+    private func rigaDisco(_ d: Disc) -> some View {
+        Button { Suoni.tocco(); scelto = d } label: {
+            HStack(spacing: 12) {
+                AsyncImage(url: d.coverURL) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                    .frame(width: 40, height: 40).clipShape(Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(d.releaseTitle).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                    Text("\(d.gradeText) · \(d.box)").font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if let p = d.price { Text(soldiIT(p, seller.currency)).font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.money) }
+            }
+            .padding(10)
+            .background(Theme.panel, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(scelto?.id == d.id ? Theme.accent : Color.clear, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+    }
+
     private func invia(_ tipo: String) {
         guard let d = scelto else { return }
+        if tipo == "annuncio" && !sceltoInVendita { return }
         Suoni.schedaApre()
+        // solo i dati nostri (titolo, grado, posizione, prezzo) e i numeri di Discogs: copertina e prezzo
+        // aggiornati si rileggono da Discogs quando la scheda si vede
         manda(DiscoChat(titolo: d.releaseTitle, cond: d.gradeText, posto: d.box, prezzo: d.price ?? 0,
-                        valuta: seller.currency, copertina: d.coverURL?.absoluteString), tipo)
+                        valuta: seller.currency, copertina: nil,
+                        listing: tipo == "annuncio" ? d.listingID : nil, release: d.releaseID,
+                        stato: d.status == .bozza ? "bozza" : "vendita"), tipo)
         dismiss()
+    }
+}
+
+/// V74: il tasto + della chat.
+struct AllegaChat: View {
+    let scegli: (ConversazioneView.Allega) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("ALLEGA").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
+                Spacer()
+                Button("Chiudi") { Suoni.testa(); dismiss() }
+                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
+            }
+            voce("Foto", "camera") { scegli(.foto) }
+            voce("Galleria", "photo.on.rectangle") { scegli(.galleria) }
+            voce("Disco", "record.circle") { scegli(.disco) }
+            Text("Le foto le vede solo chi è in questa chat e si cancellano da sole dopo \(FotoChat.giorni) giorni.")
+                .font(.system(size: 13)).foregroundStyle(Theme.muted)
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .background(Color(red: 0.043, green: 0.059, blue: 0.047))
+        .preferredColorScheme(.dark)
+        .presentationDetents([.height(340)])
+    }
+
+    private func voce(_ t: String, _ icona: String, _ fai: @escaping () -> Void) -> some View {
+        Button { Suoni.tocco(); fai() } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icona).font(.system(size: 18)).foregroundStyle(Theme.glow).frame(width: 24)
+                Text(t).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+                Spacer()
+            }
+            .padding(.horizontal, 14).frame(height: 50)
+            .background(Theme.panel, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.glow.opacity(0.35), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// V74: il nome in Chat, chiesto la prima volta che si apre la Chat (è il «Nome» di Settings).
+struct NomeChat: View {
+    let discogs: String
+    let salvato: () -> Void
+    @AppStorage("userName") private var nomeUtente = ""
+    @AppStorage("chatNomeConfermato") private var confermato = false
+    @Environment(\.dismiss) private var dismiss
+    @State private var nome = ""
+
+    private var pulito: String { nome.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("NOME").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
+                Spacer()
+                Button("Chiudi") { Suoni.testa(); confermato = true; dismiss() }
+                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
+            }
+            Text("Gli altri utenti ti trovano e ti vedono così. Si cambia anche da Settings.")
+                .font(.system(size: 13)).foregroundStyle(Theme.muted)
+            TextField("Il tuo nome", text: $nome)
+                .font(.system(size: 16))
+                .padding(.horizontal, 14).frame(height: 46)
+                .background(Theme.panelHigh, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.glow.opacity(0.4), lineWidth: 1))
+                .submitLabel(.done)
+                .onSubmit(salva)
+                .onChange(of: nome) { _, v in if v.count > 24 { nome = String(v.prefix(24)) } }
+            Text("\(pulito.isEmpty ? "…" : pulito) · \(discogs)")
+                .font(Theme.mono(13)).tracking(0.5).foregroundStyle(Theme.glow)
+            Button("Salva", action: salva).buttonStyle(PillolaChat(piena: true, alta: true))
+                .disabled(pulito.count < 2).opacity(pulito.count < 2 ? 0.35 : 1)
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .background(Color(red: 0.043, green: 0.059, blue: 0.047))
+        .preferredColorScheme(.dark)
+        .presentationDetents([.height(330)])
+        .onAppear { nome = nomeUtente }
+    }
+
+    private func salva() {
+        guard pulito.count >= 2 else { return }
+        Suoni.fatto()
+        nomeUtente = pulito
+        confermato = true
+        salvato()
+        dismiss()
+    }
+}
+
+/// V74: una foto nella chat (si apre a schermo intero con un tocco).
+struct FotoBolla: View {
+    let m: MsgChat
+    let mia: Bool
+    let apri: () -> Void
+    @State private var img: UIImage?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Group {
+                if FotoChat.scaduta(m) {
+                    Text("Foto scaduta").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                        .frame(width: 200, height: 80)
+                } else if let img {
+                    Image(uiImage: img).resizable().scaledToFit()
+                        .frame(maxWidth: 240, maxHeight: 320)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .onTapGesture(perform: apri)
+                } else {
+                    ProgressView().tint(Theme.glow).frame(width: 200, height: 200)
+                }
+            }
+            Text(ChatData.ora(m.creato)).font(Theme.mono(8.5)).tracking(1).foregroundStyle(mia ? Theme.glow : Theme.muted)
+                .padding(.horizontal, 6).padding(.bottom, 2)
+        }
+        .padding(4)
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .stroke(mia ? Theme.glow.opacity(0.35) : Color.white.opacity(0.14), lineWidth: 1))
+        .task(id: m.id) {
+            if let p = m.foto, !FotoChat.scaduta(m) { img = await FotoChat.immagine(p) }
+        }
+    }
+}
+
+/// V74: la foto a schermo intero. Chiudi; sulle foto degli altri anche Segnala.
+struct VistaFotoChat: View {
+    let m: MsgChat
+    let mia: Bool
+    let segnala: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var img: UIImage?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Chiudi") { Suoni.testa(); dismiss() }
+                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.accent)
+                Spacer()
+                if !mia {
+                    Button { Suoni.fatto(); segnala(); dismiss() } label: {
+                        Text("Segnala").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.warn)
+                            .padding(.horizontal, 14).frame(height: 34)
+                            .overlay(Capsule().stroke(Theme.warn.opacity(0.55), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            Spacer(minLength: 0)
+            if let img {
+                Image(uiImage: img).resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .padding(.horizontal, 10)
+            } else {
+                ProgressView().tint(Theme.glow)
+            }
+            Spacer(minLength: 0)
+            Text("SI CANCELLA TRA \(FotoChat.giorniRimasti(m)) GIORNI")
+                .font(Theme.mono(9)).tracking(1.5).foregroundStyle(Theme.muted)
+                .padding(.bottom, 22)
+        }
+        .background(Color.black.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .task { if let p = m.foto { img = await FotoChat.immagine(p) } }
+    }
+}
+
+/// V74: la fotocamera per mandare una foto in chat (quella di sistema).
+struct ScattoChat: UIViewControllerRepresentable {
+    let fatto: (UIImage?) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(fatto: fatto) }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let p = UIImagePickerController()
+        p.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .photoLibrary
+        p.delegate = context.coordinator
+        return p
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    @MainActor
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let fatto: (UIImage?) -> Void
+        init(fatto: @escaping (UIImage?) -> Void) { self.fatto = fatto }
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            fatto(info[.originalImage] as? UIImage)
+        }
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { fatto(nil) }
     }
 }
 
@@ -529,6 +884,12 @@ struct AccessoApple: View {
 
 enum ChatData {
     static func ora(_ d: Date) -> String { d.formatted(.dateTime.hour().minute()) }
+    /// Data e ora per i filtri del server (es. «aggiornato dopo…»).
+    static func iso(_ d: Date) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: d)
+    }
     /// Oggi l'ora, altrimenti il giorno.
     static func breve(_ d: Date) -> String {
         Calendar.current.isDateInToday(d) ? ora(d) : d.formatted(.dateTime.day().month(.abbreviated))
