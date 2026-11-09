@@ -209,14 +209,11 @@ struct DiscActions: View {
                 }
             case .pronto:
                 VStack(alignment: .leading, spacing: 8) {
-                    if let p = disc.price {
-                        HStack(alignment: .lastTextBaseline) {
+                    if disc.price != nil {
+                        HStack(alignment: .center) {
                             Text("Prezzo").font(.system(size: 15)).foregroundStyle(Theme.muted)
                             Spacer()
-                            Text(p, format: .currency(code: seller.currency)).font(.system(size: 28, weight: .bold))
-                                .foregroundStyle(Theme.glow)
-                                .contentTransition(.numericText(value: p))
-                                .transition(.scale(scale: 0.6).combined(with: .opacity))
+                            PrezzoModificabile(disc: disc, size: 28, contaDaZero: false)    // V74: si cambia anche qui
                         }
                     }
                     HStack(spacing: 8) {
@@ -387,14 +384,12 @@ struct DiscActions: View {
     }
 
     @ViewBuilder private var prezzoSubito: some View {
-        HStack(alignment: .lastTextBaseline) {
+        HStack(alignment: .center) {
             Text("Prezzo").font(.system(size: 15)).foregroundStyle(Theme.muted)
             Spacer()
-            if let p = disc.price {
-                // V60: il prezzo conta da zero quando arriva
-                PrezzoConta(valore: p, valuta: seller.currency, size: compact ? 24 : 28)
-                    .shadow(color: Theme.glow.opacity(0.35), radius: 8)
-                    .id(p)
+            if disc.price != nil {
+                // V60: il prezzo conta da zero quando arriva; V74: − / + sulla griglia e cifra da scrivere
+                PrezzoModificabile(disc: disc, size: compact ? 24 : 28)
             } else if seller.prezzoInCorso.contains(disc.id) {
                 ProgressView().tint(Theme.accent).controlSize(.small)
             } else {
@@ -700,5 +695,112 @@ struct PrezzoConta: View {
             finito = true
         }
         .accessibilityLabel(Text(valore, format: .currency(code: valuta)))
+    }
+}
+
+/// V74: il prezzo della scheda si cambia prima di Vendi / Bozza. − e + spostano di un gradino della griglia
+/// (Settings › Regole del prezzo), mai sotto il minimo; toccando la cifra la si scrive. Un prezzo cambiato
+/// a mano porta la scritta MANUALE e resta quello anche premendo Vendi (non si ricalcola).
+struct PrezzoModificabile: View {
+    @Environment(Seller.self) private var seller
+    @Bindable var disc: Disc
+    var size: CGFloat = 28
+    var contaDaZero = true
+    @State private var scrive = false
+    @State private var testo = ""
+    @State private var toccato = false
+    @FocusState private var fuoco: Bool
+
+    private var manuale: Bool { disc.priceCalculation == Seller.prezzoManuale }
+    private var passo: Double { NSDecimalNumber(decimal: seller.rules.step).doubleValue }
+    private var minimo: Double { NSDecimalNumber(decimal: seller.rules.minimum).doubleValue }
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            HStack(spacing: 10) {
+                tasto("minus", "Abbassa il prezzo") { gradino(-1) }
+                cifra
+                tasto("plus", "Alza il prezzo") { gradino(1) }
+            }
+            if manuale {
+                Text("MANUALE").font(Theme.mono(9, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
+            }
+        }
+    }
+
+    @ViewBuilder private var cifra: some View {
+        let p = disc.price ?? 0
+        if scrive {
+            TextField("", text: $testo)
+                .keyboardType(.numbersAndPunctuation)
+                .submitLabel(.done)
+                .multilineTextAlignment(.center)
+                .font(.system(size: size, weight: .bold)).monospacedDigit()
+                .foregroundStyle(Theme.glow)
+                .frame(width: size * 4.4)
+                .focused($fuoco)
+                .onSubmit(conferma)
+                .onChange(of: fuoco) { _, f in if !f { conferma() } }
+        } else if contaDaZero && !toccato {
+            PrezzoConta(valore: p, valuta: seller.currency, size: size)
+                .shadow(color: Theme.glow.opacity(0.35), radius: 8)
+                .id(p)
+                .onTapGesture(perform: apriTastiera)
+        } else {
+            Text(p, format: .currency(code: seller.currency))
+                .font(.system(size: size, weight: .bold)).monospacedDigit()
+                .foregroundStyle(Theme.glow)
+                .shadow(color: Theme.glow.opacity(0.35), radius: 8)
+                .contentTransition(.numericText(value: p))
+                .onTapGesture(perform: apriTastiera)
+        }
+    }
+
+    private func tasto(_ icona: String, _ etichetta: String, _ fai: @escaping () -> Void) -> some View {
+        Button { fai() } label: {
+            Image(systemName: icona).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.glow)
+                .frame(width: 34, height: 34)
+                .overlay(Circle().stroke(Theme.glow.opacity(0.5), lineWidth: 1))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(etichetta)
+    }
+
+    /// Il gradino sopra o sotto sulla griglia (da 13 € con griglia 2,50: + va a 15, − a 12,50).
+    private func gradino(_ verso: Int) {
+        if scrive { conferma() }
+        guard passo > 0, let p = disc.price else { return }
+        let nuovo = verso > 0 ? (floor(p / passo + 1e-9) + 1) * passo
+                              : max(minimo, (ceil(p / passo - 1e-9) - 1) * passo)
+        guard nuovo != p else { return }                       // già al minimo: niente
+        Suoni.tocco()
+        toccato = true
+        withAnimation(.snappy(duration: 0.25)) { imposta(nuovo) }
+    }
+
+    private func apriTastiera() {
+        Suoni.tocco()
+        testo = (disc.price ?? 0).formatted(.number.precision(.fractionLength(2)))
+        scrive = true
+        fuoco = true
+    }
+
+    private func conferma() {
+        guard scrive else { return }
+        scrive = false
+        fuoco = false
+        let t = testo.replacingOccurrences(of: "€", with: "").replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "\u{00A0}", with: "")
+        // «13», «13,50» o «1.250,00»; senza virgola il punto vale come virgola («13.5»)
+        let numero = t.contains(",") ? t.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".") : t
+        guard let v = Double(numero), v > 0, v < 100_000, (v * 100).rounded() / 100 != disc.price else { return }
+        toccato = true
+        imposta((v * 100).rounded() / 100)
+    }
+
+    private func imposta(_ v: Double) {
+        disc.price = v
+        disc.priceCalculation = Seller.prezzoManuale
     }
 }

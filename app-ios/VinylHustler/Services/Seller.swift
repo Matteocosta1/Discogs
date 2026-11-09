@@ -255,8 +255,17 @@ final class Seller {
             return
         }
         teach(disc, releaseID: rid, title: release.description)
+        // V74: un prezzo scritto a mano sulla scheda resta quello (non si ricalcola premendo Vendi o Bozza)
+        if disc.priceCalculation == Self.prezzoManuale, disc.price != nil {
+            disc.status = .pronto
+            disc.reason = ""
+            return
+        }
         await price(disc)
     }
+
+    /// V74: il «come è stato calcolato» di un prezzo cambiato a mano sulla scheda.
+    static let prezzoManuale = "Prezzo cambiato a mano"
 
     /// Insegna alla memoria condivisa: questo disco confermato è questa release (Vendi o Bozza passano da qui).
     private func teach(_ disc: Disc, releaseID: Int, title: String) {
