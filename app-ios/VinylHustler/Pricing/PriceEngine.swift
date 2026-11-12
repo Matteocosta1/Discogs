@@ -4,8 +4,12 @@ import Foundation
 /// il ricarico della Richiesta (quanti want ha il disco); se nessuno lo vende si parte dal suggerito di Discogs,
 /// con il ricarico più alto. Mai sotto il suggerito; arrotondato per difetto alla griglia, mai sotto il minimo.
 struct PriceRules: Codable, Equatable {
-    /// I want fino a cui vale ogni livello: Bassa 0-50, Media 51-200, Alta 201-1.000, Altissima 1.000+.
+    /// I want fino a cui vale ogni livello: Bassa 0-50, Media 51-200, Alta 201-1.000, Altissima 1.001-5.000.
     var soglie: [Int] = [50, 200, 1000]
+    /// Il primo e l'ultimo numero della tabella (0 e 5.000): chiudono la tabella; sotto il primo conta come Bassa,
+    /// oltre l'ultimo come Altissima.
+    var wantDa = 0
+    var wantFino = 5000
     /// Ricarico (%) sulla più economica, per Bassa, Media, Alta, Altissima.
     var ricarico: [Decimal] = [10, 25, 50, 100]
     /// Ricarico (%) sul suggerito quando nessuno vende il disco.
@@ -26,6 +30,8 @@ struct PriceRules: Codable, Equatable {
         var r = self
         let d = PriceRules()
         r.soglie = d.soglie
+        r.wantDa = d.wantDa
+        r.wantFino = d.wantFino
         r.ricarico = d.ricarico
         r.ricaricoUnico = d.ricaricoUnico
         r.maiSottoSuggerito = d.maiSottoSuggerito
@@ -37,13 +43,13 @@ struct PriceRules: Codable, Equatable {
         want <= soglie[0] ? 0 : want <= soglie[1] ? 1 : want <= soglie[2] ? 2 : 3
     }
 
-    /// I want di ogni livello, scritti: "0-50", "51-200", "201-1.000", "1.000+".
+    /// I want di ogni livello, scritti: "0-50", "51-200", "201-1.000", "1.001-5.000".
     func fascia(_ k: Int) -> String {
         switch k {
-        case 0: return "0-\(Self.intero(soglie[0]))"
+        case 0: return "\(Self.intero(wantDa))-\(Self.intero(soglie[0]))"
         case 1: return "\(Self.intero(soglie[0] + 1))-\(Self.intero(soglie[1]))"
         case 2: return "\(Self.intero(soglie[1] + 1))-\(Self.intero(soglie[2]))"
-        default: return "\(Self.intero(soglie[2]))+"
+        default: return "\(Self.intero(soglie[2] + 1))-\(Self.intero(wantFino))"
         }
     }
 
@@ -58,7 +64,7 @@ struct PriceRules: Codable, Equatable {
     // Le regole salvate prima della V76 si leggono lo stesso: si tengono griglia, minimo e collezionismo,
     // la Richiesta parte dai valori di partenza (scelta di Alessandro, 12/11/2026).
     private enum CodingKeys: String, CodingKey {
-        case soglie, ricarico, ricaricoUnico, maiSottoSuggerito, step, minimum, reviewAbove, collectorThreshold, collectorScore
+        case soglie, wantDa, wantFino, ricarico, ricaricoUnico, maiSottoSuggerito, step, minimum, reviewAbove, collectorThreshold, collectorScore
     }
 
     init(from decoder: Decoder) throws {
@@ -66,6 +72,10 @@ struct PriceRules: Codable, Equatable {
         let d = PriceRules()
         let s = try c.decodeIfPresent([Int].self, forKey: .soglie) ?? d.soglie
         soglie = s.count == 3 ? s : d.soglie
+        let da = try c.decodeIfPresent(Int.self, forKey: .wantDa) ?? d.wantDa
+        let fino = try c.decodeIfPresent(Int.self, forKey: .wantFino) ?? d.wantFino
+        wantDa = max(0, min(da, soglie[0] - 1))
+        wantFino = max(fino, soglie[2] + 1)
         let r = try c.decodeIfPresent([Decimal].self, forKey: .ricarico) ?? d.ricarico
         ricarico = r.count == 4 ? r : d.ricarico
         let u = try c.decodeIfPresent([Decimal].self, forKey: .ricaricoUnico) ?? d.ricaricoUnico
