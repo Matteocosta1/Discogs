@@ -93,7 +93,8 @@ struct SfondoHUD: View {
 
 extension View {
     /// Fondo nero dell'app con sopra lo sfondo HUD (proposta 6): per le pagine principali delle cinque sezioni.
+    /// V76: tutte le pagine nere, con le scritte sopra (stile Discosizer): niente più griglia né bagliore.
     func sfondoHUD(attivo: Bool = true) -> some View {
-        self.background { ZStack { Theme.bg; SfondoHUD(attivo: attivo) }.ignoresSafeArea() }
+        self.background { Theme.bg.ignoresSafeArea() }
     }
 }

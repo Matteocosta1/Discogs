@@ -1,8 +1,8 @@
 import XCTest
 @testable import VinylHustler
 
-/// Gli stessi casi calcolati con lo script Python (vendi.compute_price, regole di default, grado M, EUR):
-/// se un test fallisce, l'app e lo script danno prezzi diversi.
+/// V76: la regola di Settings › Prezzi (più economica + ricarico della Richiesta; nessuno in vendita: suggerito
+/// + ricarico più alto; mai sotto il suggerito; griglia 0,50 per difetto). Gli stessi casi della pagina «Prova prezzi».
 final class PriceEngineTests: XCTestCase {
     private func price(_ suggested: Double, _ market: MarketData?) -> Decimal {
         PriceEngine.compute(suggested: suggested, market: market, grade: .m, currency: "EUR", rules: PriceRules()).price
@@ -13,12 +13,10 @@ final class PriceEngineTests: XCTestCase {
     }
 
     func testNessunDato() { XCTAssertEqual(price(10, nil), 10) }
-    func testCaldaZeroCopie() { XCTAssertEqual(price(10, m(50, 10, 0, nil)), 25) }
-    func testLentaConConcorrenza() { XCTAssertEqual(price(8, m(5, 20, 12, 12)), 10) }
-    func testNormaleAlcuneCopie() { XCTAssertEqual(price(9, m(30, 20, 4, 11)), 15) }
-    func testNormalePocheCopie() { XCTAssertEqual(price(6.3, m(12, 10, 2, 5)), 12.5) }
-    func testCaldaMolteCopie() { XCTAssertEqual(price(20, m(300, 60, 9, 25)), 37.5) }
-    func testLentaSottoSuggerito() { XCTAssertEqual(price(15, m(2, 40, 7, 9)), 15) }
+    func testAltissima() { XCTAssertEqual(price(20, m(1500, 300, 2, 40)), 80) }
+    func testBassa() { XCTAssertEqual(price(20, m(30, 300, 2, 40)), 44) }
+    func testSottoIlSuggerito() { XCTAssertEqual(price(15, m(120, 900, 40, 9)), 15) }
+    func testNessunoInVendita() { XCTAssertEqual(price(25, m(600, 80, 0, nil)), 75) }
 
     func testVoce() {
         XCTAssertEqual(Voice.spoken("Miles Davis - Kind Of Blue (Columbia, US, 1959)"), "Kind Of Blue di Miles Davis")

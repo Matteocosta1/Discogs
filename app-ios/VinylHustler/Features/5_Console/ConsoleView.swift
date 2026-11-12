@@ -2,7 +2,7 @@ import Combine
 import SwiftData
 import SwiftUI
 
-/// 05 / SETTINGS (prima "Console") — account, nome, valuta, accesso AI, voce, annunci, regole del prezzo.
+/// 05 / SETTINGS (prima "Console") — account, nome, valuta, accesso AI, voce, annunci, prezzi.
 /// V60 · proposta 12: come JARVIS — riquadri scuri con il bordo verde e i titoli in monospazio al posto dell'elenco
 /// grigio di Apple; all'apertura la pagina si stampa dall'alto (0,9 s) con il suono del testo che carica.
 /// Le voci e l'ordine sono gli stessi di prima.
@@ -52,9 +52,7 @@ struct ConsoleView: View {
                     GruppoJarvis("Riconoscimento") { riconoscimentoRows } piede: { EmptyView() }
                     GruppoJarvis("Voce") { voiceRows } piede: { Text(footer) }
                     GruppoJarvis("Annunci") { annunciRows } piede: { annunciFooter }
-                    GruppoJarvis("Regole del prezzo") { prezzoRows } piede: {
-                        Text("Base = più basso in vendita, mai sotto il suggerito per il grado. Premi: 0 copie +100%, 1-2 +50%, 3-5 +25%; want/have oltre 1 +10%, oltre 2 +25%, oltre 4 +50%. Arrotondato per eccesso alla griglia.")
-                    }
+                    PrezziSettings()                    // V76: Prezzi (Richiesta, sicurezze, Ripristina, (i))
                     // V74: frase obbligatoria per le app che usano le API di Discogs
                     Text("Questa app usa le API di Discogs ma non è affiliata, sponsorizzata o approvata da Discogs.")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted)
@@ -234,21 +232,6 @@ struct ConsoleView: View {
              : "Vendi apre la scheda annuncio già compilata: controlli prezzo, condizioni e descrizione, poi «Metti online».")
     }
 
-    @ViewBuilder private var prezzoRows: some View {
-        @Bindable var seller = seller
-        RigaJarvis {
-            Stepper("Griglia: \(seller.rules.step.formatted()) €", value: decimal($seller.rules.step), in: 0.5...10, step: 0.5)
-        }
-        RigaJarvis {
-            Stepper("Prezzo minimo: \(seller.rules.minimum.formatted()) €", value: decimal($seller.rules.minimum), in: 0.5...20, step: 0.5)
-        }
-        RigaJarvis(ultima: true) {
-            Toggle("Tre corsie (lenta / normale / calda)", isOn: Binding(get: { !seller.rules.lanesOff },
-                                                                        set: { seller.rules.lanesOff = !$0 }))
-                .tint(Theme.accent)
-        }
-    }
-
     private var footer: String {
         switch voceModo {
         case "eleven": "La voce di Vinyl Hustler. Ogni frase si genera una volta sola per tutti gli utenti: le volte dopo è gratis e parte subito."
@@ -258,37 +241,56 @@ struct ConsoleView: View {
         default: "L'app non parla. I dischi trovati li vedi sullo schermo."
         }
     }
-
-    private func decimal(_ b: Binding<Decimal>) -> Binding<Double> {
-        Binding(get: { NSDecimalNumber(decimal: b.wrappedValue).doubleValue },
-                set: { b.wrappedValue = Decimal(string: String(format: "%.2f", $0)) ?? 0 })
-    }
 }
 
 /// V60 · un riquadro di Settings alla JARVIS: titolo in monospazio verde, righe dentro un riquadro scuro con il bordo verde,
 /// testo di spiegazione sotto.
 struct GruppoJarvis<Righe: View, Piede: View>: View {
     let titolo: String
+    var info: (() -> Void)?
     @ViewBuilder let righe: () -> Righe
     @ViewBuilder let piede: () -> Piede
 
     init(_ titolo: String, @ViewBuilder _ righe: @escaping () -> Righe, @ViewBuilder piede: @escaping () -> Piede) {
         self.titolo = titolo
+        self.info = nil
+        self.righe = righe
+        self.piede = piede
+    }
+
+    /// V76: con la (i) accanto al titolo.
+    init(_ titolo: String, info: @escaping () -> Void, @ViewBuilder _ righe: @escaping () -> Righe,
+         @ViewBuilder piede: @escaping () -> Piede) {
+        self.titolo = titolo
+        self.info = info
         self.righe = righe
         self.piede = piede
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(titolo.uppercased())
-                .font(Theme.mono(11, .bold)).tracking(2)
-                .foregroundStyle(Theme.glow)
-                .shadow(color: Theme.glow.opacity(0.4), radius: 3)
-                .padding(.horizontal, 4)
+            HStack(spacing: 6) {
+                Text(titolo.uppercased())
+                    .font(Theme.mono(11, .bold)).tracking(2)
+                    .foregroundStyle(Theme.glow)
+                    .shadow(color: Theme.glow.opacity(0.4), radius: 3)
+                // V76: la (i) accanto al titolo (Prezzi)
+                if let info {
+                    Button { Suoni.tocco(); info() } label: {
+                        Image(systemName: "info.circle").font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 30, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Informazioni su \(titolo)")
+                }
+            }
+            .padding(.horizontal, 4)
+            // V76: riquadri grigi come in tutte le altre sezioni (continuità), non più trasparenti col bordo verde
             VStack(spacing: 0) { righe() }
                 .padding(.horizontal, 14)
-                .background(Theme.glow.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.glow.opacity(0.28), lineWidth: 1))
+                .background(Theme.panel, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             piede()
                 .font(.caption)
                 .foregroundStyle(Theme.muted)
@@ -314,7 +316,7 @@ struct RigaJarvis<Contenuto: View>: View {
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .padding(.vertical, 4)
             .overlay(alignment: .bottom) {
-                if !ultima { Rectangle().fill(Theme.glow.opacity(0.12)).frame(height: 1) }
+                if !ultima { Rectangle().fill(Theme.line).frame(height: 1) }
             }
     }
 }

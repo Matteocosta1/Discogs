@@ -8,7 +8,11 @@ struct InfoHeader: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            HUDLabel(title: title)
+            // V76: verde come i titoli di Settings (continuità)
+            Text(title.uppercased())
+                .font(Theme.mono(11, .bold)).tracking(2)
+                .foregroundStyle(Theme.glow)
+                .shadow(color: Theme.glow.opacity(0.4), radius: 3)
             Button(action: action) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 13, weight: .semibold))

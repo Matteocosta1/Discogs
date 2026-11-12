@@ -215,6 +215,7 @@ struct DiscActions: View {
                             Spacer()
                             PrezzoModificabile(disc: disc, size: 28, contaDaZero: false)    // V74: si cambia anche qui
                         }
+                        ContoPrezzo(disc: disc)
                     }
                     HStack(spacing: 8) {
                         Button("Vendi") { vendiPronto(draft: false) }
@@ -384,6 +385,11 @@ struct DiscActions: View {
     }
 
     @ViewBuilder private var prezzoSubito: some View {
+        prezzoRiga
+        if disc.price != nil { ContoPrezzo(disc: disc) }
+    }
+
+    @ViewBuilder private var prezzoRiga: some View {
         HStack(alignment: .center) {
             Text("Prezzo").font(.system(size: 15)).foregroundStyle(Theme.muted)
             Spacer()
@@ -698,8 +704,23 @@ struct PrezzoConta: View {
     }
 }
 
+/// V76: sotto il prezzo, il conto del disco in una riga («più economica 32,00 € · richiesta alta (640 want) → +50% = 48,00 €»).
+/// Se il prezzo è cambiato a mano la riga sparisce (resta MANUALE).
+struct ContoPrezzo: View {
+    let disc: Disc
+
+    var body: some View {
+        if !disc.priceCalculation.isEmpty && disc.priceCalculation != Seller.prezzoManuale {
+            Text(disc.priceCalculation)
+                .font(Theme.mono(11)).foregroundStyle(Color(hex: 0x9FB3A4))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 /// V74: il prezzo della scheda si cambia prima di Vendi / Bozza. − e + spostano di un gradino della griglia
-/// (Settings › Regole del prezzo), mai sotto il minimo; toccando la cifra la si scrive. Un prezzo cambiato
+/// (Settings › Prezzi), mai sotto il minimo; toccando la cifra la si scrive. Un prezzo cambiato
 /// a mano porta la scritta MANUALE e resta quello anche premendo Vendi (non si ricalcola).
 struct PrezzoModificabile: View {
     @Environment(Seller.self) private var seller

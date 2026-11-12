@@ -1,26 +1,81 @@
 import Foundation
 
-/// Regole del prezzo (default identici a vendi.py; modificabili dalla Console).
+/// V76 · Le regole del prezzo (Settings › Prezzi). Si parte dalla copia più economica in vendita e si aggiunge
+/// il ricarico della Richiesta (quanti want ha il disco); se nessuno lo vende si parte dal suggerito di Discogs,
+/// con il ricarico più alto. Mai sotto il suggerito; arrotondato per difetto alla griglia, mai sotto il minimo.
 struct PriceRules: Codable, Equatable {
-    var zeroCopiesPremium: Decimal = 100        // nessuna copia in vendita: +100%
-    var fewCopies = 2                           // 1-2 copie: "poche"
-    var fewCopiesPremium: Decimal = 50
-    var someCopies = 5                          // 3-5 copie: "alcune"
-    var someCopiesPremium: Decimal = 25
-    var demandSteps: [DemandStep] = [.init(above: 1, premium: 10), .init(above: 2, premium: 25), .init(above: 4, premium: 50)]
-    var slowLaneBelow: Double = 1.0             // want/have sotto: corsia LENTA
-    var hotLaneAbove: Double = 2.0              // want/have sopra: corsia CALDA
-    var slowDiscount: Decimal = 5               // corsia lenta: % sotto la concorrenza
-    var lanesOff = false
-    var step: Decimal = 2.5                     // griglia dei prezzi
+    /// I want fino a cui vale ogni livello: Bassa 0-50, Media 51-200, Alta 201-1.000, Altissima 1.000+.
+    var soglie: [Int] = [50, 200, 1000]
+    /// Ricarico (%) sulla più economica, per Bassa, Media, Alta, Altissima.
+    var ricarico: [Decimal] = [10, 25, 50, 100]
+    /// Ricarico (%) sul suggerito quando nessuno vende il disco.
+    var ricaricoUnico: [Decimal] = [100, 150, 200, 300]
+    var maiSottoSuggerito = true
+    var step: Decimal = 0.5                     // griglia dei prezzi
     var minimum: Decimal = 2.5
     var reviewAbove: Double = 100               // sopra questo prezzo un disco senza codice va controllato
     var collectorThreshold: Double = 50         // --soglia-prezzo
     var collectorScore = 4                      // --soglia-collezionistico
 
-    struct DemandStep: Codable, Equatable {
-        var above: Double
-        var premium: Decimal
+    static let livelli = ["Bassa", "Media", "Alta", "Altissima"]
+
+    init() {}
+
+    /// Ripristina: Richiesta e «Mai sotto il suggerito» tornano ai valori di partenza; griglia e minimo restano.
+    func ripristinata() -> PriceRules {
+        var r = self
+        let d = PriceRules()
+        r.soglie = d.soglie
+        r.ricarico = d.ricarico
+        r.ricaricoUnico = d.ricaricoUnico
+        r.maiSottoSuggerito = d.maiSottoSuggerito
+        return r
+    }
+
+    /// Il livello di Richiesta (0 Bassa … 3 Altissima) per un numero di want.
+    func livello(_ want: Int) -> Int {
+        want <= soglie[0] ? 0 : want <= soglie[1] ? 1 : want <= soglie[2] ? 2 : 3
+    }
+
+    /// I want di ogni livello, scritti: "0-50", "51-200", "201-1.000", "1.000+".
+    func fascia(_ k: Int) -> String {
+        switch k {
+        case 0: return "0-\(Self.intero(soglie[0]))"
+        case 1: return "\(Self.intero(soglie[0] + 1))-\(Self.intero(soglie[1]))"
+        case 2: return "\(Self.intero(soglie[1] + 1))-\(Self.intero(soglie[2]))"
+        default: return "\(Self.intero(soglie[2]))+"
+        }
+    }
+
+    static func intero(_ n: Int) -> String {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.groupingSeparator = "."
+        f.usesGroupingSeparator = true
+        return f.string(from: NSNumber(value: n)) ?? String(n)
+    }
+
+    // Le regole salvate prima della V76 si leggono lo stesso: si tengono griglia, minimo e collezionismo,
+    // la Richiesta parte dai valori di partenza (scelta di Alessandro, 12/11/2026).
+    private enum CodingKeys: String, CodingKey {
+        case soglie, ricarico, ricaricoUnico, maiSottoSuggerito, step, minimum, reviewAbove, collectorThreshold, collectorScore
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PriceRules()
+        let s = try c.decodeIfPresent([Int].self, forKey: .soglie) ?? d.soglie
+        soglie = s.count == 3 ? s : d.soglie
+        let r = try c.decodeIfPresent([Decimal].self, forKey: .ricarico) ?? d.ricarico
+        ricarico = r.count == 4 ? r : d.ricarico
+        let u = try c.decodeIfPresent([Decimal].self, forKey: .ricaricoUnico) ?? d.ricaricoUnico
+        ricaricoUnico = u.count == 4 ? u : d.ricaricoUnico
+        maiSottoSuggerito = try c.decodeIfPresent(Bool.self, forKey: .maiSottoSuggerito) ?? d.maiSottoSuggerito
+        step = try c.decodeIfPresent(Decimal.self, forKey: .step) ?? d.step
+        minimum = try c.decodeIfPresent(Decimal.self, forKey: .minimum) ?? d.minimum
+        reviewAbove = try c.decodeIfPresent(Double.self, forKey: .reviewAbove) ?? d.reviewAbove
+        collectorThreshold = try c.decodeIfPresent(Double.self, forKey: .collectorThreshold) ?? d.collectorThreshold
+        collectorScore = try c.decodeIfPresent(Int.self, forKey: .collectorScore) ?? d.collectorScore
     }
 }
 
@@ -36,83 +91,52 @@ struct MarketData: Equatable {
     var ratio: Double { have > 0 ? Double(want) / Double(have) : (want > 0 ? .infinity : 0) }
 }
 
-/// Porta esatta di compute_price / standard_price / to_grid / collector_score di vendi.py.
-/// I test in VinylHustlerTests confrontano i risultati con quelli dello script Python.
+/// V76 · Il conto del prezzo (Settings › Prezzi). Il conto scritto è una riga sola, quella che si legge sotto
+/// il prezzo di ogni disco: «più economica 32,00 € · richiesta alta (640 want) → +50% = 48,00 €».
 enum PriceEngine {
     static func compute(suggested: Double, market: MarketData?, grade: Grade, currency: String,
-                        rules: PriceRules, competitors: (copies: Int, lowest: Double?)? = nil) -> (price: Decimal, calculation: String) {
-        guard let market, !rules.lanesOff else { return standard(suggested, market, grade, currency, rules) }
-        let ratio = market.ratio
-        let comp = competitors ?? competition(market, myPrices: [], currency: currency)
-        let prefix: String
-        if ratio < rules.slowLaneBelow {
-            let lane = "corsia LENTA (want/have \(fmt(ratio)) < \(rules.slowLaneBelow))"
-            if comp.copies > 0, let low = comp.lowest, low > 0 {
-                let lowD = dec(low)
-                let target = round2(lowD * (1 - rules.slowDiscount / 100))
-                let down = gridFloor(target, rules.step)
-                let floor = toGrid(dec(suggested), rules.step, rules.minimum)
-                let text = "\(lane): \(rules.slowDiscount)% sotto concorrenza \(fmt(lowD)) = \(fmt(target)) → griglia per difetto \(fmt(down))"
-                if down < floor {
-                    return (floor, "\(text); sotto il suggerito \(grade.discogs) \(fmt(suggested)): prezzo = suggerito sulla griglia \(fmt(floor)) \(currency)")
-                }
-                return (down, "\(text) \(currency)")
-            }
-            prefix = "\(lane): nessun concorrente da sottoquotare, regola NORMALE"
-        } else if ratio > rules.hotLaneAbove {
-            prefix = "corsia CALDA (want/have \(fmt(ratio)) > \(rules.hotLaneAbove)): premi a scalini"
-        } else {
-            prefix = "corsia NORMALE (want/have \(fmt(ratio)) tra \(rules.slowLaneBelow) e \(rules.hotLaneAbove))"
+                        rules: PriceRules) -> (price: Decimal, calculation: String) {
+        let sim = simbolo(currency)
+        let sug = dec(suggested)
+        guard let market else {
+            let p = toGrid(sug, rules.step, rules.minimum)
+            return (p, "dati di Discogs non disponibili: suggerito \(fmt(sug)) \(sim) = \(fmt(p)) \(sim)")
         }
-        let (price, calc) = standard(suggested, market, grade, currency, rules)
-        return (price, "\(prefix); \(calc)")
+        let copie = market.numForSale
+        let piuBasso: Decimal? = {
+            guard copie > 0, market.lowestCurrency == currency, let l = market.lowestPrice, l > 0 else { return nil }
+            return dec(l)
+        }()
+        let liv = rules.livello(market.want)
+        let ricarico = copie == 0 ? rules.ricaricoUnico[liv] : rules.ricarico[liv]
+        let base = piuBasso ?? sug
+        let partenza: String
+        if let l = piuBasso {
+            partenza = "più economica \(fmt(l)) \(sim)"
+        } else if copie == 0 {
+            partenza = "nessuno in vendita, suggerito \(fmt(sug)) \(sim)"
+        } else {
+            partenza = "più economica non disponibile, suggerito \(fmt(sug)) \(sim)"
+        }
+        let grezzo = round2(base * (1 + ricarico / 100))
+        var prezzo = max(gridFloor(grezzo, rules.step), round2(rules.minimum))
+        var fine = "\(fmt(prezzo)) \(sim)"
+        if rules.maiSottoSuggerito, prezzo < sug {
+            prezzo = toGrid(sug, rules.step, rules.minimum)
+            fine = "\(fmt(grezzo)) \(sim), sotto il suggerito: \(fmt(prezzo)) \(sim)"
+        }
+        let richiesta = "richiesta \(PriceRules.livelli[liv].lowercased()) (\(PriceRules.intero(market.want)) want)"
+        return (prezzo, "\(partenza) · \(richiesta) → \(pct(ricarico)) = \(fine)")
     }
 
-    /// Regola standard: base = più basso in vendita (mai sotto il suggerito) + premi, poi griglia per eccesso.
-    static func standard(_ suggested: Double, _ market: MarketData?, _ grade: Grade, _ currency: String,
-                         _ rules: PriceRules) -> (Decimal, String) {
-        var steps = ["suggerito \(grade.discogs) \(fmt(suggested))"]
-        func finish(_ raw: Decimal) -> (Decimal, String) {
-            let price = toGrid(raw, rules.step, rules.minimum)
-            steps[steps.count - 1] += " → arrotondato a griglia \(fmt(rules.step)) = \(fmt(price)) \(currency)"
-            return (price, steps.joined(separator: "; "))
-        }
-        guard let market else {
-            steps = ["dati del marketplace non disponibili: prezzo = suggerito \(fmt(suggested)) \(currency)"]
-            return finish(dec(suggested))
-        }
-        let copies = market.numForSale
-        let lowest = market.lowestCurrency == currency ? market.lowestPrice : nil
-        let base: Double
-        if copies == 0 || lowest == nil || lowest == 0 {
-            base = suggested
-            steps.append(copies == 0 ? "nessun prezzo in vendita" : "prezzo più basso non disponibile")
-            steps.append("base = suggerito \(fmt(base))")
-        } else {
-            steps.append("più basso in vendita \(fmt(lowest!))")
-            base = max(lowest!, suggested)
-            steps.append("base = \(lowest! >= suggested ? "più basso in vendita" : "suggerito (soglia minima)") \(fmt(base))")
-        }
-        var total: Decimal = 0
-        if copies == 0 {
-            total += rules.zeroCopiesPremium; steps.append("0 copie in vendita +\(rules.zeroCopiesPremium)%")
-        } else if copies <= rules.fewCopies {
-            total += rules.fewCopiesPremium; steps.append("\(copies) copie in vendita +\(rules.fewCopiesPremium)%")
-        } else if copies <= rules.someCopies {
-            total += rules.someCopiesPremium; steps.append("\(copies) copie in vendita +\(rules.someCopiesPremium)%")
-        } else {
-            steps.append("\(copies) copie in vendita: nessun premio scarsità")
-        }
-        let ratioText = "want/have \(market.want)/\(market.have)" + (market.have > 0 ? " = \(fmt(market.ratio))" : "")
-        if let step = rules.demandSteps.sorted(by: { $0.above < $1.above }).last(where: { market.ratio > $0.above }) {
-            total += step.premium; steps.append("\(ratioText) > \(step.above) +\(step.premium)%")
-        } else {
-            steps.append("\(ratioText): nessun premio richiesta")
-        }
-        let raw = round2(dec(base) * (1 + total / 100))
-        steps.append("prezzo = \(fmt(base)) × (1 + \(total)%) = \(fmt(raw)) \(currency)")
-        return finish(raw)
+    /// "+25%", "−5%", "0%".
+    static func pct(_ x: Decimal) -> String {
+        let v = NSDecimalNumber(decimal: x).doubleValue
+        let n = String(format: v.rounded() == v ? "%.0f" : "%.1f", abs(v)).replacingOccurrences(of: ".", with: ",")
+        return (v > 0 ? "+" : v < 0 ? "−" : "") + n + "%"
     }
+
+    static func simbolo(_ currency: String) -> String { currency == "EUR" ? "€" : currency }
 
     /// Copie e prezzo più basso della concorrenza, senza i miei annunci (competition dello script).
     static func competition(_ m: MarketData, myPrices: [Double], currency: String) -> (copies: Int, lowest: Double?) {

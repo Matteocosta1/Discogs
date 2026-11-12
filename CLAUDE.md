@@ -3,7 +3,7 @@
 App iOS in `app-ios/` (progetto `VinylHustler.xcodeproj`) + gli script Python dello stesso repo. Backend su Supabase. Ci lavorano Alessandro e Matteo: Matteo può proporre idee anche quando Alessandro non c'è.
 
 - **Ramo di Xcode:** `claude/ciao-ttimyc` (il ramo principale del repo).
-- Ogni modifica si numera **V1, V2, V3…** (oggi siamo a V75) e Alessandro deve sapere ogni volta cosa è cambiato, così si può togliere una sola versione sbagliata.
+- Ogni modifica si numera **V1, V2, V3…** (oggi siamo a V76) e Alessandro deve sapere ogni volta cosa è cambiato, così si può togliere una sola versione sbagliata.
 - L'app sul telefono di Alessandro deve essere identica a quella sul telefono di Matteo.
 
 ## Come si lavora con Alessandro (valido per ogni sessione)
