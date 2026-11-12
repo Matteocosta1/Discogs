@@ -75,18 +75,21 @@ struct RootView: View {
     }
 
     private var tabs: some View {
-        ZStack {
-            ForEach(0..<6, id: \.self) { i in
-                if viste.contains(i) || tab == i {
-                    sezione(i)
-                        .opacity(tab == i ? 1 : 0)
-                        .allowsHitTesting(tab == i)
-                        .accessibilityHidden(tab != i)
-                        .environment(\.sezioneVisibile, tab == i)
+        // V76: le sezioni sopra, la barra sotto, una dopo l'altra: le pagine finiscono esattamente dove inizia la barra
+        // (prima la barra stava sopra le pagine e su alcuni iPhone copriva il fondo di Foto, angoli della fotocamera compresi).
+        VStack(spacing: 0) {
+            ZStack {
+                ForEach(0..<6, id: \.self) { i in
+                    if viste.contains(i) || tab == i {
+                        sezione(i)
+                            .opacity(tab == i ? 1 : 0)
+                            .allowsHitTesting(tab == i)
+                            .accessibilityHidden(tab != i)
+                            .environment(\.sezioneVisibile, tab == i)
+                    }
                 }
             }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             if !tastiera {
                 BarraSezioni(tab: $tab, avvio: avvio, badge: [1: toCheck.count, 4: ChatStore.shared.nonLetti])
             }
