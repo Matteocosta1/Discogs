@@ -411,55 +411,22 @@ struct DiscoAscolto: View {
     let copertina: URL?
     let gira: Bool
 
+    // V75: solo il disco che gira (tolti anello, tacche, spettro e bordo verde).
     var body: some View {
         GeometryReader { g in
             let W = min(g.size.width, g.size.height)
             TimelineView(.animation(minimumInterval: 1.0 / 120, paused: !gira)) { ctx in
                 let t = ctx.date.timeIntervalSinceReferenceDate
-                ZStack {
-                    Canvas { gc, _ in DiscoAscolto.anelli(gc, W: W, t: t, suona: gira) }
-                    AsyncImage(url: copertina) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                        .frame(width: W * 0.6, height: W * 0.6)
-                        .clipShape(Circle())
-                        .overlay(Circle().fill(Color(hex: 0x060D08)).frame(width: W * 0.07, height: W * 0.07))
-                        .overlay(Circle().stroke(Theme.glow.opacity(0.4), lineWidth: 1))
-                        .rotationEffect(.degrees(gira ? t.truncatingRemainder(dividingBy: 6) / 6 * 360 : 0))
-                }
-                .frame(width: W, height: W)
+                AsyncImage(url: copertina) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                    .frame(width: W * 0.6, height: W * 0.6)
+                    .clipShape(Circle())
+                    .overlay(Circle().fill(Color(hex: 0x060D08)).frame(width: W * 0.07, height: W * 0.07))
+                    .rotationEffect(.degrees(gira ? t.truncatingRemainder(dividingBy: 6) / 6 * 360 : 0))
+                    .frame(width: W, height: W)
             }
         }
         .aspectRatio(1, contentMode: .fit)
         .accessibilityHidden(true)
-    }
-
-    private static func punto(_ c: CGFloat, _ g: Double, _ r: CGFloat) -> CGPoint {
-        CGPoint(x: c + CGFloat(cos(g)) * r, y: c + CGFloat(sin(g)) * r)
-    }
-
-    static func anelli(_ gc: GraphicsContext, W: CGFloat, t: Double, suona: Bool) {
-        let c = W / 2, R = W * 0.47, u = W / 480
-        gc.stroke(Path(ellipseIn: CGRect(x: c - R, y: c - R, width: R * 2, height: R * 2)),
-                  with: .color(Theme.glow.opacity(0.35)), lineWidth: 2 * u)
-        var tacche = Path()
-        for k in 0..<120 {
-            let g = Double(k) / 120 * 2 * Double.pi - t * 0.05
-            let l: CGFloat = (k % 10 == 0 ? 14 : 6) * u
-            tacche.move(to: punto(c, g, R))
-            tacche.addLine(to: punto(c, g, R - l))
-        }
-        gc.stroke(tacche, with: .color(Theme.glow.opacity(0.2)), lineWidth: 2 * u)
-        var spettro = Path()
-        let ms = t * 1000
-        for k in 0..<72 {
-            let g = Double(k) / 72 * 2 * Double.pi
-            let v = suona ? 0.35 + 0.65 * abs(sin(ms / 260 + Double(k) * 0.7) * sin(ms / 410 + Double(k) * 1.3)) : 0.08
-            let r0 = W * 0.33, r1 = r0 + CGFloat(v) * W * 0.08
-            spettro.move(to: punto(c, g, r0))
-            spettro.addLine(to: punto(c, g, r1))
-        }
-        var s = gc
-        s.addFilter(.shadow(color: Theme.glow, radius: 4 * u))
-        s.stroke(spettro, with: .color(Theme.glow), lineWidth: 3 * u)
     }
 }
 

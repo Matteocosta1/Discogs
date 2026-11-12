@@ -38,79 +38,23 @@ struct SessionView: View {
 
     @AppStorage("commentoSessione") private var commento = ""
     @FocusState private var scrivo: Bool
+    /// V75: altezza della parte sopra la fotocamera e dell'accesso AI sotto (misurate), per il riquadro che resta.
+    @State private var sopra: CGFloat = 540
+    @State private var sotto: CGFloat = 0
 
     var body: some View {
         NavigationStack {
-            // Una pagina sola, ferma: niente da scorrere. La fotocamera prende tutto lo spazio che resta.
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .firstTextBaseline) {
-                    Spacer()
-                    // la versione installata: per confrontare a colpo d'occhio due telefoni
-                    Text(AppVersione.nome).font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.muted)
+            // Una pagina sola, ferma: la fotocamera prende tutto lo spazio che resta sopra la barra delle sezioni.
+            // V75: si adatta a ogni iPhone. Sugli schermi bassi le distanze si stringono; se non basta ancora
+            // (schermo piccolo + accesso AI aperto) la pagina scorre di quel poco, così il riquadro resta sempre intero.
+            GeometryReader { g in
+                let stretto = g.size.height < 680
+                ScrollView(.vertical) {
+                    pagina(alto: g.size.height, stretto: stretto)
                 }
-                .padding(.top, 6)
-
-                block("Posizione", .posizione) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(kinds, id: \.self) { kind in kindChip(kind) }
-                            Button {
-                                newKind = ""
-                                addingKind = true
-                            } label: {
-                                Image(systemName: "plus").font(.system(size: 14, weight: .semibold))
-                                    .frame(width: 36, height: 30)
-                                    .foregroundStyle(Theme.accent)
-                                    .background(Theme.panelHigh, in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Aggiungi un contenitore")
-                        }
-                    }
-                    HStack(spacing: 10) {
-                        Image(systemName: "archivebox.fill").font(.system(size: 14)).foregroundStyle(Theme.accent)
-                        Text(placeKind).font(.system(size: 16, weight: .semibold))
-                        TextField("numero o nome", text: $placeName).font(.system(size: 16))
-                            .foregroundStyle(Theme.glow)
-                            .focused($scrivo)
-                    }
-                }
-
-                block("Condizione", .condizione) {
-                    gradeRow("Vinile", selection: $mediaRaw)
-                    gradeRow("Copertina", selection: $sleeveRaw)
-                }
-
-                block("Commenti", .commenti) {
-                    TextField("Vale per tutti i dischi che fotografi (es. «Copertina con segni da scaffale»)",
-                              text: $commento, axis: .vertical)
-                        .font(.system(size: 15))
-                        .lineLimit(2...3)
-                        .focused($scrivo)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    InfoHeader(title: "Fotocamera") { info = .fotocamera }
-                        // V62: «VINYL HUSTLER · IN LINEA» piccola, a destra, sulla riga di FOTOCAMERA: si decodifica
-                        // all'avvio (dopo la scritta d'apertura) e poi resta
-                        .overlay(alignment: .trailing) {
-                            TestoDecodifica(testo: "VINYL HUSTLER · IN LINEA", da: Avvio.quando, ritardo: 2.4, durata: 0.6)
-                                .font(Theme.mono(8, .bold))
-                                .tracking(1.5)
-                                .foregroundStyle(Theme.glow)
-                                .shadow(color: Theme.glow.opacity(0.6), radius: 3)
-                                .lineLimit(1)
-                                .allowsHitTesting(false)
-                                .accessibilityLabel("Vinyl Hustler in linea")
-                        }
-                    cameraButton
-                    if !aiReady { AISignInRow { aiReady = true } }
-                }
-                .frame(maxHeight: .infinity, alignment: .top)
+                .scrollBounceBehavior(.basedOnSize)
+                .scrollIndicators(.hidden)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .sfondoHUD(attivo: !camera)                        // V60: griglia e bagliore HUD dietro la pagina (fermo sotto la fotocamera)
             .ignoresSafeArea(.keyboard, edges: .bottom)       // la tastiera copre la fotocamera, non sposta la pagina
             .contentShape(Rectangle())
@@ -159,12 +103,98 @@ struct SessionView: View {
         }
     }
 
+    /// V75: la pagina. Sopra: versione, Posizione, Condizione, Commenti e il titolo Fotocamera (si misurano);
+    /// sotto: il riquadro della fotocamera, alto quanto lo spazio che resta (mai meno di 96-110 punti).
+    private func pagina(alto: CGFloat, stretto: Bool) -> some View {
+        let spazio: CGFloat = stretto ? 8 : 12
+        let minimo: CGFloat = stretto ? 96 : 110
+        let riquadro = max(minimo, (alto - sopra - sotto - 6 - 12).rounded(.down))
+        return VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: spazio) {
+                HStack(alignment: .firstTextBaseline) {
+                    Spacer()
+                    // la versione installata: per confrontare a colpo d'occhio due telefoni
+                    Text(AppVersione.nome).font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.muted)
+                }
+                .padding(.top, stretto ? 2 : 6)
+
+                block("Posizione", .posizione, stretto: stretto) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(kinds, id: \.self) { kind in kindChip(kind) }
+                            Button {
+                                newKind = ""
+                                addingKind = true
+                            } label: {
+                                Image(systemName: "plus").font(.system(size: 14, weight: .semibold))
+                                    .frame(width: 36, height: 30)
+                                    .foregroundStyle(Theme.accent)
+                                    .background(Theme.panelHigh, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Aggiungi un contenitore")
+                        }
+                    }
+                    HStack(spacing: 10) {
+                        Image(systemName: "archivebox.fill").font(.system(size: 14)).foregroundStyle(Theme.accent)
+                        Text(placeKind).font(.system(size: 16, weight: .semibold))
+                        TextField("numero o nome", text: $placeName).font(.system(size: 16))
+                            .foregroundStyle(Theme.glow)
+                            .focused($scrivo)
+                    }
+                }
+
+                block("Condizione", .condizione, stretto: stretto) {
+                    gradeRow("Vinile", selection: $mediaRaw)
+                    gradeRow("Copertina", selection: $sleeveRaw)
+                }
+
+                block("Commenti", .commenti, stretto: stretto) {
+                    TextField("Vale per tutti i dischi che fotografi (es. «Copertina con segni da scaffale»)",
+                              text: $commento, axis: .vertical)
+                        .font(.system(size: 15))
+                        .lineLimit(2...3)
+                        .focused($scrivo)
+                }
+
+                InfoHeader(title: "Fotocamera") { info = .fotocamera }
+                    // V62: «VINYL HUSTLER · IN LINEA» piccola, a destra, sulla riga di FOTOCAMERA: si decodifica
+                    // all'avvio (dopo la scritta d'apertura) e poi resta
+                    .overlay(alignment: .trailing) {
+                        TestoDecodifica(testo: "VINYL HUSTLER · IN LINEA", da: Avvio.quando, ritardo: 2.4, durata: 0.6)
+                            .font(Theme.mono(8, .bold))
+                            .tracking(1.5)
+                            .foregroundStyle(Theme.glow)
+                            .shadow(color: Theme.glow.opacity(0.6), radius: 3)
+                            .lineLimit(1)
+                            .allowsHitTesting(false)
+                            .accessibilityLabel("Vinyl Hustler in linea")
+                    }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sopra = $0 }
+
+            cameraButton
+                .frame(height: riquadro)
+                .padding(.top, 6)
+
+            if !aiReady {
+                AISignInRow { aiReady = true }
+                    .padding(.top, 6)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sotto = $0 }
+                    .onDisappear { sotto = 0 }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+    }
+
     /// Una sezione: titolo con la (i) e il contenuto in una scheda grigia, compatta.
-    private func block<Content: View>(_ title: String, _ topic: InfoTopic, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func block<Content: View>(_ title: String, _ topic: InfoTopic, stretto: Bool,
+                                      @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: stretto ? 2 : 4) {
             InfoHeader(title: title) { info = topic }
-            VStack(alignment: .leading, spacing: 10) { content() }
-                .padding(12)
+            VStack(alignment: .leading, spacing: stretto ? 8 : 10) { content() }
+                .padding(stretto ? 10 : 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Theme.panel, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
         }
@@ -194,7 +224,7 @@ struct SessionView: View {
                     }
                 }
             }
-            .frame(minHeight: 110, maxHeight: .infinity)
+            .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             }
         }
