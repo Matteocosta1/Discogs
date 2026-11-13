@@ -115,10 +115,15 @@ struct ConsoleView: View {
         RigaJarvis {
             Text("Valuta")
             Spacer()
-            Picker("Valuta", selection: Binding(get: { UserDefaults.standard.string(forKey: "valuta") ?? "" },
+            // V77: solo la sigla della valuta (prima «Come su Discogs (EUR)»). La prima voce segue Discogs;
+            // la stessa valuta non si ripete nell'elenco.
+            Picker("Valuta", selection: Binding(get: {
+                                                    let v = UserDefaults.standard.string(forKey: "valuta") ?? ""
+                                                    return v == seller.discogsCurrency ? "" : v
+                                                },
                                                 set: { seller.setCurrency($0) })) {
-                Text("Come su Discogs (\(seller.discogsCurrency))").tag("")
-                ForEach(Seller.currencies, id: \.self) { Text($0).tag($0) }
+                Text(seller.discogsCurrency).tag("")
+                ForEach(Seller.currencies.filter { $0 != seller.discogsCurrency }, id: \.self) { Text($0).tag($0) }
             }
             .labelsHidden()
         }
