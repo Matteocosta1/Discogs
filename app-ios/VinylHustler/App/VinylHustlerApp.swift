@@ -67,7 +67,7 @@ struct RootView: View {
             try? await Task.sleep(for: .milliseconds(Int(AvvioIcone.durata * 1000) - 750))
             avvio = nil
         }
-        .onChange(of: tab) { _, _ in Suoni.tocco() }
+        .onChange(of: tab) { _, _ in Suoni.sezione() }      // V78: il suono delle icone in basso
         .onChange(of: seller.lastError) { _, e in if e != nil { Suoni.nego() } }
         .onAppear { if !(0...5).contains(tab) { tab = 0 } }
         .alert(seller.lastError ?? "", isPresented: Binding(get: { seller.lastError != nil },

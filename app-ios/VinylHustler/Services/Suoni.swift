@@ -3,8 +3,9 @@ import UIKit
 
 /// I suoni dell'interfaccia (V60): i file di JARVIS, con la stessa logica di JARVIS (file in Resources/Suoni).
 /// Lo stesso suono vuol dire sempre la stessa cosa, come nel mock-up approvato:
-///   «tick»            un tocco: sezioni, Vendi/Bozza, passi, tracce; un tick leggero per ogni icona all'avvio;
-///                     nel REC un tick per ogni disco agganciato
+///   «tick»            un tocco: Vendi/Bozza, passi, tracce; nel REC un tick per ogni disco agganciato
+///   «sezione»         V78: il tocco su un'icona della barra in basso (Foto, Bozze, Magazzino…), scelto da Alessandro
+///   «iconaavvio»      V78: ogni icona della barra che entra all'avvio, scelto da Alessandro
 ///   «clicktesta»      le icone tonde in alto (X della fotocamera e del lettore, Seleziona, grafico, menu)
 ///   «apertura»        l'app si apre (mp3 scelto da Alessandro: resta quello di prima)
 ///   «aperturacamera»  la fotocamera si apre
@@ -23,8 +24,10 @@ enum Suoni {
 
     /// Un tocco.
     static func tocco() { riproduci("tick", volume: 1.0) }
-    /// Un'icona in basso che si carica all'avvio (più leggero del tocco).
-    static func icona() { riproduci("tick", volume: 0.6) }
+    /// Un'icona in basso che si carica all'avvio (V78: «iconaavvio»).
+    static func icona() { riproduci("iconaavvio", volume: 0.6) }
+    /// Il tocco su un'icona della barra in basso (V78: «sezione»).
+    static func sezione() { riproduci("sezione", volume: 1.0) }
     /// Le icone tonde in alto.
     static func testa() { riproduci("clicktesta", volume: 1.0) }
     /// L'app si apre (file «apertura»).

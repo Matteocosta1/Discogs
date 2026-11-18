@@ -49,7 +49,7 @@ struct AvvioIcone: View {
         .opacity(p)
     }
 
-    /// I tick e le vibrazioni, uno per icona, al passo dell'animazione.
+    /// Il suono «iconaavvio» (V78) e la vibrazione, uno per icona, al passo dell'animazione.
     @MainActor static func suona() async {
         let leggera = UIImpactFeedbackGenerator(style: .light)
         for _ in 0..<6 {
