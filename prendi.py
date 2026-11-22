@@ -13,9 +13,11 @@ def get(url, js=True):
             print('  errore', url, e); time.sleep(3 + t * 3)
     return None
 os.makedirs('copertine', exist_ok=True)
-esito = []
+DOPO = {6: ('Trans Europe Express', 'Kraftwerk'), 7: ('Zombie', 'Fela')}
+esito = json.load(open('copertine/elenco.json'))
 for i, (a, t) in enumerate(DISCHI):
-    q = urllib.parse.quote('releasegroup:"%s" AND artist:"%s" AND primarytype:album' % (t, a))
+    if i not in DOPO: continue
+    q = urllib.parse.quote('releasegroup:(%s) AND artist:(%s)' % DOPO[i])
     rg = get('https://musicbrainz.org/ws/2/release-group/?fmt=json&limit=3&query=' + q); time.sleep(1.2)
     master = None
     for g in (rg or {}).get('release-groups', []):
@@ -38,5 +40,5 @@ for i, (a, t) in enumerate(DISCHI):
             b = get(url, js=False); time.sleep(1)
             if b:
                 open('copertine/%02d.jpg' % i, 'wb').write(b)
-    print(voce); esito.append(voce)
+    print(voce); esito[i] = voce
 json.dump(esito, open('copertine/elenco.json', 'w'), indent=1)
