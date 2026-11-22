@@ -37,7 +37,6 @@ for i, (a, t) in enumerate(DISCHI):
         if url:
             b = get(url, js=False); time.sleep(1)
             if b:
-                open('tmp', 'wb').write(b)
-                subprocess.run(['convert', 'tmp', '-resize', '300x300^', '-gravity', 'center', '-extent', '300x300', '-quality', '82', 'copertine/%02d.jpg' % i], check=False)
+                open('copertine/%02d.jpg' % i, 'wb').write(b)
     print(voce); esito.append(voce)
 json.dump(esito, open('copertine/elenco.json', 'w'), indent=1)
