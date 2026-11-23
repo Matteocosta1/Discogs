@@ -8,6 +8,16 @@ jobs:
     timeout-minutes: 5
     steps:
       - run: |
-          UA='VinylHustler/1.0 (prova)'
-          P='import json,sys; d=json.load(sys.stdin); r=d.get("results",[]); print(d.get("pagination",{}).get("items"), [(x.get("title")[:30], x.get("community",{}).get("want"), x.get("year"), x.get("country"), x.get("master_id"), x.get("style")) for x in r[:6]]); print(sorted(r[0].keys()) if r else d)'
-          for q in "type=release&format=Vinyl&sort=want&sort_order=desc&per_page=6" "type=release&format=Vinyl&per_page=6" "type=release&format=Vinyl&genre=Electronic&style=Trip+Hop&decade=1990&country=UK&per_page=6&q=portishead" "type=release&format=Vinyl&q=portishead&sort=year&sort_order=desc&per_page=6"; do echo "== $q"; curl -s -A "$UA" "https://api.discogs.com/database/search?$q" | python3 -c "$P"; sleep 3; done
+          UA='Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
+          for u in https://www.discogs.com/it/release/6276183 https://www.discogs.com/it/master/5460; do
+            echo "== $u"; curl -sL -A "$UA" -H 'Accept-Language: it-IT,it;q=0.9' "$u" -o p.html -w "%{http_code}\n"
+            python3 - <<'PY'
+          import re
+          s=open('p.html',encoding='utf-8',errors='ignore').read()
+          t=re.sub(r'<[^>]+>',' ',s); t=re.sub(r'\s+',' ',t)
+          for k in ['Ce l','Hanno','hanno','Vogliono','vogliono','Possied','Desider','Want','Have','In collezione','Wantlist','Statistiche']:
+              for m in re.finditer(re.escape(k), t):
+                  print(k, '::', t[max(0,m.start()-60):m.end()+60]); break
+          PY
+            sleep 3
+          done
