@@ -65,18 +65,19 @@ final class PrezziCerca {
     func prezzo(_ id: Int) -> PrezzoCerca? { prezzi[id] }
 
     /// Legge (una volta) il prezzo di una stampa.
-    func carica(_ id: Int, client: DiscogsClient, valuta: String) async {
+    /// `bassa`: i prezzi della lista passano dopo ricerca, scheda e tracce; se la riga sparisce prima, non si chiede.
+    func carica(_ id: Int, client: DiscogsClient, valuta: String, bassa: Bool = true) async {
         guard prezzi[id] == nil, !inCorso.contains(id) else { return }
         inCorso.insert(id)
         defer { inCorso.remove(id) }
-        if let s = try? await client.stats(id, currency: valuta) {
+        if let s = try? await client.stats(id, currency: valuta, bassa: bassa) {
             prezzi[id] = PrezzoCerca(da: s.lowestPrice?.value, inVendita: s.numForSale ?? 0, valuta: s.lowestPrice?.currency ?? valuta)
         }
     }
 
     /// Rilegge sempre (per il Carrello).
     func rileggi(_ id: Int, client: DiscogsClient, valuta: String) async -> PrezzoCerca? {
-        if let s = try? await client.stats(id, currency: valuta) {
+        if let s = try? await client.stats(id, currency: valuta, bassa: true) {
             let p = PrezzoCerca(da: s.lowestPrice?.value, inVendita: s.numForSale ?? 0, valuta: s.lowestPrice?.currency ?? valuta)
             prezzi[id] = p
             return p

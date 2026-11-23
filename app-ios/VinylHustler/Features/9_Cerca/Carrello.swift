@@ -82,7 +82,7 @@ enum AvvisiPrezzo {
         var cambiato = false
         for i in voci.indices {
             guard let soglia = voci[i].avviso, !Task.isCancelled else { continue }
-            guard let s = try? await client.stats(voci[i].id, currency: voci[i].valuta), let da = s.lowestPrice?.value else { continue }
+            guard let s = try? await client.stats(voci[i].id, currency: voci[i].valuta, bassa: true), let da = s.lowestPrice?.value else { continue }
             voci[i].da = da
             voci[i].inVendita = s.numForSale ?? voci[i].inVendita
             cambiato = true

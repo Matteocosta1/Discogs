@@ -191,7 +191,7 @@ struct SchedaCerca: View {
 
     private func carica() async {
         inWantlist = WantlistLocale.contiene(id)
-        async let p: Void = prezzi.carica(id, client: seller.client, valuta: seller.currency)
+        async let p: Void = prezzi.carica(id, client: seller.client, valuta: seller.currency, bassa: false)
         release = await seller.scheda(id)
         await p
         if versioni.isEmpty, let m = release?.masterId ?? voce.masterID, m > 0,
@@ -364,6 +364,7 @@ struct ScavaView: View {
     @State private var pos = 0
     @State private var spinta: CGFloat = 0
     @State private var scheda: VoceCerca?
+    @State private var leggo = true
     private let ascolto = Ascolto.shared
     private let carrello = Carrello.shared
     private let prezzi = PrezziCerca.shared
@@ -444,7 +445,7 @@ struct ScavaView: View {
     private var brano: some View {
         VStack(spacing: 6) {
             HStack {
-                Text(ascolto.corrente.map { "\($0.posizione) · \($0.titolo.uppercased())" } ?? (ascolto.cercando ? "CERCO LE TRACCE…" : "NESSUNA TRACCIA"))
+                Text(ascolto.corrente.map { "\($0.posizione) · \($0.titolo.uppercased())" } ?? (ascolto.cercando || leggo ? "CERCO LE TRACCE…" : "NESSUNA TRACCIA"))
                     .lineLimit(1)
                 Spacer()
                 if ascolto.durata > 0 { Text("\(LettoreGrande.mmss(ascolto.tempo)) / \(LettoreGrande.mmss(ascolto.durata))").monospacedDigit() }
@@ -505,6 +506,8 @@ struct ScavaView: View {
     private func suonaDisco() async {
         guard pos < voci.count else { ascolto.chiudi(); return }
         let id = voci[pos].id
+        leggo = true
+        defer { leggo = false }
         guard let r = await seller.scheda(id), !Task.isCancelled else { return }
         await ascolto.prepara(r)
         guard !Task.isCancelled, ascolto.releaseID == id else { return }

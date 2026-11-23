@@ -77,6 +77,8 @@ struct FinestraAscolto: View {
 
     @Environment(Seller.self) private var seller
     @State private var fase: Fase = .apre(Date())
+    /// V79: finché Discogs non ha dato la tracklist si legge «Cerco le tracce…» (prima, in coda, compariva «Nessuna traccia»).
+    @State private var leggo = true
     private let ascolto = Ascolto.shared
 
     private let durataApre = 0.62
@@ -125,7 +127,9 @@ struct FinestraAscolto: View {
                 Suoni.chatPronta()
             }
         }
-        if let r = await seller.scheda(bersaglio.releaseID), !Task.isCancelled {
+        let letta = await seller.scheda(bersaglio.releaseID)
+        defer { leggo = false }
+        if let r = letta, !Task.isCancelled {
             if case .chiude(_) = fase { return }        // chiusa mentre arrivava la scheda: niente tracce caricate
             await ascolto.prepara(r)
         }
@@ -211,7 +215,6 @@ struct FinestraAscolto: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 12) {
                     testa.opacity(visibile(k, 0))
-                    TastoSpotify(cerca: bersaglio.titolo).opacity(visibile(k, 0))     // V79
                     tempo.opacity(visibile(k, 1))
                     comandi.opacity(visibile(k, 2))
                     tracce.opacity(visibile(k, 3))
@@ -235,7 +238,7 @@ struct FinestraAscolto: View {
                 DiscoAscolto(copertina: ascolto.copertina, gira: ascolto.suona)
                     .frame(width: 118, height: 118)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(ascolto.corrente?.titolo ?? (ascolto.cercando ? "Cerco le tracce…" : "Nessuna traccia"))
+                    Text(ascolto.corrente?.titolo ?? (ascolto.cercando || leggo ? "Cerco le tracce…" : "Nessuna traccia"))
                         .font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
                     Text(bersaglio.titolo)
                         .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
@@ -302,7 +305,7 @@ struct FinestraAscolto: View {
     private var tracce: some View {
         VStack(alignment: .leading, spacing: 0) {
             if ascolto.brani.isEmpty {
-                Text(ascolto.cercando ? "Cerco le tracce…" : "Discogs non ha la tracklist di questo disco.")
+                Text(ascolto.cercando || leggo ? "Cerco le tracce…" : "Discogs non ha la tracklist di questo disco.")
                     .font(.system(size: 14)).foregroundStyle(Theme.muted)
                     .padding(14)
             }
@@ -347,35 +350,3 @@ struct FinestraAscolto: View {
     }
 }
 
-/// V79 · «Apri in Spotify»: apre Spotify (o il sito) sulla ricerca «artista album». Niente account né API:
-/// le API di Spotify per gli sviluppatori sono riservate alle aziende grandi. Senza logo (le regole di Spotify
-/// non permettono di ricolorarlo).
-struct TastoSpotify: View {
-    let cerca: String
-
-    /// «Miles Davis - Kind Of Blue (LP, Album, RE)» → «Miles Davis Kind Of Blue».
-    static func pulisci(_ s: String) -> String {
-        var t = s.replacingOccurrences(of: #"\s*\([^)]*\)"#, with: "", options: .regularExpression)
-        t = t.replacingOccurrences(of: " – ", with: " ").replacingOccurrences(of: " - ", with: " ")
-        return t.trimmingCharacters(in: .whitespaces)
-    }
-
-    private var url: URL? {
-        let q = Self.pulisci(cerca)
-        guard !q.isEmpty, let e = q.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
-        return URL(string: "https://open.spotify.com/search/" + e)
-    }
-
-    var body: some View {
-        if let url {
-            Link(destination: url) {
-                Text("Apri in Spotify")
-                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
-                    .padding(.horizontal, 16).frame(height: 34)
-                    .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 1))
-                    .contentShape(Capsule())
-            }
-            .simultaneousGesture(TapGesture().onEnded { Suoni.tocco() })
-        }
-    }
-}

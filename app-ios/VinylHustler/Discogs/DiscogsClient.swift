@@ -17,25 +17,59 @@ enum DiscogsError: LocalizedError {
     }
 }
 
-/// Una richiesta al secondo, sempre: Discogs ne concede 60 al minuto (per IP). Come DiscogsAPI di vendi.py.
+/// V79: fino a 60 richieste al minuto (il limite di Discogs, per IP), con due corsie:
+///   · alta (tutto quello che tocchi: ricerca, scheda, tracce, Wantlist, annunci, ordini): passa sempre davanti;
+///   · bassa (i prezzi «da X € · N in vendita» di Cerca e del Carrello): passa solo se nessuno aspetta in alta e
+///     lascia sempre un margine alle richieste in alta. Una richiesta bassa annullata (disco non più a schermo,
+///     ricerca vecchia) esce dalla fila e non si manda.
+/// Prima (fino alla V78) era una richiesta al secondo in fila unica: i prezzi facevano aspettare la ricerca.
 actor RateLimiter {
-    static let minInterval: TimeInterval = 1.05
+    /// Richieste al minuto: 55 in alta (5 di margine sotto le 60 di Discogs), 45 in bassa.
+    static let limiteAlta = 55
+    static let limiteBassa = 45
+    /// Tra una richiesta e l'altra almeno questo (niente raffiche tutte nello stesso istante).
+    static let distanza: TimeInterval = 0.12
     private var next = Date.distantPast
-    private(set) var recent: [Date] = []      // per il contatore "API x/60" della Console
+    private var pausaFino = Date.distantPast
+    private var alteInAttesa = 0
+    /// Quante ne restano secondo Discogs (header X-Discogs-Ratelimit-Remaining): conta anche le richieste
+    /// degli altri telefoni sulla stessa rete.
+    private var restanti: Int?
+    private var restantiQuando = Date.distantPast
+    private(set) var recent: [Date] = []      // per il contatore "API x/60" di Settings
 
-    func waitTurn() async {
-        // Il posto in coda si prenota PRIMA di aspettare: due chiamate insieme non partono mai insieme.
-        let slot = max(next, Date())
-        next = slot.addingTimeInterval(Self.minInterval)
-        let delay = slot.timeIntervalSinceNow
-        if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-        recent.append(Date())
-        recent.removeAll { $0 < Date().addingTimeInterval(-60) }
+    func waitTurn(bassa: Bool = false) async throws {
+        if !bassa { alteInAttesa += 1 }
+        defer { if !bassa { alteInAttesa -= 1 } }
+        while true {
+            try Task.checkCancellation()
+            let ora = Date()
+            recent.removeAll { $0 < ora.addingTimeInterval(-60) }
+            let limite = bassa ? Self.limiteBassa : Self.limiteAlta
+            let restaDiscogs = ora.timeIntervalSince(restantiQuando) < 60 ? (restanti ?? 60) : 60
+            let libero = ora >= pausaFino && ora >= next && recent.count < limite
+                && restaDiscogs > (bassa ? 15 : 2) && (!bassa || alteInAttesa == 0)
+            if libero {
+                recent.append(ora)
+                next = ora.addingTimeInterval(Self.distanza)
+                if let r = restanti { restanti = r - 1 }
+                return
+            }
+            try await Task.sleep(for: .milliseconds(bassa ? 200 : 60))
+        }
     }
 
-    /// Se Discogs dice che restano poche richieste, rallenta.
+    /// Quello che dice Discogs: se ne restano poche, si rallenta da soli.
     func respect(remaining: Int?) {
-        if let remaining, remaining <= 3 { next = max(next, Date().addingTimeInterval(15)) }
+        guard let remaining else { return }
+        restanti = remaining
+        restantiQuando = Date()
+        if remaining <= 3 { pausaFino = max(pausaFino, Date().addingTimeInterval(15)) }
+    }
+
+    /// Troppe richieste (429): si aspetta un attimo e si riprova.
+    func pausa(_ secondi: TimeInterval) {
+        pausaFino = max(pausaFino, Date().addingTimeInterval(secondi))
     }
 
     func usedLastMinute() -> Int {
@@ -84,19 +118,20 @@ final class DiscogsClient: @unchecked Sendable {
     // MARK: - Richiesta generica
 
     func request<T: Decodable>(_ method: String, _ path: String, query: [String: String] = [:],
-                               body: [String: Any]? = nil) async throws -> T {
-        let data = try await raw(method, path, query: query, body: body)
+                               body: [String: Any]? = nil, bassa: Bool = false) async throws -> T {
+        let data = try await raw(method, path, query: query, body: body, bassa: bassa)
         return try decoder.decode(T.self, from: data)
     }
 
-    func raw(_ method: String, _ path: String, query: [String: String] = [:], body: [String: Any]? = nil) async throws -> Data {
+    func raw(_ method: String, _ path: String, query: [String: String] = [:], body: [String: Any]? = nil,
+             bassa: Bool = false) async throws -> Data {
         guard let credentials else { throw DiscogsError.notLoggedIn }
         var comps = URLComponents(url: Self.base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { comps.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) } }
         // Dati del catalogo già chiesti da poco: si riusano, senza consumare una delle 60 richieste al minuto.
         let cacheable = method == "GET" && ResponseCache.cacheable(path)
         if cacheable, let hit = await cache.get(comps.url!) { return hit }
-        let data = try await send(method, comps.url!, body: body, credentials: credentials, path: path)
+        let data = try await send(method, comps.url!, body: body, credentials: credentials, path: path, bassa: bassa)
         if cacheable { await cache.put(comps.url!, data) }
         return data
     }
@@ -104,7 +139,7 @@ final class DiscogsClient: @unchecked Sendable {
     private let cache = ResponseCache()
 
     private func send(_ method: String, _ url: URL, body: [String: Any]?, credentials: DiscogsCredentials,
-                      path: String) async throws -> Data {
+                      path: String, bassa: Bool) async throws -> Data {
         var req = URLRequest(url: url, timeoutInterval: 30)
         req.httpMethod = method
         req.setValue(AppConfig.userAgent, forHTTPHeaderField: "User-Agent")
@@ -115,7 +150,7 @@ final class DiscogsClient: @unchecked Sendable {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         for attempt in 0..<6 {
-            await limiter.waitTurn()
+            try await limiter.waitTurn(bassa: bassa)
             do {
                 let (data, response) = try await URLSession.shared.data(for: req)
                 let http = response as! HTTPURLResponse
@@ -123,8 +158,8 @@ final class DiscogsClient: @unchecked Sendable {
                 switch http.statusCode {
                 case 200..<300:
                     return data
-                case 429:   // troppe richieste: non è stato creato nulla, si riprova dopo un minuto
-                    try await Task.sleep(for: .seconds(60))
+                case 429:   // troppe richieste (anche da un altro telefono sulla stessa rete): non è stato creato nulla, si riprova
+                    await limiter.pausa(10 + 10 * Double(attempt))
                 case 500...:
                     if method == "POST" { throw DiscogsError.uncertain("errore del server \(http.statusCode)") }
                     try await Task.sleep(for: .seconds(5 * Double(attempt + 1)))
@@ -188,8 +223,9 @@ final class DiscogsClient: @unchecked Sendable {
         try await request("GET", "/marketplace/price_suggestions/\(id)")
     }
 
-    func stats(_ id: Int, currency: String) async throws -> MarketplaceStats {
-        try await request("GET", "/marketplace/stats/\(id)", query: ["curr_abbr": currency])
+    /// `bassa`: i prezzi di Cerca e del Carrello passano dopo tutto il resto (V79).
+    func stats(_ id: Int, currency: String, bassa: Bool = false) async throws -> MarketplaceStats {
+        try await request("GET", "/marketplace/stats/\(id)", query: ["curr_abbr": currency], bassa: bassa)
     }
 
     // MARK: - Annunci

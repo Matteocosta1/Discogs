@@ -48,7 +48,7 @@ struct ConsoleView: View {
                                 .frame(maxWidth: 120)
                             valore("\(apiUsed) / 60")
                         }
-                    } piede: { Text("Una richiesta al secondo, sempre. Il limite è per telefono (indirizzo IP).") }
+                    } piede: { Text("Fino a 60 richieste al minuto, come chiede Discogs: quello che tocchi passa sempre per primo e, se Discogs dice di rallentare, l'app rallenta da sola. Il limite è per telefono (indirizzo IP).") }
                     GruppoJarvis("Riconoscimento") { riconoscimentoRows } piede: { EmptyView() }
                     GruppoJarvis("Voce") { voiceRows } piede: { Text(footer) }
                     GruppoJarvis("Annunci") { annunciRows } piede: { annunciFooter }
