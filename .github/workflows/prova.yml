@@ -1,0 +1,18 @@
+name: Prova API
+on:
+  push:
+    branches: [claude/copertine-prova]
+jobs:
+  prova:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          UA='VinylHustler/1.0 (prova)'
+          echo "== master senza valuta"; curl -s -A "$UA" https://api.discogs.com/masters/5460 | python3 -c "import json,sys; d=json.load(sys.stdin); print({k:d.get(k) for k in ['id','main_release','lowest_price','num_for_sale','year','genres','styles']}, 'images' in d)"
+          sleep 2; echo "== master EUR"; curl -s -A "$UA" "https://api.discogs.com/masters/5460?curr_abbr=EUR" | python3 -c "import json,sys; d=json.load(sys.stdin); print({k:d.get(k) for k in ['lowest_price','num_for_sale']})"
+          sleep 2; echo "== stats release EUR"; curl -s -A "$UA" "https://api.discogs.com/marketplace/stats/6276183?curr_abbr=EUR"
+          echo; sleep 2; echo "== stats release USD"; curl -s -A "$UA" "https://api.discogs.com/marketplace/stats/6276183?curr_abbr=USD"
+          echo; sleep 2; echo "== release EUR"; curl -s -A "$UA" "https://api.discogs.com/releases/6276183?curr_abbr=EUR" | python3 -c "import json,sys; d=json.load(sys.stdin); print({k:d.get(k) for k in ['lowest_price','num_for_sale','master_id']}, d.get('community',{}).get('want'))"
+          sleep 2; echo "== versions"; curl -s -A "$UA" "https://api.discogs.com/masters/5460/versions?per_page=2&format=Vinyl" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d['versions'][0])[:900]); print(list(d.keys()))"
+          sleep 2; echo "== search no auth"; curl -s -A "$UA" "https://api.discogs.com/database/search?q=kind+of+blue&type=master" | head -c 300
