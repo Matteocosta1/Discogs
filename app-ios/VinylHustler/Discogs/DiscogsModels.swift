@@ -21,6 +21,7 @@ struct UserProfile: Codable {
 struct Pagination: Codable {
     var page: Int
     var pages: Int
+    var items: Int?                 // V79 · Cerca: quanti risultati in tutto
 }
 
 /// Una stampa dello stesso album (GET /masters/{id}/versions).
@@ -55,6 +56,22 @@ struct SearchResult: Codable, Hashable {
     var barcode: [String]?
     var coverImage: String?
     var thumb: String?
+    // V79 · Cerca: generi, stili, quanti lo cercano / ce l'hanno, l'album «madre»
+    var genre: [String]?
+    var style: [String]?
+    var community: SearchCommunity?
+    var masterId: Int?
+}
+
+struct SearchCommunity: Codable, Hashable {
+    var want: Int?
+    var have: Int?
+}
+
+/// V79 · Cerca: la risposta della ricerca con le pagine.
+struct SearchPage: Codable {
+    var results: [SearchResult]
+    var pagination: Pagination?
 }
 
 struct ReleaseImage: Codable, Hashable {

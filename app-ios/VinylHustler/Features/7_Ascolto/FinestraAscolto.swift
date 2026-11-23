@@ -211,6 +211,7 @@ struct FinestraAscolto: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 12) {
                     testa.opacity(visibile(k, 0))
+                    TastoSpotify(cerca: bersaglio.titolo).opacity(visibile(k, 0))     // V79
                     tempo.opacity(visibile(k, 1))
                     comandi.opacity(visibile(k, 2))
                     tracce.opacity(visibile(k, 3))
@@ -343,5 +344,38 @@ struct FinestraAscolto: View {
         .buttonStyle(.plain)
         .disabled(f == .nessuna && !ascolto.cercando)
         .opacity(f == .nessuna && !ascolto.cercando ? 0.45 : 1)
+    }
+}
+
+/// V79 · «Apri in Spotify»: apre Spotify (o il sito) sulla ricerca «artista album». Niente account né API:
+/// le API di Spotify per gli sviluppatori sono riservate alle aziende grandi. Senza logo (le regole di Spotify
+/// non permettono di ricolorarlo).
+struct TastoSpotify: View {
+    let cerca: String
+
+    /// «Miles Davis - Kind Of Blue (LP, Album, RE)» → «Miles Davis Kind Of Blue».
+    static func pulisci(_ s: String) -> String {
+        var t = s.replacingOccurrences(of: #"\s*\([^)]*\)"#, with: "", options: .regularExpression)
+        t = t.replacingOccurrences(of: " – ", with: " ").replacingOccurrences(of: " - ", with: " ")
+        return t.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var url: URL? {
+        let q = Self.pulisci(cerca)
+        guard !q.isEmpty, let e = q.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        return URL(string: "https://open.spotify.com/search/" + e)
+    }
+
+    var body: some View {
+        if let url {
+            Link(destination: url) {
+                Text("Apri in Spotify")
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                    .padding(.horizontal, 16).frame(height: 34)
+                    .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 1))
+                    .contentShape(Capsule())
+            }
+            .simultaneousGesture(TapGesture().onEnded { Suoni.tocco() })
+        }
     }
 }

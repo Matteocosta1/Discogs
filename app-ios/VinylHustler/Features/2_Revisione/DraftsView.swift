@@ -27,6 +27,9 @@ struct DraftsView: View {
     @State private var ritiro: [Int: Date] = [:]
     // V60 · p15: la finestra Ascolto
     @State private var ascolta: BersaglioAscolto?
+    // V79: il menu ••• in alto con «Cancella tutte le bozze» (prima stava nel Magazzino, ora Inventario)
+    @State private var chiediCancella = false
+    @State private var avviso: String?
 
     private var shownDrafts: [Listing] {
         let q = search.lowercased()
@@ -130,6 +133,20 @@ struct DraftsView: View {
                     }
                 }
             }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Cancella tutte le bozze", systemImage: "trash", role: .destructive) { chiediCancella = true }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .simultaneousGesture(TapGesture().onEnded { Suoni.testa() })
+                    .accessibilityLabel("Altro")
+                }
+            }
+            .confirmationDialog("Cancellare DEFINITIVAMENTE tutte le bozze su Discogs? Gli annunci In vendita restano.",
+                                isPresented: $chiediCancella, titleVisibility: .visible) {
+                Button("Cancella le bozze", role: .destructive) { Task { await cancellaTutte() } }
+            }
+            .alert(avviso ?? "", isPresented: Binding(get: { avviso != nil }, set: { if !$0 { avviso = nil } })) {}
             .confirmationDialog("Eliminare questa bozza da Discogs?",
                                 isPresented: Binding(get: { toDelete != nil }, set: { if !$0 { toDelete = nil } }),
                                 titleVisibility: .visible) {
@@ -138,6 +155,20 @@ struct DraftsView: View {
                 }
             }
         }
+    }
+
+    /// V79: cancella tutte le bozze su Discogs (gli annunci in vendita non si toccano), poi rilegge.
+    private func cancellaTutte() async {
+        loading = true
+        defer { loading = false }
+        do {
+            let n = try await seller.deleteAllDrafts()
+            Suoni.svuota()
+            avviso = n == 1 ? "Cancellata 1 bozza" : "Bozze cancellate: \(n)"
+        } catch {
+            if !error.isCancellation { avviso = error.localizedDescription }
+        }
+        await loadDrafts()
     }
 
     /// La bozza è andata online: sparisce da qui, e il disco dell'app (se c'è) risulta in vendita.
@@ -273,60 +304,58 @@ struct DraftRow: View {
                 .brightness(lit ? 0 : -0.15)
                 .overlay(Circle().stroke(lit ? Theme.glow : Color.clear, lineWidth: 2))
                 .shadow(color: Theme.glow.opacity(lit ? 0.7 : 0), radius: 8)
-            VStack(alignment: .leading, spacing: 4) {
-                Link(destination: URL(string: "https://www.discogs.com/sell/item/\(listing.id)")!) {
-                    (Text(listing.release.description ?? "Release \(listing.release.id)") + Text(" ↗").foregroundColor(Theme.accent))
-                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+            // V79: niente più «Bozza»/«Online»: in alto titolo e prezzo, sotto prima la condizione e poi
+            // cestino, scheda, ▶ e Vendi (così su iPhone da 375 punti la condizione si legge intera)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Link(destination: URL(string: "https://www.discogs.com/sell/item/\(listing.id)")!) {
+                        (Text(listing.release.description ?? "Release \(listing.release.id)") + Text(" ↗").foregroundColor(Theme.accent))
+                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if let p = listing.price?.value {
+                        Text(p, format: .currency(code: listing.price?.currency ?? currency)).font(.system(size: 14, weight: .bold))
+                            .lineLimit(1).fixedSize()
+                    }
                 }
                 HStack(spacing: 6) {
-                    Text(lit ? "Online" : "Bozza")
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .foregroundStyle(lit ? Theme.money : Theme.warn)
-                        .background(lit ? Theme.military : Theme.warnSoft, in: Capsule())
-                        .lineLimit(1).fixedSize()           // V65: «Bozza» mai tagliata
                     Text([ListingRow.short(listing.condition), ListingRow.short(listing.sleeveCondition)].filter { !$0.isEmpty }.joined(separator: " / "))
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.glow)
-                        .lineLimit(1).minimumScaleFactor(0.85)   // V65: «VG+ / VG» sempre su una riga
+                        .lineLimit(1).minimumScaleFactor(0.85)
                     if !lit {
                         // V52: lucina ferma (quella che lampeggiava faceva ondeggiare le righe)
                         Circle().fill(Theme.warn).frame(width: 6, height: 6)
                             .shadow(color: Theme.warn, radius: 3)
                     }
+                    Spacer(minLength: 4)
+                    HStack(spacing: 6) {
+                        Button(action: onDelete) {
+                            Image(systemName: "trash").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.warn)
+                                .frame(width: 30, height: 30).background(Theme.warnSoft, in: Circle())
+                        }
+                        .buttonStyle(.plain).accessibilityLabel("Elimina la bozza")
+                        Button(action: onEdit) {
+                            Image(systemName: "slider.horizontal.3").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+                                .frame(width: 30, height: 30).background(Theme.military, in: Circle())
+                        }
+                        .buttonStyle(.plain).accessibilityLabel("Modifica l'annuncio")
+                        // V65: Ascolto a lato, dopo cestino e annuncio, prima di Vendi
+                        if let onListen, !lit {
+                            TastoAscolta(nome: listing.release.description ?? "", azione: onListen)
+                                .frame(width: 30, height: 30)
+                        }
+                        Button(action: onSell) {
+                            Text("Vendi").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
+                                .lineLimit(1).fixedSize()          // V54: mai "V…", anche sugli schermi più stretti
+                                .padding(.horizontal, 12).frame(height: 30)
+                                .overlay(Capsule().stroke(Theme.accent, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(lit)
+                    }
+                    .fixedSize()                                // i tasti non si stringono mai
                 }
             }
-            Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 6) {
-                if let p = listing.price?.value {
-                    Text(p, format: .currency(code: listing.price?.currency ?? currency)).font(.system(size: 14, weight: .bold))
-                }
-                HStack(spacing: 6) {
-                    Button(action: onDelete) {
-                        Image(systemName: "trash").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.warn)
-                            .frame(width: 30, height: 30).background(Theme.warnSoft, in: Circle())
-                    }
-                    .buttonStyle(.plain).accessibilityLabel("Elimina la bozza")
-                    Button(action: onEdit) {
-                        Image(systemName: "slider.horizontal.3").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
-                            .frame(width: 30, height: 30).background(Theme.military, in: Circle())
-                    }
-                    .buttonStyle(.plain).accessibilityLabel("Modifica l'annuncio")
-                    // V65: Ascolto a lato, dopo cestino e annuncio, prima di Vendi
-                    if let onListen, !lit {
-                        TastoAscolta(nome: listing.release.description ?? "", azione: onListen)
-                            .frame(width: 30, height: 30)
-                    }
-                    Button(action: onSell) {
-                        Text("Vendi").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
-                            .lineLimit(1).fixedSize()          // V54: mai "V…", anche sugli schermi più stretti
-                            .padding(.horizontal, 12).frame(height: 30)
-                            .overlay(Capsule().stroke(Theme.accent, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(lit)
-                }
-            }
-            .fixedSize()                                    // i tasti non si stringono mai: si accorcia il titolo
         }
         .padding(12)
         .background(lit ? Color(red: 0.086, green: 0.125, blue: 0.102) : Theme.panel,

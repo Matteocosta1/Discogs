@@ -63,7 +63,7 @@ enum InfoTopic: String, Identifiable {
                 ]),
                 ("Dove la ritrovi", [
                     "• Sull'annuncio Discogs, nel campo privato «Location».",
-                    "• In Magazzino, sotto ogni disco (la puoi correggere lì).",
+                    "• In Inventario, sotto ogni disco (la puoi correggere lì).",
                     "• Negli Ordini: quando un disco si vende, ti dice «Preleva da Scatola 12». Vai a colpo sicuro.",
                 ]),
                 ("I contenitori", [
@@ -112,7 +112,7 @@ enum InfoTopic: String, Identifiable {
                 ]),
                 ("Come finisce nell'annuncio", [
                     "L'app scrive da sola la descrizione: condizione, le tue note e il testo fisso di Settings. Questo commento entra lì dentro.",
-                    "Puoi sempre cambiarlo disco per disco: tocca il disco in Bozze o in Magazzino e apri la scheda annuncio.",
+                    "Puoi sempre cambiarlo disco per disco: tocca il disco in Bozze o in Inventario e apri la scheda annuncio.",
                 ]),
                 ("Attenzione", [
                     "Vale per i dischi che fotografi dopo. Quelli già fotografati tengono il loro.",
@@ -146,7 +146,7 @@ enum InfoTopic: String, Identifiable {
                     "• «Elimina» (rosso, in fondo): lo togli.",
                     "Se chiudi la fotocamera senza decidere, il disco ti aspetta nella pagina Bozze.",
                     "Poi decidi subito: Vendi (va online) oppure Bozza (sta su Discogs ma nascosto, lo pubblichi quando vuoi).",
-                    "Prezzo, condizioni, posizione e descrizione si cambiano quando vuoi: tocca il prezzo del disco, oppure il disco in Magazzino o in Bozze. Se preferisci controllare tutto prima di mettere online: Settings › Annunci › Vendi › Prima la scheda.",
+                    "Prezzo, condizioni, posizione e descrizione si cambiano quando vuoi: tocca il prezzo del disco, oppure il disco in Inventario o in Bozze. Se preferisci controllare tutto prima di mettere online: Settings › Annunci › Vendi › Prima la scheda.",
                 ]),
                 ("Consigli", [
                     "• Luce buona, niente riflessi sulla plastica.",

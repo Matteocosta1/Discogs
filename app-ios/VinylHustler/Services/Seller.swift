@@ -576,20 +576,21 @@ final class Seller {
 
     /// POSIZIONE A CHI NON CE L'HA: scrive `place` nel campo privato "location" degli annunci che ce l'hanno vuoto.
     /// Gli annunci che hanno già una posizione non si toccano; degli altri cambia solo la posizione.
-    func fillMissingLocation(_ listings: [Listing], place: String, discs: [Disc]) async -> (done: Int, failed: Int) {
-        var done = 0, failed = 0
-        let empty = listings.filter { ($0.location ?? "").trimmingCharacters(in: .whitespaces).isEmpty
-                                      && ($0.status == "For Sale" || $0.status == "Draft") }
-        for l in empty {
+    /// V79 · Inventario › Seleziona › Posizione: scrive la posizione (campo privato «location») sugli annunci scelti,
+    /// e la stessa sul disco dell'app. Restituisce gli annunci scritti e quanti non sono riusciti.
+    func scriviPosizione(_ posto: String, annunci: [Listing], discs: [Disc]) async -> (fatti: Set<Int>, falliti: Int) {
+        var fatti: Set<Int> = []
+        var falliti = 0
+        for l in annunci where l.status == "For Sale" || l.status == "Draft" {
             do {
-                try await client.editListing(l.id, changes: ["location": place])
-                done += 1
+                try await client.editListing(l.id, changes: ["location": posto])
+                fatti.insert(l.id)
                 for d in discs where d.listingID == l.id || (l.externalId != nil && d.externalID == l.externalId) {
-                    if d.box.trimmingCharacters(in: .whitespaces).isEmpty { d.box = place }
+                    d.box = posto
                 }
-            } catch { failed += 1 }
+            } catch { falliti += 1 }
         }
-        return (done, failed)
+        return (fatti, falliti)
     }
 
     /// Cancella TUTTE le bozze su Discogs (gli annunci In vendita non si toccano). Restituisce quante.

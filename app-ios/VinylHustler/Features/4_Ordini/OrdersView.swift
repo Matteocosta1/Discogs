@@ -830,6 +830,7 @@ enum OrderWatcher {
             let work = Task {
                 let client = DiscogsClient()
                 if let page = try? await client.orders() { await notifyNew(page.orders) }
+                await AvvisiPrezzo.controlla(client: client)          // V79: Avviso prezzo del Carrello
                 task.setTaskCompleted(success: true)
             }
             task.expirationHandler = { work.cancel() }

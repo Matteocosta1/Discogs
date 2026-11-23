@@ -1,0 +1,277 @@
+import SwiftUI
+import UIKit
+import UserNotifications
+
+// V79 — CARRELLO (come nel mock-up): i dischi da comprare, con il prezzo più basso su Discogs (riletto ogni volta
+// che si apre: i dati di Discogs non possono avere più di 6 ore), il totale indicativo e l'Avviso prezzo.
+// «Compra» apre la pagina del disco su Discogs: lì si sceglie la copia e si paga (ogni venditore spedisce il suo ordine).
+
+struct VoceCarrello: Codable, Identifiable, Hashable {
+    var id: Int                     // la stampa (release) Discogs
+    var nome: String
+    var annoPaese: String
+    var miniatura: String?
+    var da: Double?
+    var inVendita: Int
+    var valuta: String
+    /// Avviso prezzo: notifica quando il prezzo più basso scende sotto questa cifra (nil = spento).
+    var avviso: Double?
+    /// L'ultimo prezzo già avvisato (per non avvisare due volte lo stesso prezzo).
+    var avvisato: Double?
+
+    var linkCompra: URL? { URL(string: "https://www.discogs.com/sell/release/\(id)?ev=rb") }
+}
+
+@MainActor
+@Observable
+final class Carrello {
+    static let shared = Carrello()
+    static let chiave = "carrelloV79"
+    private(set) var voci: [VoceCarrello] = Carrello.leggi()
+    private(set) var aggiornato: Date?
+
+    nonisolated static func leggi() -> [VoceCarrello] {
+        guard let d = UserDefaults.standard.data(forKey: chiave) else { return [] }
+        return (try? JSONDecoder().decode([VoceCarrello].self, from: d)) ?? []
+    }
+    nonisolated static func scrivi(_ v: [VoceCarrello]) {
+        if let d = try? JSONEncoder().encode(v) { UserDefaults.standard.set(d, forKey: chiave) }
+    }
+    private func salva() { Self.scrivi(voci) }
+
+    func contiene(_ id: Int) -> Bool { voci.contains { $0.id == id } }
+
+    func metti(_ v: VoceCerca, prezzo: PrezzoCerca?, valuta: String) {
+        guard !contiene(v.id) else { return }
+        voci.insert(VoceCarrello(id: v.id, nome: v.nome, annoPaese: [v.anno, v.paese].filter { !$0.isEmpty }.joined(separator: " "),
+                                 miniatura: v.miniatura?.absoluteString, da: prezzo?.da, inVendita: prezzo?.inVendita ?? 0,
+                                 valuta: prezzo?.valuta ?? valuta, avviso: nil, avvisato: nil), at: 0)
+        salva()
+    }
+
+    func togli(_ id: Int) { voci.removeAll { $0.id == id }; salva() }
+
+    func avviso(_ id: Int, _ valore: Double?) {
+        guard let i = voci.firstIndex(where: { $0.id == id }) else { return }
+        voci[i].avviso = valore
+        voci[i].avvisato = nil
+        salva()
+    }
+
+    /// Rilegge i prezzi di tutti i dischi (una richiesta al secondo).
+    func aggiorna(client: DiscogsClient, valuta: String) async {
+        for v in voci {
+            guard let p = await PrezziCerca.shared.rileggi(v.id, client: client, valuta: valuta),
+                  let i = voci.firstIndex(where: { $0.id == v.id }) else { continue }
+            voci[i].da = p.da
+            voci[i].inVendita = p.inVendita
+            voci[i].valuta = p.valuta
+        }
+        aggiornato = Date()
+        salva()
+    }
+
+    var totale: Double { voci.compactMap(\.da).reduce(0, +) }
+}
+
+/// L'Avviso prezzo in sottofondo (insieme al controllo degli ordini): se il prezzo più basso di un disco del
+/// Carrello scende sotto la cifra scelta, arriva la notifica «Prezzo sceso».
+enum AvvisiPrezzo {
+    static func controlla(client: DiscogsClient) async {
+        var voci = Carrello.leggi()
+        var cambiato = false
+        for i in voci.indices {
+            guard let soglia = voci[i].avviso, !Task.isCancelled else { continue }
+            guard let s = try? await client.stats(voci[i].id, currency: voci[i].valuta), let da = s.lowestPrice?.value else { continue }
+            voci[i].da = da
+            voci[i].inVendita = s.numForSale ?? voci[i].inVendita
+            cambiato = true
+            if da <= soglia && voci[i].avvisato != da {
+                voci[i].avvisato = da
+                let c = UNMutableNotificationContent()
+                c.title = "Prezzo sceso"
+                c.body = "\(voci[i].nome) · da \(soldiIT(da, voci[i].valuta))"
+                c.sound = .default
+                c.userInfo = ["carrello": voci[i].id]
+                try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "prezzo-\(voci[i].id)", content: c, trigger: nil))
+            }
+        }
+        if cambiato { Carrello.scrivi(voci) }
+    }
+}
+
+struct CarrelloView: View {
+    /// Tocco sulla copertina: si chiude il carrello e si apre la scheda del disco.
+    let apriScheda: (VoceCerca) -> Void
+    @Environment(Seller.self) private var seller
+    @Environment(\.dismiss) private var dismiss
+    private let carrello = Carrello.shared
+    @State private var leggo = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .bottom) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(carrello.voci.count == 1 ? "1 DISCO" : "\(carrello.voci.count) DISCHI")
+                                .font(Theme.mono(9, .bold)).tracking(1.3).foregroundStyle(Theme.muted)
+                            Text("da " + soldiIT(carrello.totale, seller.currency))
+                                .font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.money)
+                                .lineLimit(1).minimumScaleFactor(0.7)
+                            Text("+ le spedizioni dei venditori").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("PREZZI DISCOGS").font(Theme.mono(9, .bold)).tracking(1.3).foregroundStyle(Theme.muted)
+                            Text(leggo ? "aggiorno…" : (carrello.aggiornato.map { "aggiornati alle " + $0.formatted(date: .omitted, time: .shortened) } ?? ""))
+                                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        }
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 12)
+                    .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    if carrello.voci.isEmpty {
+                        Text("Il carrello è vuoto.\nTocca + su un disco per aggiungerlo.")
+                            .font(.system(size: 14)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity).padding(.vertical, 30)
+                    }
+                    ForEach(carrello.voci) { v in RigaCarrello(voce: v, apriScheda: apriScheda) }
+                    Text("Si compra su Discogs: ogni venditore spedisce il suo ordine. L'avviso arriva quando il prezzo più basso scende sotto la cifra che scrivi.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(16)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .sfondoHUD()
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("CARRELLO").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Chiudi") { Suoni.testa(); dismiss() }.foregroundStyle(Theme.accent)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Fine") { _ = UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            .task {
+                guard !carrello.voci.isEmpty else { return }
+                leggo = true
+                await carrello.aggiorna(client: seller.client, valuta: seller.currency)
+                leggo = false
+                _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+            }
+        }
+    }
+}
+
+private struct RigaCarrello: View {
+    let voce: VoceCarrello
+    let apriScheda: (VoceCerca) -> Void
+    private let carrello = Carrello.shared
+    @State private var soglia = ""
+    @FocusState private var scrivo: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button { Suoni.tocco(); apriScheda(voceCerca) } label: {
+                    AsyncImage(url: voce.miniatura.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+                        .frame(width: 48, height: 48)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(voce.nome).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                    (Text(voce.da.map { "da " + soldiIT($0, voce.valuta) } ?? "nessuno in vendita").foregroundColor(Theme.money).fontWeight(.bold)
+                        + Text(" · \(voce.inVendita) in vendita" + (voce.annoPaese.isEmpty ? "" : " · \(voce.annoPaese)")))
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Button { Suoni.svuota(); carrello.togli(voce.id) } label: {
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Color(white: 0.78))
+                        .frame(width: 30, height: 30).background(Color(white: 0.23), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Togli dal carrello")
+            }
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "bell").font(.system(size: 13))
+                    Text("Avviso sotto")
+                    Spacer(minLength: 4)
+                    TextField("—", text: $soglia)
+                        .keyboardType(.decimalPad)
+                        .focused($scrivo)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 60)
+                        .foregroundStyle(Theme.text)
+                    Text("€")
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(voce.avviso == nil ? Theme.muted : Theme.glow)
+                .padding(.horizontal, 10).frame(height: 36)
+                .background(Theme.panelHigh, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                if let url = voce.linkCompra {
+                    Link(destination: url) {
+                        Text("Compra").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 12).frame(height: 36)
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.accent, lineWidth: 1.5))
+                    }
+                    .simultaneousGesture(TapGesture().onEnded { Suoni.tocco() })
+                }
+            }
+        }
+        .padding(10)
+        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onAppear { soglia = voce.avviso.map { WarehouseView.italian($0).replacingOccurrences(of: ",00", with: "") } ?? "" }
+        .onChange(of: scrivo) { _, s in
+            guard !s else { return }
+            let v = Double(soglia.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: "."))
+            let valore = (v ?? 0) > 0 ? v : nil
+            if valore != voce.avviso { carrello.avviso(voce.id, valore); if valore != nil { Suoni.tocco() } }
+            soglia = valore.map { WarehouseView.italian($0).replacingOccurrences(of: ",00", with: "") } ?? ""
+        }
+    }
+
+    /// Per aprire la scheda: i dati che ha il carrello (la scheda rilegge il resto da Discogs).
+    private var voceCerca: VoceCerca {
+        VoceCerca(id: voce.id, nome: voce.nome, miniatura: voce.miniatura)
+    }
+}
+
+extension VoceCerca {
+    /// Una voce fatta dai dati del carrello o del riconoscimento (la scheda rilegge il resto da Discogs).
+    init(id: Int, nome: String, miniatura: String?) {
+        var r = SearchResult(id: id, title: nome.replacingOccurrences(of: " – ", with: " - "))
+        r.thumb = miniatura
+        r.coverImage = miniatura
+        self.init(r)
+    }
+}
+
+/// V79: la notifica «Prezzo sceso» porta a Cerca › Carrello (come nel mock-up). Le altre notifiche restano come prima.
+final class NotificheDelegate: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = NotificheDelegate()
+    static let apriCarrello = Notification.Name("vh.apriCarrello")
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        if response.notification.request.content.userInfo["carrello"] != nil {
+            UserDefaults.standard.set(4, forKey: "selectedTab")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                NotificationCenter.default.post(name: Self.apriCarrello, object: nil)
+            }
+        }
+        completionHandler()
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler(notification.request.content.userInfo["carrello"] != nil ? [.banner, .sound] : [])
+    }
+}

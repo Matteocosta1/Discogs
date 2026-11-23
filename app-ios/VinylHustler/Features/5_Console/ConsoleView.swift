@@ -53,11 +53,12 @@ struct ConsoleView: View {
                     GruppoJarvis("Voce") { voiceRows } piede: { Text(footer) }
                     GruppoJarvis("Annunci") { annunciRows } piede: { annunciFooter }
                     PrezziSettings()                    // V76: Prezzi (Richiesta, sicurezze, Ripristina, (i))
+                    EsportaSettings()                   // V79: Esporta (Inventario e Ordini in Excel, Catalogo PDF)
                     // V74: frase obbligatoria per le app che usano le API di Discogs
                     Text("Questa app usa le API di Discogs ma non è affiliata, sponsorizzata o approvata da Discogs.")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("VINYL HUSTLER · \(AppVersione.nome) · KR")
+                    Text("VINYL HUSTLER · \(AppVersione.nome)")
                         .font(Theme.mono(10)).tracking(1.5).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity)
                 }
@@ -233,7 +234,7 @@ struct ConsoleView: View {
 
     private var annunciFooter: some View {
         Text(vendiModo == "subito"
-             ? "Vendi mette il disco online con un tocco. Prezzo e tutto il resto li cambi quando vuoi toccando il disco in Magazzino."
+             ? "Vendi mette il disco online con un tocco. Prezzo e tutto il resto li cambi quando vuoi toccando il disco in Inventario."
              : "Vendi apre la scheda annuncio già compilata: controlli prezzo, condizioni e descrizione, poi «Metti online».")
     }
 

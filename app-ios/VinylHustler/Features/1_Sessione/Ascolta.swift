@@ -276,6 +276,7 @@ struct LettoreGrande: View {
                     .font(Theme.mono(9, .semibold)).tracking(1.5).foregroundStyle(Theme.glow).lineLimit(1)
             }
             .multilineTextAlignment(.center)
+            TastoSpotify(cerca: "\(ascolto.artista) \(release?.title ?? "")")      // V79
             if ascolto.durata > 0 {
                 HStack(spacing: 8) {
                     Text(Self.mmss(ascolto.tempo)).frame(width: 38, alignment: .leading)

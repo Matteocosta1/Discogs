@@ -2,7 +2,7 @@ import SwiftData
 import SwiftUI
 import UIKit
 
-/// 03 / MAGAZZINO — l'inventario vero su Discogs, nello stesso ordine della pagina Discogs (dal più recente).
+/// 03 / INVENTARIO (V79, prima Magazzino: su Discogs si chiama così) — l'inventario vero su Discogs, nello stesso ordine della pagina Discogs (dal più recente).
 /// Filtro Tutti / Online / Bozze, posizione fisica di ogni disco, bozze da eliminare una per una
 /// (scorri a sinistra) o selezionandone tante insieme (Seleziona).
 struct WarehouseView: View {
@@ -13,13 +13,11 @@ struct WarehouseView: View {
     @AppStorage("selectedTab") private var selectedTab = 0
     @AppStorage("reviewPane") private var reviewPane = "Revisione"
     @State private var loading = false
-    @State private var confirmDeleteAll = false
     @State private var selecting = false
     @State private var selected: Set<Int> = []
     @State private var toDelete: [Int] = []          // bozze in attesa di conferma
     @State private var message: String?
-    @State private var askPlace = false
-    @State private var newPlace = "Scatola 1"
+    @State private var chiediPosizione = false          // V79: Seleziona › Posizione
     @State private var editing: Listing?                // scheda annuncio aperta
     @State private var showStats = false
     // V60 · p8: lettura da Discogs (barra con la percentuale), righe che si stampano, numeri che contano
@@ -35,10 +33,6 @@ struct WarehouseView: View {
 
     /// I tre numeri in alto (Online, Bozze, Euro): da dove partono quando contano.
     struct Conteggi { var online: Double; var bozze: Double; var euro: Double }
-    /// Annunci (online e bozze) senza posizione.
-    private var noPlaceCount: Int {
-        listings.filter { ($0.location ?? "").trimmingCharacters(in: .whitespaces).isEmpty }.count
-    }
     @Environment(\.openURL) private var openURL
 
     private var shown: [Listing] {
@@ -110,7 +104,7 @@ struct WarehouseView: View {
                 }
             } footer: {
                 if !selecting && !listings.isEmpty {
-                    Text("Titolo = apre l'annuncio su Discogs. Tasto verde = scheda annuncio. Scorri a sinistra per togliere dalla vendita.")
+                    Text("Titolo = apre l'annuncio su Discogs. Tasto verde = scheda annuncio. Scorri a sinistra per eliminare.")
                 }
             }
         }
@@ -120,8 +114,8 @@ struct WarehouseView: View {
         content
             .scrollContentBackground(.hidden)
             .sfondoHUD()
-            .senzaTitolo("Magazzino")
-            .searchable(text: $search, prompt: "Cerca nel magazzino")
+            .senzaTitolo("Inventario")
+            .searchable(text: $search, prompt: "Cerca nell'inventario")
             .onChange(of: search) { _, _ in cercaT = Date() }
             .refreshable { await Task { await sync() }.value }
             // V60: la lettura da Discogs la mostra la barra in alto; la rotella resta per le altre operazioni
@@ -146,13 +140,7 @@ struct WarehouseView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
-                Button("Verifica su Discogs", systemImage: "arrow.triangle.2.circlepath") { Task { await sync() } }
-                Button("Posizione a chi non ce l'ha (\(noPlaceCount))", systemImage: "archivebox") {
-                    newPlace = "Scatola 1"
-                    askPlace = true
-                }
-                .disabled(noPlaceCount == 0)
-                Button("Cancella tutte le bozze", systemImage: "trash", role: .destructive) { confirmDeleteAll = true }
+                // V79: Verifica = tira giù la lista; Posizione = Seleziona › Posizione; Cancella tutte le bozze = in Bozze
                 Link("Apri l'inventario su Discogs", destination: URL(string: "https://www.discogs.com/sell/manage")!)
             } label: { Image(systemName: "ellipsis.circle") }
             .simultaneousGesture(TapGesture().onEnded { Suoni.testa() })
@@ -161,10 +149,15 @@ struct WarehouseView: View {
 
     @ViewBuilder private var deleteBar: some View {
         if selecting && !selected.isEmpty {
-            Button(role: .destructive) { toDelete = Array(selected) } label: {
-                Label(deleteLabel, systemImage: "trash")
+            // V79: Seleziona › Posizione (scritta su Discogs ai dischi scelti) o Elimina
+            HStack(spacing: 8) {
+                Button("Posizione") { Suoni.tocco(); chiediPosizione = true }
+                    .buttonStyle(SignalButtonStyle())
+                Button(role: .destructive) { toDelete = Array(selected) } label: {
+                    Text("Elimina \(selected.count)")
+                }
+                .buttonStyle(SignalButtonStyle())
             }
-            .buttonStyle(SignalButtonStyle())
             .padding(.horizontal)
             .padding(.bottom, 8)
             .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -181,10 +174,6 @@ struct WarehouseView: View {
             } message: {
                 Text(deleteMessage)
             }
-            .confirmationDialog("Cancellare DEFINITIVAMENTE tutte le bozze su Discogs? Gli annunci In vendita restano.",
-                                isPresented: $confirmDeleteAll, titleVisibility: .visible) {
-                Button("Cancella le bozze", role: .destructive) { Task { await deleteAll() } }
-            }
             .alert(message ?? "", isPresented: showingMessage) {}
             .onChange(of: editing?.id) { _, id in if id != nil { Suoni.apri() } }
             .finestraAscolto($ascolta, seller: seller)
@@ -195,26 +184,13 @@ struct WarehouseView: View {
                        let i = listings.firstIndex(where: { $0.id == after.id }) { listings[i] = after }
                 }
             }
-            .alert("Posizione per \(noPlaceCount) annunci senza posizione", isPresented: $askPlace) {
-                TextField("es. Scatola 1", text: $newPlace)
-                Button("Scrivi su Discogs") {
-                    let place = newPlace.trimmingCharacters(in: .whitespaces)
-                    guard !place.isEmpty else { return }
-                    Task { await fillPlace(place) }
+            .sheet(isPresented: $chiediPosizione) {
+                PosizioneScelti(quanti: selected.count) { posto in
+                    let ids = selected
+                    Task { await scriviPosizione(posto, ids: ids) }
                 }
-                Button("Annulla", role: .cancel) {}
-            } message: {
-                Text("Solo quelli senza posizione: gli altri restano come sono. Cambia solo la posizione, niente prezzi o condizioni.")
+                .presentationDetents([.medium])
             }
-    }
-
-    private func deleteAll() async {
-        loading = true
-        do {
-            let n = try await seller.deleteAllDrafts()
-            message = "Bozze cancellate: \(n)"
-        } catch { message = error.localizedDescription }
-        await sync()
     }
 
     private var totalValue: Double {
@@ -289,7 +265,7 @@ struct WarehouseView: View {
                     Task { try? await seller.draftToSale(listingID: l.id); await sync() }
                 }
             }
-            Button(draft ? "Elimina la bozza" : "Togli dalla vendita", systemImage: "trash", role: .destructive) { toDelete = [l.id] }
+            Button(draft ? "Elimina la bozza" : "Elimina", systemImage: "trash", role: .destructive) { toDelete = [l.id] }
         }
     }
 
@@ -325,12 +301,20 @@ struct WarehouseView: View {
                                  : "Eliminate \(done), non riuscite \(failed.count): \(failed.first ?? "")"
     }
 
-    private func fillPlace(_ place: String) async {
+    /// V79: la stessa posizione ai dischi scelti, scritta anche su Discogs (campo privato «location»).
+    private func scriviPosizione(_ posto: String, ids: Set<Int>) async {
         loading = true
-        let r = await seller.fillMissingLocation(listings, place: place, discs: discs)
-        await sync()
-        message = r.failed == 0 ? "Posizione \"\(place)\" scritta su \(r.done) annunci"
-                                : "Scritta su \(r.done) annunci, non riuscita su \(r.failed): riprova"
+        let scelti = listings.filter { ids.contains($0.id) }
+        let r = await seller.scriviPosizione(posto, annunci: scelti, discs: discs)
+        for l in scelti where r.fatti.contains(l.id) {
+            if let i = listings.firstIndex(where: { $0.id == l.id }) { listings[i].location = posto }
+        }
+        loading = false
+        selected = []
+        selecting = false
+        if r.falliti == 0 { Suoni.fatto() } else { Suoni.nego() }
+        message = r.falliti == 0 ? (r.fatti.count == 1 ? "Posizione «\(posto)» scritta su Discogs" : "Posizione «\(posto)» scritta su \(r.fatti.count) annunci")
+                                 : "Scritta su \(r.fatti.count) annunci, non riuscita su \(r.falliti): riprova"
     }
 
     private func sync() async {
@@ -400,8 +384,8 @@ struct ListingRow: View {
             cover
             VStack(alignment: .leading, spacing: 4) {
                 titleView
-                // Uguale per tutti, sempre una riga: Online · condizioni (vinile / copertina) · posizione.
-                HStack(spacing: 8) { tag; grades; placeText }
+                // Uguale per tutti, sempre una riga: condizioni (vinile / copertina) · posizione (V79: niente «Online»).
+                HStack(spacing: 8) { grades; placeText }
                     .lineLimit(1)
             }
             Spacer()
@@ -511,16 +495,6 @@ struct ListingRow: View {
         return c
     }
 
-    private var tag: some View {
-        let fg: Color = draft ? Theme.warn : Theme.money
-        let bg: Color = draft ? Theme.warnSoft : Theme.military
-        return Text(draft ? "Bozza" : "Online")
-            .font(.system(size: 11, weight: .semibold))
-            .padding(.horizontal, 7).padding(.vertical, 2)
-            .foregroundStyle(fg)
-            .background(bg, in: Capsule())
-            .fixedSize()
-    }
 }
 
 /// Posizione fisica del disco (scatola / numero), modificabile al volo.
@@ -528,5 +502,65 @@ struct BoxField: View {
     @Bindable var disc: Disc
     var body: some View {
         TextField("posto", text: $disc.box).font(.system(size: 12)).foregroundStyle(Theme.muted).frame(width: 90)
+    }
+}
+
+/// V79 · Inventario › Seleziona › Posizione: il contenitore (gli stessi di Foto) e il numero, per tutti i dischi scelti.
+struct PosizioneScelti: View {
+    let quanti: Int
+    let scrivi: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("placeKindsCustom") private var customRaw = ""
+    @State private var tipo = "Scatola"
+    @State private var numero = "1"
+
+    private var tipi: [String] {
+        SessionView.fixedKinds + customRaw.split(separator: "|").map(String.init).filter { !SessionView.fixedKinds.contains($0) }
+    }
+    private var posto: String {
+        let n = numero.trimmingCharacters(in: .whitespaces)
+        return n.isEmpty ? tipo : "\(tipo) \(n)"
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(quanti == 1 ? "La posizione del disco scelto, scritta anche su Discogs (la vedi solo tu)."
+                                 : "La stessa posizione ai \(quanti) dischi scelti, scritta anche su Discogs (la vedi solo tu).")
+                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(tipi, id: \.self) { k in
+                            Button { Suoni.tocco(); tipo = k } label: {
+                                Text(k).font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(tipo == k ? Color.black : Theme.text)
+                                    .padding(.horizontal, 14).frame(height: 34)
+                                    .background(tipo == k ? Theme.accent : Theme.panelHigh, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(tipo == k ? .isSelected : [])
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("NUMERO").font(Theme.mono(9, .bold)).tracking(1.5).foregroundStyle(Theme.muted)
+                    TextField("1", text: $numero).keyboardType(.numbersAndPunctuation).fieldStyle()
+                }
+                Button("Scrivi su Discogs (\(quanti))") { scrivi(posto); dismiss() }
+                    .buttonStyle(SignalButtonStyle())
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .sfondoHUD()
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("POSIZIONE").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Chiudi") { Suoni.testa(); dismiss() }.foregroundStyle(Theme.accent)
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }

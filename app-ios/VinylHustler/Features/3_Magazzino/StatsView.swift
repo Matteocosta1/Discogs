@@ -186,10 +186,10 @@ struct StatsView: View {
             HStack {
                 statConta(Double(old.count), "annunci") { String(Int($0.rounded())) }
                 statConta(value, "valore") { money($0) }
-                stat(forSale.isEmpty ? "—" : "\(Int((Double(old.count) / Double(forSale.count) * 100).rounded()))%", "del magazzino")
+                stat(forSale.isEmpty ? "—" : "\(Int((Double(old.count) / Double(forSale.count) * 100).rounded()))%", "dell’inventario")
             }
             if !old.isEmpty {
-                Text("Prova ad abbassare un po' il prezzo: tasto verde nel Magazzino.")
+                Text("Prova ad abbassare un po' il prezzo: tasto verde in Inventario.")
                     .font(.system(size: 12)).foregroundStyle(Theme.muted)
             }
         }

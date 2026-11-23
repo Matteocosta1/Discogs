@@ -2,6 +2,7 @@ import Combine
 import SwiftData
 import SwiftUI
 import UIKit
+import UserNotifications
 
 @main
 struct VinylHustlerApp: App {
@@ -11,6 +12,7 @@ struct VinylHustlerApp: App {
     init() {
         OrderWatcher.register()
         Theme.configureUIKit()
+        UNUserNotificationCenter.current().delegate = NotificheDelegate.shared     // V79: «Prezzo sceso» → Carrello
     }
 
     var body: some Scene {
@@ -28,7 +30,7 @@ struct VinylHustlerApp: App {
     }
 }
 
-/// Le 6 sezioni: Foto, Bozze, Magazzino, Ordini, Chat, Settings (V68: barra disegnata da noi, la barra di Apple su iPhone ne tiene 5).
+/// Le 7 sezioni: Foto, Bozze, Inventario, Ordini, Cerca, Chat, Settings (V68: barra disegnata da noi, la barra di Apple su iPhone ne tiene 5).
 struct RootView: View {
     @Environment(Seller.self) private var seller
     @Environment(\.modelContext) private var context
@@ -69,7 +71,7 @@ struct RootView: View {
         }
         .onChange(of: tab) { _, _ in Suoni.sezione() }      // V78: il suono delle icone in basso
         .onChange(of: seller.lastError) { _, e in if e != nil { Suoni.nego() } }
-        .onAppear { if !(0...5).contains(tab) { tab = 0 } }
+        .onAppear { if !(0...6).contains(tab) { tab = 0 } }
         .alert(seller.lastError ?? "", isPresented: Binding(get: { seller.lastError != nil },
                                                             set: { if !$0 { seller.lastError = nil } })) {}
     }
@@ -79,7 +81,7 @@ struct RootView: View {
         // (prima la barra stava sopra le pagine e su alcuni iPhone copriva il fondo di Foto, angoli della fotocamera compresi).
         VStack(spacing: 0) {
             ZStack {
-                ForEach(0..<6, id: \.self) { i in
+                ForEach(0..<7, id: \.self) { i in
                     if viste.contains(i) || tab == i {
                         sezione(i)
                             .opacity(tab == i ? 1 : 0)
@@ -91,7 +93,7 @@ struct RootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if !tastiera {
-                BarraSezioni(tab: $tab, avvio: avvio, badge: [1: toCheck.count, 4: ChatStore.shared.nonLetti])
+                BarraSezioni(tab: $tab, avvio: avvio, badge: [1: toCheck.count, 5: ChatStore.shared.nonLetti])
             }
         }
         .onChange(of: tab, initial: true) { _, t in viste.insert(t) }
@@ -106,26 +108,27 @@ struct RootView: View {
         case 1: DraftsTab()
         case 2: WarehouseView()
         case 3: OrdersView()
-        case 4: ChatView()
+        case 4: CercaView()                             // V79: cercare dischi su Discogs, ascoltarli, Carrello
+        case 5: ChatView()
         default: ConsoleView()
         }
     }
 }
 
-/// V68 — la barra delle sei sezioni, uguale a quella di Apple (nero, riga sottile in alto, icona e nome),
+/// V68 — la barra delle sezioni (V79: sette), uguale a quella di Apple (nero, riga sottile in alto, icona e nome),
 /// con l'entrata delle icone all'avvio (proposta 7: una dopo l'altra, ogni 150 ms).
 struct BarraSezioni: View {
     @Binding var tab: Int
     let avvio: Date?
     let badge: [Int: Int]
 
-    private static let nomi = ["Foto", "Bozze", "Magazzino", "Ordini", "Chat", "Settings"]
-    private static let simboli = ["camera.fill", "tray.full", "square.stack.3d.up", "shippingbox", "bubble.left.and.text.bubble.right", "gearshape"]
+    private static let nomi = ["Foto", "Bozze", "Inventario", "Ordini", "Cerca", "Chat", "Settings"]
+    private static let simboli = ["camera.fill", "tray.full", "square.stack.3d.up", "shippingbox", "magnifyingglass", "bubble.left.and.text.bubble.right", "gearshape"]
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 120, paused: avvio == nil)) { ctx in
             HStack(spacing: 0) {
-                ForEach(0..<6, id: \.self) { k in
+                ForEach(0..<7, id: \.self) { k in
                     Button { tab = k } label: { icona(k, t: avvio.map { ctx.date.timeIntervalSince($0) }) }
                         .buttonStyle(.plain)
                         .accessibilityLabel(Self.nomi[k])

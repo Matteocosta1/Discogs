@@ -157,6 +157,21 @@ final class DiscogsClient: @unchecked Sendable {
         return res.results
     }
 
+    /// V79 · Cerca: la ricerca nel catalogo Discogs per chi compra (formato, genere, stile, decennio, paese, ordine
+    /// «want» o «year» come sul sito). 50 risultati per pagina.
+    func cercaCatalogo(_ params: [String: String], pagina: Int = 1) async throws -> SearchPage {
+        var q = params
+        q["type"] = "release"
+        q["per_page"] = "50"
+        q["page"] = String(pagina)
+        return try await request("GET", "/database/search", query: q)
+    }
+
+    /// V79 · Wantlist: aggiunge o toglie un disco dalla Wantlist dell'account su Discogs.
+    func wantlist(_ username: String, releaseID: Int, aggiungi: Bool) async throws {
+        _ = try await raw(aggiungi ? "PUT" : "DELETE", "/users/\(username)/wants/\(releaseID)")
+    }
+
     func release(_ id: Int, currency: String? = nil) async throws -> Release {
         try await request("GET", "/releases/\(id)", query: currency.map { ["curr_abbr": $0] } ?? [:])
     }

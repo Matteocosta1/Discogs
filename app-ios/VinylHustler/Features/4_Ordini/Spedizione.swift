@@ -2,10 +2,9 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// V60 — SPEDIZIONE: si inquadra il codice a barre della ricevuta, il numero si scrive da solo,
-/// si sceglie il corriere, si vede il messaggio che riceverà l'acquirente e con «Spedisci e avvisa»
-/// l'ordine diventa «Shipped» su Discogs (stato e messaggio partono insieme).
-/// Usa la fotocamera: si chiude con la X nel cerchio (regola di JARVIS).
+/// V60 — SPEDIZIONE. V79 (come nel mock-up): solo le informazioni di spedizione: corriere, tracking con il suo link
+/// e il messaggio all'acquirente, che si scrive da solo e si può modificare. Con «Spedisci e avvisa» l'ordine
+/// diventa «Shipped» su Discogs (stato e messaggio partono insieme). Niente più fotocamera: si chiude con «Chiudi».
 struct SpedizioneSheet: View {
     let order: Order
     /// Chiamata solo quando Discogs ha accettato: l'ordine è davvero spedito.
@@ -15,15 +14,18 @@ struct SpedizioneSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var corriere: Corriere = .poste
     @State private var tracking = ""
-    @State private var letto = false
-    @State private var giro = 0                 // cambia per rileggere: la fotocamera riparte da capo
     @State private var invio = false
     @State private var errore: String?
-    @State private var aperta = Date()
+    /// Il messaggio: si scrive da solo finché non lo modifichi tu; dopo, corriere, tracking e link lo seguono comunque.
+    @State private var messaggio = ""
+    @State private var toccato = false
+    @State private var ultimoScritto = ""
+    @State private var prima: (corriere: String, codice: String, link: String)?
+    @FocusState private var scrivo: Bool
 
     private var codice: String { Corriere.pulisci(tracking) }
-    private var link: String { corriere.link(codice) }
-    private var testo: String {
+    private var link: String { codice.isEmpty ? "" : corriere.link(codice) }
+    private var base: String {
         "Ciao \(order.buyer.username), il tuo ordine è partito!\nCorriere: \(corriere.nome)\nTracking: \(codice.isEmpty ? "…" : codice)"
             + (codice.isEmpty ? "" : "\n\(link)") + "\nGrazie e buon ascolto!"
     }
@@ -34,21 +36,9 @@ struct SpedizioneSheet: View {
                 HStack {
                     Text("SPEDIZIONE").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
                     Spacer()
-                    Button { Suoni.testa(); dismiss() } label: {
-                        Image(systemName: "xmark").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.accent)
-                            .frame(width: 36, height: 36)
-                            .background(Color.black.opacity(0.45), in: Circle())
-                            .overlay(Circle().stroke(Theme.accent.opacity(0.5), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Chiudi")
+                    Button("Chiudi") { Suoni.testa(); dismiss() }
+                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
                 }
-
-                mirino
-
-                Text(letto ? "LETTO · \(corriere.nome.uppercased()) · \(codice)" : "INQUADRA IL CODICE A BARRE DELLA RICEVUTA")
-                    .font(Theme.mono(9.5, .bold)).tracking(1.2).foregroundStyle(Theme.glow)
-                    .lineLimit(2)
 
                 campo("CORRIERE") {
                     Picker("Corriere", selection: $corriere) {
@@ -63,23 +53,34 @@ struct SpedizioneSheet: View {
                 }
 
                 campo("TRACKING") {
-                    TextField("Si scrive da solo dalla foto", text: $tracking)
+                    TextField("Codice della ricevuta", text: $tracking)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                         .font(.system(size: 16))
                         .padding(.horizontal, 12)
                         .frame(height: 42)
                         .background(Theme.panelHigh, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    if !link.isEmpty, let url = URL(string: link) {
+                        Link(destination: url) {
+                            Text("↗ " + link.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "www.", with: ""))
+                                .font(Theme.mono(11)).foregroundStyle(Theme.glow)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .simultaneousGesture(TapGesture().onEnded { Suoni.tocco() })
+                    }
                 }
 
                 campo("MESSAGGIO ALL'ACQUIRENTE") {
-                    Text(testo)
-                        .font(.system(size: 13)).foregroundStyle(Color(red: 0.85, green: 0.96, blue: 0.85))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12).padding(.vertical, 10)
-                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    TextEditor(text: $messaggio)
+                        .focused($scrivo)
+                        .font(.system(size: 15))
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 150)
+                        .padding(.horizontal, 8).padding(.vertical, 6)
+                        .background(Color.black, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Theme.glow.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                            .stroke(Theme.glow.opacity(scrivo ? 0.8 : 0.35), style: StrokeStyle(lineWidth: 1, dash: scrivo ? [] : [4, 3])))
                 }
 
                 if let errore {
@@ -101,59 +102,45 @@ struct SpedizioneSheet: View {
             }
             .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 26)
         }
+        .scrollDismissesKeyboard(.interactively)
         .background(Color(red: 0.043, green: 0.059, blue: 0.047))
         .preferredColorScheme(.dark)
         .presentationDetents([.large])
         .interactiveDismissDisabled(invio)
-        .onAppear { aperta = Date(); Suoni.camera() }
-    }
-
-    /// Il mirino piccolo: la fotocamera, la riga verde che scende finché non legge, poi il riquadro acceso.
-    private var mirino: some View {
-        ZStack {
-            LettoreCodici(letto: { valore in
-                let c = Corriere.pulisci(valore)
-                guard !c.isEmpty else { return }
-                tracking = c
-                if let r = Corriere.riconosci(c) { corriere = r }
-                letto = true
-                Suoni.schedaPronta()
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-            })
-            .id(giro)
-
-            if letto {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Theme.glow, lineWidth: 2)
-                    .shadow(color: Theme.glow.opacity(0.5), radius: 7)
-                    .padding(.horizontal, 60).padding(.vertical, 16)
-            } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 120)) { ctx in
-                    let p = ctx.date.timeIntervalSince(aperta).truncatingRemainder(dividingBy: 0.9) / 0.9
-                    GeometryReader { g in
-                        Rectangle().fill(Theme.glow)
-                            .frame(width: g.size.width * 0.64, height: 2)
-                            .shadow(color: Theme.glow, radius: 5)
-                            .position(x: g.size.width / 2, y: 18 + p * (g.size.height - 36))
-                    }
-                }
-                .allowsHitTesting(false)
+        .onAppear { aggiorna() }
+        .onChange(of: tracking) { _, _ in aggiorna() }
+        .onChange(of: corriere) { _, _ in Suoni.tocco(); aggiorna() }
+        .onChange(of: messaggio) { _, nuovo in if nuovo != ultimoScritto { toccato = true } }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Fine") { scrivo = false; _ = UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+                    .foregroundStyle(Theme.accent)
             }
         }
-        .frame(height: 150)
-        .frame(maxWidth: .infinity)
-        .background(Color.black)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            // già letto: un tocco per rileggere un altro codice
-            guard letto else { return }
-            Suoni.tocco()
-            letto = false
-            aperta = Date()
-            giro += 1
+    }
+
+    /// Il messaggio segue corriere e tracking: tutto da capo finché non l'hai toccato; dopo, si cambiano solo
+    /// il corriere, il codice e il link dentro il tuo testo.
+    private func aggiorna() {
+        let ora = (corriere: corriere.nome, codice: codice, link: link)
+        var nuovo = messaggio
+        if !toccato || messaggio.isEmpty {
+            nuovo = base
+        } else if let p = prima {
+            if !p.link.isEmpty && !ora.link.isEmpty { nuovo = nuovo.replacingOccurrences(of: p.link, with: ora.link) }
+            else if !p.link.isEmpty { nuovo = nuovo.replacingOccurrences(of: "\n" + p.link, with: "").replacingOccurrences(of: p.link, with: "") }
+            else if !ora.link.isEmpty, let r = nuovo.range(of: "Tracking: " + (p.codice.isEmpty ? "…" : p.codice)) {
+                nuovo.insert(contentsOf: "\n" + ora.link, at: r.upperBound)
+            }
+            nuovo = nuovo.replacingOccurrences(of: "Corriere: " + p.corriere, with: "Corriere: " + ora.corriere)
+            nuovo = nuovo.replacingOccurrences(of: "Tracking: " + (p.codice.isEmpty ? "…" : p.codice), with: "Tracking: " + (ora.codice.isEmpty ? "…" : ora.codice))
         }
-        .accessibilityLabel(letto ? "Codice letto: tocca per rileggere" : "Fotocamera per il codice a barre")
+        prima = ora
+        if nuovo != messaggio {
+            ultimoScritto = nuovo
+            messaggio = nuovo
+        }
     }
 
     private func campo<C: View>(_ titolo: String, @ViewBuilder _ contenuto: () -> C) -> some View {
@@ -169,13 +156,13 @@ struct SpedizioneSheet: View {
         invio = true
         errore = nil
         Suoni.tocco()
-        let messaggio = testo
+        let testoFinale = messaggio.trimmingCharacters(in: .whitespacesAndNewlines)
         let id = order.id
         let client = seller.client
         Task { @MainActor in
             do {
                 // stato e messaggio insieme: l'acquirente riceve «Spedito» con il tracking
-                try await client.postOrderMessage(id, message: messaggio, status: "Shipped")
+                try await client.postOrderMessage(id, message: testoFinale, status: "Shipped")
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 invio = false
                 dismiss()

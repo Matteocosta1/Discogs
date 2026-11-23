@@ -9,7 +9,7 @@ struct AvvioIcone: View {
     let selezionata: Int
 
     static let durata = 2.4                       // secondi: poi RootView toglie questa vista
-    private static let nomi = ["Foto", "Bozze", "Magazzino", "Ordini", "Settings"]
+    private static let nomi = ["Foto", "Bozze", "Inventario", "Ordini", "Settings"]
     private static let simboli = ["camera.fill", "tray.full", "square.stack.3d.up", "shippingbox", "gearshape"]
 
     var body: some View {
@@ -52,7 +52,7 @@ struct AvvioIcone: View {
     /// Il suono «iconaavvio» (V78) e la vibrazione, uno per icona, al passo dell'animazione.
     @MainActor static func suona() async {
         let leggera = UIImpactFeedbackGenerator(style: .light)
-        for _ in 0..<6 {
+        for _ in 0..<7 {                                 // V79: sette icone
             try? await Task.sleep(for: .milliseconds(150))
             Suoni.icona()
             leggera.impactOccurred()
