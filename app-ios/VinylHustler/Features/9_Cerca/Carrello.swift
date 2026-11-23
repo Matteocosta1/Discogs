@@ -26,7 +26,7 @@ struct VoceCarrello: Codable, Identifiable, Hashable {
 @Observable
 final class Carrello {
     static let shared = Carrello()
-    static let chiave = "carrelloV79"
+    nonisolated static let chiave = "carrelloV79"
     private(set) var voci: [VoceCarrello] = Carrello.leggi()
     private(set) var aggiornato: Date?
 

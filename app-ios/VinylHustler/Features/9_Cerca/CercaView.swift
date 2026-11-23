@@ -234,7 +234,7 @@ struct CercaView: View {
             .fullScreenCover(isPresented: $scansiona) {
                 ScansionaView { v in scansiona = false; Task { try? await Task.sleep(for: .milliseconds(350)); scheda = v } }.environment(seller)
             }
-            .fullScreenCover(isPresented: $scava) { ScavaView(voci: mostrate) { v in scheda = v }.environment(seller) }
+            .fullScreenCover(isPresented: $scava) { ScavaView(voci: mostrate).environment(seller) }
             .fullScreenCover(item: $filtriDa) { p in
                 FinestraFiltri(filtri: $filtri, testo: testo, origine: p.punto) {
                     var t = Transaction(); t.disablesAnimations = true
