@@ -50,10 +50,26 @@ struct DraftsView: View {
         Group {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    Text(stampando ? "ACQUISIZIONE DATI" : "BOZZE · \(local.count + shownDrafts.count)")
-                        .font(Theme.mono(10, .bold)).tracking(2)
-                        .foregroundStyle(Theme.glow)
-                        .padding(.horizontal, 4)
+                    // V83: Pubblica piccolo, a destra di BOZZE · N (prima era un tasto grande in basso)
+                    HStack {
+                        Text(stampando ? "ACQUISIZIONE DATI" : "BOZZE · \(local.count + shownDrafts.count)")
+                            .font(Theme.mono(10, .bold)).tracking(2)
+                            .foregroundStyle(Theme.glow)
+                        Spacer(minLength: 8)
+                        if publishCount > 0 && !publishing {
+                            Button { askPublish = true } label: {
+                                Text("Pubblica \(publishCount)")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Color.black)
+                                    .padding(.horizontal, 14)
+                                    .frame(height: 30)
+                                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                                    .shadow(color: Theme.accent.opacity(0.25), radius: 8)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 4)
                     ForEach(Array(local.enumerated()), id: \.element.id) { coppia in
                         DiscCard(disc: coppia.element)
                             .stampa(stampaT, ritardo: ritardoStampa(coppia.offset), durata: 0.45)
@@ -91,30 +107,10 @@ struct DraftsView: View {
             .overlay { if loading && drafts.isEmpty { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
             .refreshable { await Task { await loadDrafts() }.value }
             .task(id: visibile) { guard visibile else { return }; await Task { await loadDrafts() }.value }
+            // V83: in basso resta solo la barra mentre pubblica (il tasto Pubblica è in alto, accanto a BOZZE · N)
             .safeAreaInset(edge: .bottom) {
                 if publishing && total > 0 {
                     barraSvuota
-                } else if publishCount > 0 {
-                    Button { askPublish = true } label: {
-                        Text(publishing ? "Pubblico…" : "Pubblica \(publishCount)")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(maxWidth: .infinity, minHeight: 22)
-                            .background(alignment: .leading) {
-                                // la barra si riempie man mano che pubblica
-                                GeometryReader { g in
-                                    Color.black.opacity(0.18)
-                                        .frame(width: total == 0 ? 0 : g.size.width * CGFloat(done) / CGFloat(total))
-                                        .animation(.easeOut(duration: 0.3), value: done)
-                                }
-                            }
-                    }
-                    .buttonStyle(SignalButtonStyle())
-                    .controlSize(.small)                       // V51: più piccolo, in proporzione al resto
-                    .frame(width: 210)
-                    .shadow(color: Theme.accent.opacity(0.25), radius: 8)
-                    .disabled(publishing)
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 8)
                 }
             }
             .confirmationDialog(publishCount == 1 ? "Mettere in vendita 1 disco su Discogs?" : "Mettere in vendita \(publishCount) dischi su Discogs?",
