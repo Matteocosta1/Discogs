@@ -142,8 +142,9 @@ struct WarehouseView: View {
             Menu {
                 // V79: Verifica = tira giù la lista; Posizione = Seleziona › Posizione; Cancella tutte le bozze = in Bozze
                 Link("Apri l'inventario su Discogs", destination: URL(string: "https://www.discogs.com/sell/manage")!)
+                    // V81: il click quando il menu si apre (un gesto sul menu della barra in alto non arriva mai)
+                    .onAppear { Suoni.testa() }
             } label: { Image(systemName: "ellipsis.circle") }
-            .simultaneousGesture(TapGesture().onEnded { Suoni.testa() })
         }
     }
 
@@ -454,9 +455,7 @@ struct ListingRow: View {
                 }
             }
         }
-        .frame(width: 52, height: 52)
-        .clipShape(Circle())
-        .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
+        .copertina(52)                              // V81: quadrata come in Cerca, senza contorno
     }
 
     /// La posizione: quella scritta su Discogs, altrimenti quella dell'app.

@@ -223,7 +223,7 @@ struct LettoreGrande: View {
         }
     }
 
-    /// «DISCHI · 3» e le copertine tonde: quella che suona ha l'anello verde acceso.
+    /// «DISCHI · 3» e le copertine (V81: quadrate come in Cerca): quella che suona è accesa e illuminata.
     private var filaDischi: some View {
         HStack(spacing: 10) {
             Text("DISCHI · \(dischi.count)")
@@ -235,9 +235,7 @@ struct LettoreGrande: View {
                         let on = d.id == attivo
                         Button { scegli(d.id) } label: {
                             AsyncImage(url: d.copertina) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                                .frame(width: 40, height: 40)
-                                .clipShape(Circle())
-                                .overlay(Circle().stroke(on ? Theme.glow : Theme.glow.opacity(0.25), lineWidth: 1.5))
+                                .copertina(40)          // V81: quadrata come in Cerca; quella che suona è accesa e illuminata
                                 .shadow(color: Theme.glow.opacity(on ? 0.6 : 0), radius: 6)
                                 .opacity(on ? 1 : 0.6)
                         }

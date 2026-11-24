@@ -168,7 +168,7 @@ struct OrdersView: View {
         let style = OrderStyle(step(o) >= 3 && !OrderStyle.closed(o.status) ? "Shipped" : o.status)
         return HStack(spacing: 12) {
             AsyncImage(url: o.items.first?.release.thumbnail.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                .frame(width: 36, height: 36).clipShape(Circle()).opacity(0.8)
+                .copertina(36).opacity(0.8)
             VStack(alignment: .leading, spacing: 2) {
                 Text(o.items.first?.release.description ?? "Ordine \(o.id)")
                     .font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(white: 0.78)).lineLimit(1)
@@ -481,8 +481,7 @@ struct OpenOrderCard: View {
             Button(action: onOpen) {
                 HStack(spacing: 12) {
                     AsyncImage(url: order.items.first?.release.thumbnail.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                        .frame(width: 52, height: 52).clipShape(Circle())
-                        .overlay(Circle().stroke(Theme.accent, lineWidth: 1.5))
+                        .copertina(52)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(stato.etichetta).font(Theme.mono(9, .bold)).tracking(1.2)
                             .padding(.horizontal, 7).padding(.vertical, 2)
@@ -701,7 +700,7 @@ private struct OrderDetail: View {
                     ForEach(order.items, id: \.id) { item in
                         HStack(spacing: 12) {
                             AsyncImage(url: item.release.thumbnail.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                                .frame(width: 44, height: 44).clipShape(Circle())
+                                .copertina(44)
                             Text(item.release.description ?? "Release \(item.release.id)").font(.system(size: 15))
                             Spacer()
                             if let p = item.price {

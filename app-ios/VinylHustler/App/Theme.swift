@@ -197,6 +197,13 @@ struct FieldStyle: ViewModifier {
 }
 
 extension View {
+    /// V81: la copertina quadrata con gli angoli appena arrotondati, come in Cerca (56 punti → raggio 6),
+    /// senza contorno. Si usa in tutte le liste; resta tondo solo il disco che gira nel lettore.
+    func copertina(_ lato: CGFloat) -> some View {
+        self.frame(width: lato, height: lato)
+            .clipShape(RoundedRectangle(cornerRadius: max(3, (lato * 6 / 56).rounded()), style: .continuous))
+    }
+
     /// Scheda grigia arrotondata, come le liste di Discosizer.
     func panel(padding: CGFloat = 14) -> some View {
         self.padding(padding)

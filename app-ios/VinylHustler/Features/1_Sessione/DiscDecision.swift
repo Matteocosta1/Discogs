@@ -122,9 +122,7 @@ struct DiscRow: View {
         }
         .frame(width: compact ? 52 : 72, height: compact ? 52 : 72)
         .overlay { if disc.status == .inLavorazione { ScanSweep() } }
-        .clipShape(Circle())
-        .overlay(Circle().stroke(Theme.accent.opacity(0.8), lineWidth: 1.5))
-        .overlay { if disc.status == .daConfermare { NeonRing().padding(-6) } }   // riconosciuto: anello neon che gira
+        .copertina(compact ? 52 : 72)              // V81: quadrata come in Cerca, senza contorno né anello
     }
 }
 
@@ -535,23 +533,6 @@ struct ChargeSweep: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .allowsHitTesting(false)
         .onAppear { withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: false)) { x = 1.1 } }
-    }
-}
-
-/// L'anello neon che gira attorno alla copertina del disco riconosciuto, come un vinile sul piatto.
-struct NeonRing: View {
-    @State private var giro = false
-
-    var body: some View {
-        Circle()
-            .stroke(AngularGradient(colors: [Theme.glow, Theme.glow.opacity(0), Theme.glow.opacity(0), Theme.glow],
-                                    center: .center),
-                    style: StrokeStyle(lineWidth: 3, lineCap: .round))
-            .shadow(color: Theme.glow.opacity(0.8), radius: 5)
-            .rotationEffect(.degrees(giro ? 360 : 0))
-            .animation(.linear(duration: 1.6).repeatForever(autoreverses: false), value: giro)
-            .onAppear { giro = true }
-            .allowsHitTesting(false)
     }
 }
 

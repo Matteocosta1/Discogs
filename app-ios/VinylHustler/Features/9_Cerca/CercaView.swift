@@ -379,6 +379,8 @@ struct PuntoFiltri: Identifiable {
 
 /// Una riga: copertina, artista – titolo, anno · formato · etichetta, «da X € · N in vendita», ▶ e +.
 struct RigaCerca: View {
+    static func numero(_ n: Int) -> String { n.formatted(.number.locale(Locale(identifier: "it_IT"))) }
+
     let voce: VoceCerca
     let prezzo: PrezzoCerca?
     let nelCarrello: Bool
@@ -386,6 +388,7 @@ struct RigaCerca: View {
     let carrello: () -> Void
 
     var body: some View {
+      VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 12) {
             AsyncImage(url: voce.miniatura) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
                 .frame(width: 56, height: 56)
@@ -426,6 +429,13 @@ struct RigaCerca: View {
             }
             .fixedSize()
         }
+        // V81: chi ce l'ha e chi lo cerca su Discogs (community have / want), sotto, per tutta la larghezza
+        (Text("Have ") + Text(RigaCerca.numero(voce.have)).foregroundColor(Theme.text).fontWeight(.semibold)
+            + Text(" · Want ") + Text(RigaCerca.numero(voce.want)).foregroundColor(Theme.text).fontWeight(.semibold))
+            .font(.system(size: 12)).monospacedDigit()
+            .foregroundStyle(Theme.muted).lineLimit(1)
+            .padding(.leading, 68)                      // allineata ai testi: copertina 56 + spazio 12
+      }
         .padding(10)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .contentShape(Rectangle())

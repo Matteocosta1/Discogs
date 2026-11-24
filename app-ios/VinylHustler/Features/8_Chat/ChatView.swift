@@ -426,8 +426,7 @@ struct CartaDisco: View {
                 .font(Theme.mono(9, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
             HStack(spacing: 10) {
                 AsyncImage(url: (dati?.copertina ?? d.copertina).flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                    .frame(width: 48, height: 48).clipShape(Circle())
-                    .overlay(Circle().stroke(Theme.glow.opacity(0.5), lineWidth: 1))
+                    .copertina(48)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(d.titolo).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                     Text("\(d.cond) · \(d.posto)").font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
@@ -566,7 +565,7 @@ struct SceltaDisco: View {
         Button { Suoni.tocco(); scelto = d } label: {
             HStack(spacing: 12) {
                 AsyncImage(url: d.coverURL) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                    .frame(width: 40, height: 40).clipShape(Circle())
+                    .copertina(40)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(d.releaseTitle).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                     Text("\(d.gradeText) · \(d.box)").font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)

@@ -123,6 +123,7 @@ struct SessionView: View {
                         HStack(spacing: 6) {
                             ForEach(kinds, id: \.self) { kind in kindChip(kind) }
                             Button {
+                                Suoni.tocco()                  // V81: lo stesso tick di Condizione
                                 newKind = ""
                                 addingKind = true
                             } label: {
@@ -234,7 +235,7 @@ struct SessionView: View {
 
     /// Il tipo di contenitore come pastiglia: verde se scelto. Tenendolo premuto si toglie.
     private func kindChip(_ kind: String) -> some View {
-        Button { placeKind = kind } label: {
+        Button { Suoni.tocco(); placeKind = kind } label: {   // V81: il tick
             Text(kind).font(.system(size: 14, weight: .semibold))
                 .padding(.horizontal, 12).padding(.vertical, 6)
                 .foregroundStyle(kind == placeKind ? Color.black : Theme.text)

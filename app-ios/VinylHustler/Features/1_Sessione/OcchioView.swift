@@ -1278,9 +1278,7 @@ struct DoneCard: View {
     var body: some View {
         HStack(spacing: 8) {
             AsyncImage(url: disc.coverURL) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                .frame(width: 30, height: 30)
-                .clipShape(Circle())
-                .overlay(Circle().stroke(Theme.money, lineWidth: 1.5))
+                .copertina(30)                          // V81: quadrata come in Cerca
                 .overlay(alignment: .bottomTrailing) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 12))

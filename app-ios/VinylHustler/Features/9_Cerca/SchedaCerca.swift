@@ -139,8 +139,9 @@ struct SchedaCerca: View {
         return HStack(spacing: 6) {
             numero("DA", p?.da.map { soldiIT($0, p?.valuta ?? seller.currency) } ?? (p == nil ? "…" : "—"), Theme.money)
             numero("IN VENDITA", p.map { "\($0.inVendita)" } ?? "…", Theme.text)
-            numero("CERCATO", (release?.community?.want ?? voce.want).formatted(.number.locale(Locale(identifier: "it_IT"))), Theme.text)
-            numero("CE L'HANNO", (release?.community?.have ?? voce.have).formatted(.number.locale(Locale(identifier: "it_IT"))), Theme.text)
+            // V81: i termini di Discogs, nello stesso ordine della pagina del disco: Have, poi Want
+            numero("HAVE", (release?.community?.have ?? voce.have).formatted(.number.locale(Locale(identifier: "it_IT"))), Theme.text)
+            numero("WANT", (release?.community?.want ?? voce.want).formatted(.number.locale(Locale(identifier: "it_IT"))), Theme.text)
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))

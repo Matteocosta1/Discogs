@@ -137,8 +137,9 @@ struct DraftsView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("Cancella tutte le bozze", systemImage: "trash", role: .destructive) { chiediCancella = true }
+                            // V81: il click quando il menu si apre (un gesto sul menu della barra in alto non arriva mai)
+                            .onAppear { Suoni.testa() }
                     } label: { Image(systemName: "ellipsis.circle") }
-                    .simultaneousGesture(TapGesture().onEnded { Suoni.testa() })
                     .accessibilityLabel("Altro")
                 }
             }
@@ -279,8 +280,8 @@ struct DraftsView: View {
     }
 }
 
-/// Una bozza: "dorme" (copertina spenta, lucina rossa ferma).
-/// Toccando Vendi si accende: bordo verde, copertina a colori, un riflesso di luce e le scintille.
+/// Una bozza (V81: copertina a colori e quadrata come in Cerca, niente lucina rossa).
+/// Toccando Vendi si accende: alone verde, un riflesso di luce e le scintille.
 /// Titolo = apre su Discogs; tasto verde tondo = scheda annuncio; cestino = elimina.
 struct DraftRow: View {
     let listing: Listing
@@ -298,11 +299,7 @@ struct DraftRow: View {
     var body: some View {
         HStack(spacing: 12) {
             AsyncImage(url: listing.release.thumbnail.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                .frame(width: 50, height: 50)
-                .clipShape(Circle())
-                .saturation(lit ? 1 : 0.15)
-                .brightness(lit ? 0 : -0.15)
-                .overlay(Circle().stroke(lit ? Theme.glow : Color.clear, lineWidth: 2))
+                .copertina(50)                          // V81: a colori, quadrata come in Cerca, senza contorno
                 .shadow(color: Theme.glow.opacity(lit ? 0.7 : 0), radius: 8)
             // V79: niente più «Bozza»/«Online»: in alto titolo e prezzo, sotto prima la condizione e poi
             // cestino, scheda, ▶ e Vendi (così su iPhone da 375 punti la condizione si legge intera)
@@ -322,11 +319,6 @@ struct DraftRow: View {
                     Text([ListingRow.short(listing.condition), ListingRow.short(listing.sleeveCondition)].filter { !$0.isEmpty }.joined(separator: " / "))
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.glow)
                         .lineLimit(1).minimumScaleFactor(0.85)
-                    if !lit {
-                        // V52: lucina ferma (quella che lampeggiava faceva ondeggiare le righe)
-                        Circle().fill(Theme.warn).frame(width: 6, height: 6)
-                            .shadow(color: Theme.warn, radius: 3)
-                    }
                     Spacer(minLength: 4)
                     HStack(spacing: 6) {
                         Button(action: onDelete) {
