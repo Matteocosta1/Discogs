@@ -18,8 +18,23 @@ struct VoceCarrello: Codable, Identifiable, Hashable {
     var avviso: Double?
     /// L'ultimo prezzo già avvisato (per non avvisare due volte lo stesso prezzo).
     var avvisato: Double?
+    // V83: una copia precisa scelta in COPIE (l'annuncio Discogs). Senza: il disco, al prezzo più basso.
+    var copia: Int?
+    var prezzo: Double?
+    var media: String?
+    var sleeve: String?
+    var venditore: String?
+    var paese: String?
+    var venduta: Bool?
 
-    var linkCompra: URL? { URL(string: "https://www.discogs.com/sell/release/\(id)?ev=rb") }
+    /// Una riga del carrello: la copia o il disco (lo stesso disco può esserci in tutti e due i modi).
+    var chiave: String { copia.map { "c\($0)" } ?? "r\(id)" }
+    var linkCompra: URL? {
+        if let copia { return URL(string: "https://www.discogs.com/sell/item/\(copia)") }
+        return URL(string: "https://www.discogs.com/sell/release/\(id)?ev=rb")
+    }
+    /// Il prezzo che conta nel totale: quello esatto della copia, o il più basso del disco.
+    var conto: Double? { copia != nil ? prezzo : da }
 }
 
 @MainActor
@@ -39,7 +54,26 @@ final class Carrello {
     }
     private func salva() { Self.scrivi(voci) }
 
-    func contiene(_ id: Int) -> Bool { voci.contains { $0.id == id } }
+    func contiene(_ id: Int) -> Bool { voci.contains { $0.id == id && $0.copia == nil } }
+    func contieneCopia(_ copia: Int) -> Bool { voci.contains { $0.copia == copia } }
+
+    /// V83: la copia scelta in COPIE, con prezzo, condizioni, venditore e paese.
+    func mettiCopia(_ c: CopiaInVendita, valuta: String) {
+        guard !contieneCopia(c.id) else { return }
+        let nome = (c.release.description ?? "").replacingOccurrences(of: #"\s*\([^()]*\)\s*$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: " - ", with: " – ")
+        var v = VoceCarrello(id: c.release.id, nome: nome, annoPaese: "", miniatura: c.release.thumbnail, da: nil, inVendita: 0,
+                             valuta: c.price?.currency ?? valuta, avviso: nil, avvisato: nil)
+        v.copia = c.id
+        v.prezzo = c.price?.value
+        v.media = c.condition
+        v.sleeve = c.sleeveCondition
+        v.venditore = [c.seller?.username, c.voto].compactMap { $0 }.joined(separator: " · ")
+        v.paese = c.shipsFrom
+        voci.insert(v, at: 0)
+        salva()
+    }
+    func togliCopia(_ copia: Int) { voci.removeAll { $0.copia == copia }; salva() }
 
     func metti(_ v: VoceCerca, prezzo: PrezzoCerca?, valuta: String) {
         guard !contiene(v.id) else { return }
@@ -49,20 +83,28 @@ final class Carrello {
         salva()
     }
 
-    func togli(_ id: Int) { voci.removeAll { $0.id == id }; salva() }
+    func togli(_ id: Int) { voci.removeAll { $0.id == id && $0.copia == nil }; salva() }
 
     func avviso(_ id: Int, _ valore: Double?) {
-        guard let i = voci.firstIndex(where: { $0.id == id }) else { return }
+        guard let i = voci.firstIndex(where: { $0.id == id && $0.copia == nil }) else { return }
         voci[i].avviso = valore
         voci[i].avvisato = nil
         salva()
     }
 
-    /// Rilegge i prezzi di tutti i dischi (una richiesta al secondo).
+    /// Rilegge i prezzi di tutti i dischi; per le copie controlla se sono ancora in vendita (dopo tutto il resto).
     func aggiorna(client: DiscogsClient, valuta: String) async {
         for v in voci {
+            if let copia = v.copia {
+                let c = try? await client.copia(copia, currency: v.valuta, bassa: true)
+                if let i = voci.firstIndex(where: { $0.copia == copia }) {
+                    voci[i].venduta = !(c?.inVendita ?? false)
+                    if let p = c?.price?.value { voci[i].prezzo = p }
+                }
+                continue
+            }
             guard let p = await PrezziCerca.shared.rileggi(v.id, client: client, valuta: valuta),
-                  let i = voci.firstIndex(where: { $0.id == v.id }) else { continue }
+                  let i = voci.firstIndex(where: { $0.id == v.id && $0.copia == nil }) else { continue }
             voci[i].da = p.da
             voci[i].inVendita = p.inVendita
             voci[i].valuta = p.valuta
@@ -71,7 +113,9 @@ final class Carrello {
         salva()
     }
 
-    var totale: Double { voci.compactMap(\.da).reduce(0, +) }
+    var totale: Double { voci.filter { $0.venduta != true }.compactMap(\.conto).reduce(0, +) }
+    /// Tutte copie precise: il totale è esatto (senza «da»).
+    var soloCopie: Bool { !voci.isEmpty && voci.allSatisfy { $0.copia != nil } }
 }
 
 /// L'Avviso prezzo in sottofondo (insieme al controllo degli ordini): se il prezzo più basso di un disco del
@@ -81,7 +125,7 @@ enum AvvisiPrezzo {
         var voci = Carrello.leggi()
         var cambiato = false
         for i in voci.indices {
-            guard let soglia = voci[i].avviso, !Task.isCancelled else { continue }
+            guard voci[i].copia == nil, let soglia = voci[i].avviso, !Task.isCancelled else { continue }
             guard let s = try? await client.stats(voci[i].id, currency: voci[i].valuta, bassa: true), let da = s.lowestPrice?.value else { continue }
             voci[i].da = da
             voci[i].inVendita = s.numForSale ?? voci[i].inVendita
@@ -116,7 +160,7 @@ struct CarrelloView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(carrello.voci.count == 1 ? "1 DISCO" : "\(carrello.voci.count) DISCHI")
                                 .font(Theme.mono(9, .bold)).tracking(1.3).foregroundStyle(Theme.muted)
-                            Text("da " + soldiIT(carrello.totale, seller.currency))
+                            Text((carrello.soloCopie ? "" : "da ") + soldiIT(carrello.totale, seller.currency))
                                 .font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.money)
                                 .lineLimit(1).minimumScaleFactor(0.7)
                             Text("+ le spedizioni dei venditori").font(.system(size: 12)).foregroundStyle(Theme.muted)
@@ -136,7 +180,7 @@ struct CarrelloView: View {
                             .font(.system(size: 14)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity).padding(.vertical, 30)
                     }
-                    ForEach(carrello.voci) { v in RigaCarrello(voce: v, apriScheda: apriScheda) }
+                    ForEach(carrello.voci, id: \.chiave) { v in RigaCarrello(voce: v, apriScheda: apriScheda) }
                     Text("Si compra su Discogs: ogni venditore spedisce il suo ordine. L'avviso arriva quando il prezzo più basso scende sotto la cifra che scrivi.")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
                 }
@@ -187,12 +231,25 @@ private struct RigaCarrello: View {
                 .buttonStyle(.plain)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(voce.nome).font(.system(size: 14, weight: .semibold)).lineLimit(1)
-                    (Text(voce.da.map { "da " + soldiIT($0, voce.valuta) } ?? "nessuno in vendita").foregroundColor(Theme.money).fontWeight(.bold)
-                        + Text(" · \(voce.inVendita) in vendita" + (voce.annoPaese.isEmpty ? "" : " · \(voce.annoPaese)")))
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
+                    if voce.copia != nil {
+                        // V83: la copia scelta: prezzo esatto · condizioni (disco / copertina) · venditore · paese
+                        (Text(voce.prezzo.map { soldiIT($0, voce.valuta) } ?? "—").foregroundColor(Theme.money).fontWeight(.bold)
+                            + Text(" · \(Self.sigla(voce.media)) / \(Self.sigla(voce.sleeve))"))
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
+                        Text(voce.venduta == true ? "Non più in vendita su Discogs"
+                             : [voce.venditore, voce.paese].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.system(size: 12)).foregroundStyle(voce.venduta == true ? Theme.warn : Theme.muted).lineLimit(1)
+                    } else {
+                        (Text(voce.da.map { "da " + soldiIT($0, voce.valuta) } ?? "nessuno in vendita").foregroundColor(Theme.money).fontWeight(.bold)
+                            + Text(" · \(voce.inVendita) in vendita" + (voce.annoPaese.isEmpty ? "" : " · \(voce.annoPaese)")))
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 4)
-                Button { Suoni.svuota(); carrello.togli(voce.id) } label: {
+                Button {
+                    Suoni.svuota()
+                    if let c = voce.copia { carrello.togliCopia(c) } else { carrello.togli(voce.id) }
+                } label: {
                     Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Color(white: 0.78))
                         .frame(width: 30, height: 30).background(Color(white: 0.23), in: Circle())
                 }
@@ -200,6 +257,7 @@ private struct RigaCarrello: View {
                 .accessibilityLabel("Togli dal carrello")
             }
             HStack(spacing: 8) {
+              if voce.copia == nil {                       // l'Avviso prezzo vale per il disco, non per una copia
                 HStack(spacing: 6) {
                     Image(systemName: "bell").font(.system(size: 13))
                     Text("Avviso sotto")
@@ -216,6 +274,9 @@ private struct RigaCarrello: View {
                 .foregroundStyle(voce.avviso == nil ? Theme.muted : Theme.glow)
                 .padding(.horizontal, 10).frame(height: 36)
                 .background(Theme.panelHigh, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+              } else {
+                Spacer()
+              }
                 if let url = voce.linkCompra {
                     Link(destination: url) {
                         Text("Compra").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent)
@@ -236,6 +297,12 @@ private struct RigaCarrello: View {
             if valore != voce.avviso { carrello.avviso(voce.id, valore); if valore != nil { Suoni.tocco() } }
             soglia = valore.map { WarehouseView.italian($0).replacingOccurrences(of: ",00", with: "") } ?? ""
         }
+    }
+
+    /// «Near Mint (NM or M-)» → «NM or M-», «Very Good Plus (VG+)» → «VG+».
+    static func sigla(_ g: String?) -> String {
+        guard let g, let a = g.lastIndex(of: "("), let b = g.lastIndex(of: ")"), a < b else { return g ?? "—" }
+        return String(g[g.index(after: a)..<b])
     }
 
     /// Per aprire la scheda: i dati che ha il carrello (la scheda rilegge il resto da Discogs).

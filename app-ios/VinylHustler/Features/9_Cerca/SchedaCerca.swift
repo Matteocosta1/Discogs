@@ -36,6 +36,7 @@ struct SchedaCerca: View {
     @State private var inWantlist = false
     @State private var lavoro = false
     @State private var ascolta: BersaglioAscolto?
+    @State private var copie = false                // V83: COPIE · N, la pagina di Discogs con tutte le copie in vendita
     private let carrello = Carrello.shared
     private let prezzi = PrezziCerca.shared
 
@@ -130,6 +131,9 @@ struct SchedaCerca: View {
             }
             .task(id: id) { await carica() }
             .finestraAscolto($ascolta, seller: seller)
+            .sheet(isPresented: $copie) {
+                CopieView(releaseID: id, quante: prezzi.prezzo(id)?.inVendita, nome: nome)
+            }
         }
         .preferredColorScheme(.dark)
     }
@@ -137,13 +141,14 @@ struct SchedaCerca: View {
     private var numeri: some View {
         let p = prezzi.prezzo(id)
         return HStack(spacing: 6) {
-            // V83: le voci di Discogs («from», «For Sale»); FOR SALE si tocca e apre tutte le copie in vendita su Discogs
+            // V83: le voci di Discogs («from», «For Sale»); FOR SALE apre COPIE: tutte le copie in vendita, dentro l'app
             numero("FROM", p?.da.map { soldiIT($0, p?.valuta ?? seller.currency) } ?? (p == nil ? "…" : "—"), Theme.money)
-            if let url = URL(string: "https://www.discogs.com/sell/release/\(id)?ev=rb") {
-                Link(destination: url) { numero("FOR SALE ↗", p.map { "\($0.inVendita)" } ?? "…", Theme.text, titoloAcceso: true) }
-                    .simultaneousGesture(TapGesture().onEnded { Suoni.tocco() })
-                    .accessibilityHint("Apre su Discogs tutte le copie in vendita")
+            Button { Suoni.tocco(); copie = true } label: {
+                numero("FOR SALE ↗", p.map { "\($0.inVendita)" } ?? "…", Theme.text, titoloAcceso: true)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityHint("Apre tutte le copie in vendita")
             // V81: i termini di Discogs, nello stesso ordine della pagina del disco: Have, poi Want
             numero("HAVE", (release?.community?.have ?? voce.have).formatted(.number.locale(Locale(identifier: "it_IT"))), Theme.text)
             numero("WANT", (release?.community?.want ?? voce.want).formatted(.number.locale(Locale(identifier: "it_IT"))), Theme.text)
