@@ -137,8 +137,13 @@ struct SchedaCerca: View {
     private var numeri: some View {
         let p = prezzi.prezzo(id)
         return HStack(spacing: 6) {
-            numero("DA", p?.da.map { soldiIT($0, p?.valuta ?? seller.currency) } ?? (p == nil ? "…" : "—"), Theme.money)
-            numero("IN VENDITA", p.map { "\($0.inVendita)" } ?? "…", Theme.text)
+            // V83: le voci di Discogs («from», «For Sale»); FOR SALE si tocca e apre tutte le copie in vendita su Discogs
+            numero("FROM", p?.da.map { soldiIT($0, p?.valuta ?? seller.currency) } ?? (p == nil ? "…" : "—"), Theme.money)
+            if let url = URL(string: "https://www.discogs.com/sell/release/\(id)?ev=rb") {
+                Link(destination: url) { numero("FOR SALE ↗", p.map { "\($0.inVendita)" } ?? "…", Theme.text, titoloAcceso: true) }
+                    .simultaneousGesture(TapGesture().onEnded { Suoni.tocco() })
+                    .accessibilityHint("Apre su Discogs tutte le copie in vendita")
+            }
             // V81: i termini di Discogs, nello stesso ordine della pagina del disco: Have, poi Want
             numero("HAVE", (release?.community?.have ?? voce.have).formatted(.number.locale(Locale(identifier: "it_IT"))), Theme.text)
             numero("WANT", (release?.community?.want ?? voce.want).formatted(.number.locale(Locale(identifier: "it_IT"))), Theme.text)
@@ -147,9 +152,10 @@ struct SchedaCerca: View {
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private func numero(_ titolo: String, _ valore: String, _ colore: Color) -> some View {
+    private func numero(_ titolo: String, _ valore: String, _ colore: Color, titoloAcceso: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(titolo).font(Theme.mono(8.5, .bold)).tracking(1.1).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.8)
+            Text(titolo).font(Theme.mono(8.5, .bold)).tracking(1.1).foregroundStyle(titoloAcceso ? Theme.accent : Theme.muted)
+                .lineLimit(1).minimumScaleFactor(0.8)
             Text(valore).font(.system(size: 15, weight: .bold)).foregroundStyle(colore).lineLimit(1).minimumScaleFactor(0.7)
                 .monospacedDigit()
         }
