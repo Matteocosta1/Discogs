@@ -58,13 +58,14 @@ struct DraftsView: View {
                         Spacer(minLength: 8)
                         if publishCount > 0 && !publishing {
                             Button { askPublish = true } label: {
+                                // come il tasto Filtri di Cerca: dentro nero, bordo e scritta verdi
                                 Text("Pubblica \(publishCount)")
                                     .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Color.black)
+                                    .foregroundStyle(Theme.accent)
                                     .padding(.horizontal, 14)
                                     .frame(height: 30)
-                                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                                    .shadow(color: Theme.accent.opacity(0.25), radius: 8)
+                                    .overlay(Capsule().stroke(Theme.accent.opacity(0.4), lineWidth: 1))
+                                    .contentShape(Capsule())
                             }
                             .buttonStyle(.plain)
                         }

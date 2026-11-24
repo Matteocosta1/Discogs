@@ -5,7 +5,7 @@ import SwiftUI
 import UIKit
 
 /// V68 — CHAT (sesta icona, dopo Ordini), come nel mock-up approvato:
-/// in alto «CHAT · N» e INVITA; cerca per nome Discogs (Aggiungi / Scrivi); elenco delle chat con
+/// in alto «CHAT · N» e Invita; cerca per nome Discogs (Aggiungi / Scrivi); elenco delle chat con
 /// CONTATTO / RICHIESTA e i non letti. Nella chat: testo e schede disco, Segnala e Blocca nel tasto ⋯.
 /// V74: nome in Chat («Nome · account Discogs», chiesto la prima volta), tasto + con Foto · Galleria · Disco,
 /// foto private a schermo intero (Segnala), schede Annuncio (Apri su Discogs) e Parere (Alza · Giusto · Abbassa).
@@ -27,9 +27,11 @@ struct ChatView: View {
                         .font(Theme.mono(10, .bold)).tracking(2).foregroundStyle(Theme.glow)
                     Spacer()
                     ShareLink(item: "Ciao! Uso Vinyl Hustler per vendere dischi su Discogs. Scaricala e cercami nella Chat: sono \(store.mioNome.isEmpty ? seller.username : store.mioNome).") {
-                        Text("INVITA").font(Theme.mono(10, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
-                            .padding(.horizontal, 10).padding(.vertical, 6)
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.glow.opacity(0.5), lineWidth: 1))
+                        // V83: i tasti con l'iniziale maiuscola, come Filtri e Pubblica (in maiuscolo solo le etichette CHAT · N)
+                        Text("Invita").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 14).frame(height: 30)
+                            .overlay(Capsule().stroke(Theme.accent.opacity(0.4), lineWidth: 1))
+                            .contentShape(Capsule())
                     }
                 }
                 .padding(.top, 14)
