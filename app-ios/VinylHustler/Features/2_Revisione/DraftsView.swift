@@ -86,7 +86,8 @@ struct DraftsView: View {
             }
             .sfondoHUD()
             .senzaTitolo("Bozze")
-            .searchable(text: $search, prompt: "Titolo, artista, scatola…")
+            // V82: la ricerca in alto come in Cerca (senza posizione iOS 26 la mette in basso)
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Titolo, artista, scatola…")
             .overlay { if loading && drafts.isEmpty { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
             .refreshable { await Task { await loadDrafts() }.value }
             .task(id: visibile) { guard visibile else { return }; await Task { await loadDrafts() }.value }

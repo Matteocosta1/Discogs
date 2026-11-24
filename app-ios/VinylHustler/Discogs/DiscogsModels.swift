@@ -180,6 +180,7 @@ struct ListingRelease: Codable, Hashable {
     var id: Int
     var description: String?
     var thumbnail: String?
+    var format: String?             // V82: "Vinyl, LP, Album", "Cassette, Album", "CD, Album"
 }
 
 struct Listing: Codable, Hashable, Identifiable {

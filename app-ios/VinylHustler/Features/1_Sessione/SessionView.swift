@@ -18,6 +18,8 @@ struct SessionView: View {
     static let fixedKinds = ["Archivio", "Scatola", "Scaffale"]
     @AppStorage("media") private var mediaRaw = Grade.m.rawValue
     @AppStorage("sleeve") private var sleeveRaw = Grade.m.rawValue
+    // V82: le parole della Condizione seguono l'ultima fotocamera scelta (Vinile / CD / Cassetta, Copertina / Custodia)
+    @AppStorage(Supporto.chiave) private var supportoRaw = Supporto.vinile.rawValue
     @State private var addingKind = false
     @State private var newKind = ""
     @State private var camera = false
@@ -146,8 +148,9 @@ struct SessionView: View {
                 }
 
                 block("Condizione", .condizione, stretto: stretto) {
-                    gradeRow("Vinile", selection: $mediaRaw)
-                    gradeRow("Copertina", selection: $sleeveRaw)
+                    let supporto = Supporto(rawValue: supportoRaw) ?? .vinile
+                    gradeRow(supporto.nomeSupporto, selection: $mediaRaw)
+                    gradeRow(supporto.nomeCustodia, selection: $sleeveRaw)
                 }
 
                 block("Commenti", .commenti, stretto: stretto) {

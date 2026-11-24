@@ -120,33 +120,32 @@ enum InfoTopic: String, Identifiable {
                 ]),
             ]
         case .fotocamera:
+            // V82: lo stesso testo della (i) accanto a VINYL HUSTLER nella fotocamera (come nel mock-up);
+            // «Prima di aprirla» si vede solo dalla pagina Foto
             return [
                 ("Prima di aprirla", [
                     "Controlla Posizione, Condizione e Commenti qui sopra: valgono per tutto quello che fotografi.",
                     "Poi tocca il tasto con la fotocamera.",
                 ]),
+                ("Tre fotocamere", [
+                    "Sopra lo scatto scegli VINILE, CD o CASSETTA. L'app cerca su Discogs solo quel supporto e in Versioni ti propone solo stampe dello stesso supporto.",
+                    "L'ultima scelta resta per la volta dopo.",
+                ]),
                 ("Foto = 1 disco", [
-                    "Inquadra un disco e scatta. Basta una foto sola. Va bene:",
-                    "• la copertina davanti;",
-                    "• il retro, dove c'è il codice a barre (il modo più veloce e sicuro);",
-                    "• l'etichetta al centro del vinile.",
+                    "Tocca lo scatto. Basta una foto sola. Va bene:",
+                    "• la copertina (o la custodia) davanti;",
+                    "• il retro, dove c'è il codice a barre: il modo più veloce e sicuro;",
+                    "• l'etichetta del vinile, il CD o la cassetta.",
                     "Se non lo riconosce, tocca «Altra foto» e fotografa un altro lato.",
                 ]),
                 ("Video = più dischi", [
-                    "Tocca REC e passa i dischi davanti al telefono, uno dopo l'altro, lasciando a ognuno un paio di secondi.",
-                    "Il video dura al massimo 20 secondi. Alla fine li riconosce tutti insieme.",
-                    "Esempio: 6 dischi in fila, 3 secondi ciascuno, e in 18 secondi li hai tutti.",
+                    "Tieni premuto lo scatto: parte il video. Passa i dischi davanti al telefono, uno dopo l'altro, fermandoli un attimo: ognuno si aggancia e viene riconosciuto.",
+                    "Lascia il dito per fermare. Il video dura al massimo 1 minuto.",
                 ]),
                 ("Dopo lo scatto", [
-                    "Per ogni disco ti propone la release trovata su Discogs.",
-                    "Tocca il titolo per aprirla su Discogs e controllare che sia proprio la tua stampa.",
-                    "• «Vendi»: è lui, calcola il prezzo e lo mette subito online.",
-                    "• «Bozza»: è lui, ma non lo metti ancora online. Lo salva come bozza su Discogs e lo ritrovi nella pagina Bozze.",
-                    "• «Versioni»: non è quella giusta? Ti fa vedere le altre edizioni trovate e scegli tu.",
-                    "• «Elimina» (rosso, in fondo): lo togli.",
-                    "Se chiudi la fotocamera senza decidere, il disco ti aspetta nella pagina Bozze.",
-                    "Poi decidi subito: Vendi (va online) oppure Bozza (sta su Discogs ma nascosto, lo pubblichi quando vuoi).",
-                    "Prezzo, condizioni, posizione e descrizione si cambiano quando vuoi: tocca il prezzo del disco, oppure il disco in Inventario o in Bozze. Se preferisci controllare tutto prima di mettere online: Settings › Annunci › Vendi › Prima la scheda.",
+                    "• «Vendi»: calcola il prezzo e lo mette subito online.",
+                    "• «Bozza»: lo salva come bozza su Discogs, lo ritrovi in Bozze.",
+                    "• «Versioni»: le altre stampe dello stesso supporto. Puoi cambiarla quante volte vuoi, anche per tornare alla prima.",
                 ]),
                 ("Consigli", [
                     "• Luce buona, niente riflessi sulla plastica.",
@@ -160,13 +159,15 @@ enum InfoTopic: String, Identifiable {
 
 struct InfoSheet: View {
     let topic: InfoTopic
+    /// V82: aperta dalla (i) dentro la fotocamera: senza «Prima di aprirla» (la fotocamera è già aperta).
+    var dallaFotocamera = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    ForEach(Array(topic.blocks.enumerated()), id: \.offset) { _, block in
+                    ForEach(Array(topic.blocks.filter { !(dallaFotocamera && $0.0 == "Prima di aprirla") }.enumerated()), id: \.offset) { _, block in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(block.0.uppercased())
                                 .font(.system(size: 13, weight: .semibold))

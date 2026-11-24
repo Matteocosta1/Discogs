@@ -115,7 +115,8 @@ struct WarehouseView: View {
             .scrollContentBackground(.hidden)
             .sfondoHUD()
             .senzaTitolo("Inventario")
-            .searchable(text: $search, prompt: "Cerca nell'inventario")
+            // V82: la ricerca in alto come in Cerca (senza posizione iOS 26 la mette in basso)
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Cerca nell'inventario")
             .onChange(of: search) { _, _ in cercaT = Date() }
             .refreshable { await Task { await sync() }.value }
             // V60: la lettura da Discogs la mostra la barra in alto; la rotella resta per le altre operazioni

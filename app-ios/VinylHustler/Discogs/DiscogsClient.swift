@@ -182,11 +182,11 @@ final class DiscogsClient: @unchecked Sendable {
 
     // MARK: - Database
 
-    /// Ricerca nel database Discogs. Solo vinili (format=Vinyl), come ALLOWED_FORMATS dello script.
-    func search(_ params: [String: String]) async throws -> [SearchResult] {
+    /// Ricerca nel database Discogs nel formato del supporto (V82: Vinyl, CD o Cassette; prima solo vinili).
+    func search(_ params: [String: String], formato: String = "Vinyl") async throws -> [SearchResult] {
         var q = params
         q["type"] = "release"
-        q["format"] = "Vinyl"
+        q["format"] = formato
         q["per_page"] = "25"
         let res: SearchResponse = try await request("GET", "/database/search", query: q)
         return res.results
@@ -211,10 +211,10 @@ final class DiscogsClient: @unchecked Sendable {
         try await request("GET", "/releases/\(id)", query: currency.map { ["curr_abbr": $0] } ?? [:])
     }
 
-    /// Tutte le stampe in vinile di un album (master), fino a 100.
-    func masterVersions(_ masterID: Int) async throws -> [MasterVersion] {
+    /// Tutte le stampe di un album (master) in un formato (V82: Vinyl, CD o Cassette), fino a 100.
+    func masterVersions(_ masterID: Int, formato: String = "Vinyl") async throws -> [MasterVersion] {
         let page: MasterVersionsPage = try await request("GET", "/masters/\(masterID)/versions",
-                                                         query: ["per_page": "100", "format": "Vinyl"])
+                                                         query: ["per_page": "100", "format": formato])
         return page.versions
     }
 

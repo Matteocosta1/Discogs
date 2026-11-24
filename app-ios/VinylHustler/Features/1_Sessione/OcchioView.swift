@@ -10,8 +10,10 @@ import Vision
 
 /// OCCHIO — la fotocamera di Vinyl Hustler, come gli occhi di JARVIS.
 ///   · tocchi lo scatto: una foto, e il disco viene riconosciuto subito (e te lo dice a voce);
-///   · tocchi REC (V60, dal vivo): passi i dischi davanti al telefono; ogni copertina che sta ferma un attimo
-///     si aggancia con il suo ologramma alla JARVIS e viene riconosciuta subito (fino a 20 secondi; tocchi di nuovo per fermare).
+///   · tieni premuto lo scatto (V82, come la Fotocamera di iOS e Instagram; prima c'era il tasto REC): passi i dischi
+///     davanti al telefono; ogni copertina che sta ferma un attimo si aggancia e viene riconosciuta subito
+///     (fino a 1 minuto; lasci il dito per fermare).
+///   · V82: sopra lo scatto le tre fotocamere VINILE · CD · CASSETTA.
 /// Sotto il mirino compaiono i dischi riconosciuti: sì, è questo / no, e poi se metterlo in vendita.
 struct OcchioView: View {
     let place: String
@@ -19,12 +21,20 @@ struct OcchioView: View {
     let sleeve: Grade
     let close: () -> Void
 
-    static let maxVideo = 20.0
+    static let maxVideo = 60.0                         // V82: 1 minuto (prima 20 secondi)
 
     @Environment(Seller.self) private var seller
     @Environment(\.modelContext) private var context
     @Query(sort: \Disc.createdAt, order: .reverse) private var all: [Disc]
     @AppStorage("voice") private var voice = true
+    // V82: la fotocamera scelta (VINILE · CD · CASSETTA) e, in alto, i Commenti scritti in Foto
+    @AppStorage(Supporto.chiave) private var supportoRaw = Supporto.vinile.rawValue
+    @AppStorage("commentoSessione") private var commento = ""
+    @State private var info = false                 // la (i) accanto a VINYL HUSTLER
+    // V82: tieni premuto lo scatto = video. Quando è iniziato il tocco, l'attesa di 0,35 s e se il video è partito da lì
+    @State private var premuto: Date?
+    @State private var attesaVideo: Task<Void, Never>?
+    @State private var videoTenuto = false
     @Environment(\.scenePhase) private var fase
     @State private var motore = MotoreOcchio()
     @State private var openedAt = Date()
@@ -63,6 +73,11 @@ struct OcchioView: View {
     private var discoAperto: Bool { schedaAttuale != nil && attachTo == nil }
     /// Con il disco riconosciuto il mirino si spegne dopo il «LOCK»; torna mentre riconosce un'altra foto o durante il REC.
     private var mirinoSpento: Bool { discoAperto && !preso && !registrando && seller.working == 0 }
+    private var supporto: Supporto { Supporto(rawValue: supportoRaw) ?? .vinile }
+    /// V82: le tre fotocamere si cambiano solo a fotocamera libera (niente scheda aperta, niente analisi o video).
+    private var modiVisibili: Bool {
+        stato.isEmpty && !discoAperto && !registrando && !recChiude && attachTo == nil && seller.working == 0
+    }
 
     /// I dischi fotografati da quando hai aperto la fotocamera (il più recente prima).
     private var seen: [Disc] {
@@ -118,7 +133,7 @@ struct OcchioView: View {
                 }
                 // V60: mentre riconosce, al centro del mirino il caricamento alla JARVIS
                 if let da = analisiDa, !registrando, !recChiude {   // durante il REC parlano gli agganci
-                    HUDAnalisi(da: da, fine: analisiFine)
+                    HUDAnalisi(da: da, fine: analisiFine, tipo: supporto.tipo)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
@@ -132,7 +147,7 @@ struct OcchioView: View {
                         HStack(spacing: 8) {
                             recBadge
                             let quanti = rec.quanti(alias: seller.doppioneDi)
-                            Text(quanti == 1 ? "1 DISCO" : "\(quanti) DISCHI")
+                            Text(supporto.quanti(quanti))
                                 .font(Theme.mono(10, .bold)).tracking(1.5)
                                 .foregroundStyle(Theme.glow)
                                 .padding(.horizontal, 9).padding(.vertical, 5)
@@ -153,14 +168,23 @@ struct OcchioView: View {
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .background(tinta)
                     }
-                    Text(stato)
-                        .font(Theme.mono(11, .semibold)).tracking(2.5)
-                        .foregroundStyle(tinta)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color.black.opacity(0.5))
-                        .clipShape(Capsule())
-                        // V64: con la scheda aperta «INQUADRA UN DISCO» non serve (lo dice la scheda); gli avvisi restano
-                        .opacity(stato == "INQUADRA UN DISCO" && discoAperto ? 0 : 1)
+                    // V82: a fotocamera libera le tre fotocamere; la scritta compare solo quando dice qualcosa
+                    // (ANALISI, il video, gli avvisi). Stanno nello stesso posto, così il mirino non salta.
+                    ZStack {
+                        modi
+                            .opacity(modiVisibili ? 1 : 0)
+                            .allowsHitTesting(modiVisibili)
+                        Text(stato.isEmpty ? " " : stato)
+                            .font(Theme.mono(11, .semibold)).tracking(2.5)
+                            .foregroundStyle(tinta)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Capsule())
+                            .opacity(stato.isEmpty ? 0 : 1)
+                            .allowsHitTesting(false)
+                    }
+                    .animation(.easeOut(duration: 0.2), value: modiVisibili)
                     controls
                   }
                   .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { altoSotto = $0 }
@@ -174,11 +198,13 @@ struct OcchioView: View {
         .background(Color.black.ignoresSafeArea())
         .overlay { lettoreGrande }
         .statusBarHidden()
+        .sheet(isPresented: $info) { InfoSheet(topic: .fotocamera, dallaFotocamera: true) }      // V82: la (i) accanto a VINYL HUSTLER
         .task { await prepara() }
         // V64: telefoni piccoli (iPhone SE) con la scheda aperta: se lo spazio non basta, il riquadro del disco si stringe
         // (prima via cartellini e formato, poi la riga DISCO / VERSIONE). Riparte pieno quando cambia lo spazio o il disco.
         .onChange(of: spazioLibero) { _, l in
-            if l < 0, stretto < 2, let r = schedaAttuale {
+            // V82: dopo il riquadro (0 → 2) si stringono le righe in alto: 3 = via i Commenti, 4 = via la Condizione
+            if l < 0, stretto < 4, let r = schedaAttuale {
                 stretto = (stretto == 0 && !PannelloDisco.haExtra(r)) ? 2 : stretto + 1
             }
         }
@@ -207,7 +233,7 @@ struct OcchioView: View {
                 motore.avvia { ok in
                     Task { @MainActor in
                         agganciato = ok
-                        if ok { stato = "INQUADRA UN DISCO" }
+                        if ok { stato = "" }
                     }
                 }
             case .background:
@@ -259,15 +285,41 @@ struct OcchioView: View {
         HStack(alignment: .top) {
           VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("VINYL HUSTLER").font(Theme.mono(14, .bold)).tracking(4)
-                Text("\(place) · \(media == sleeve ? media.rawValue : "\(media.rawValue)/\(sleeve.rawValue)")".uppercased())
+                HStack(spacing: 0) {                         // la «i» ha già il suo margine (tocco da 32 punti)
+                    Text("VINYL HUSTLER").font(Theme.mono(14, .bold)).tracking(4)
+                    // V82: le informazioni della fotocamera, piccole e attaccate al titolo (versione A del mock-up)
+                    Button {
+                        Suoni.testa()
+                        info = true
+                    } label: {
+                        Text("i").font(Theme.mono(10, .bold))
+                            .frame(width: 17, height: 17)
+                            .overlay(Circle().stroke(tinta.opacity(0.7), lineWidth: 1))
+                            .frame(width: 32, height: 32)            // il dito la prende facilmente
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, -8)                          // senza allargare la riga del titolo
+                    .accessibilityLabel("Come funziona la fotocamera")
+                }
+                // V82: tutto quello che hai scelto in Foto: Posizione, Condizione (del supporto) e Commenti.
+                // Se lo spazio non basta (telefoni piccoli con la scheda aperta) via prima i Commenti, poi la Condizione.
+                Text(place.uppercased())
                     .font(Theme.mono(9, .semibold)).tracking(1.5).opacity(0.8)
+                if stretto < 4 {
+                    Text("\(supporto.nomeSupporto) \(media.rawValue) · \(supporto.nomeCustodia) \(sleeve.rawValue)".uppercased())
+                        .font(Theme.mono(9, .semibold)).tracking(1.5).opacity(0.8).lineLimit(1)
+                }
+                let nota = commento.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !nota.isEmpty && stretto < 3 {
+                    Text("«\(nota)»").font(.system(size: 11, weight: .medium)).opacity(0.85).lineLimit(1)
+                }
             }
             .foregroundStyle(tinta)
             .shadow(color: tinta.opacity(0.6), radius: 6)
             // V59: il riquadro del disco riconosciuto, sotto la scritta (come il Satellite di JARVIS)
             if let r = schedaAttuale, !registrando, !recChiude {   // V72: durante il REC niente riquadro (l'inquadratura non si muove)
-                PannelloDisco(release: r, versione: versioneAttuale, stretto: stretto)
+                PannelloDisco(release: r, versione: versioneAttuale, stretto: stretto, tipo: attuale?.supporto.tipo ?? "DISCO")
                     .id(r.id)
                     .transition(.scale(scale: 0.3, anchor: .topLeading).combined(with: .opacity))
             }
@@ -314,45 +366,98 @@ struct OcchioView: View {
         }
     }
 
-    /// Scatto al centro (grande), REC a destra. Tocchi REC una volta per partire, una volta per fermare.
+    /// V82: un tasto solo, al centro. Un tocco = foto; tieni premuto (0,35 s) = video, finché non lasci il dito
+    /// (al massimo 1 minuto). Mentre registra lo scatto si ingrandisce, al centro c'è lo «stop» verde (V65: niente
+    /// rosso nel video) e intorno corre l'anello del tempo.
     private var controls: some View {
-        HStack {
-            Color.clear.frame(width: 70, height: 70)
-            Spacer()
-            Button { scatta() } label: {
-                ZStack {
-                    Circle().stroke(tinta, lineWidth: 3).frame(width: 74, height: 74)
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: !registrando)) { ctx in
+            let p = registrando ? min(1, ctx.date.timeIntervalSince(inizioVideo) / OcchioView.maxVideo) : 0
+            ZStack {
+                Circle().stroke(tinta, lineWidth: 3).frame(width: 74, height: 74)
+                    .opacity(registrando ? 0.25 : 1)
+                if registrando {
+                    Circle().trim(from: 0, to: p)
+                        .stroke(Theme.glow, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 74, height: 74)
+                        .shadow(color: Theme.glow.opacity(0.7), radius: 6)
+                    RoundedRectangle(cornerRadius: 8).fill(Theme.glow).frame(width: 30, height: 30)
+                        .shadow(color: Theme.glow, radius: 6)
+                } else {
                     Circle().fill(tinta).frame(width: 58, height: 58)
                     Image(systemName: "camera.fill").font(.system(size: 19, weight: .bold)).foregroundStyle(Color.black)
                 }
-                .contentShape(Circle())
-                .shadow(color: tinta.opacity(0.6), radius: 10)
             }
-            .buttonStyle(.plain)
-            .disabled(!agganciato || registrando || preparo)
-            .opacity(registrando ? 0.3 : 1)
-            .accessibilityLabel("Scatta una foto")
-            Spacer()
-            Button { registrando ? fermaREC() : registra() } label: {
-                ZStack {
-                    Circle().stroke(registrando ? Theme.glow : Color.white.opacity(0.9), lineWidth: 3).frame(width: 62, height: 62)
-                        .shadow(color: Theme.glow.opacity(registrando ? 0.55 : 0), radius: 8)
-                    if registrando {
-                        // V65: «stop» verde mentre registra
-                        RoundedRectangle(cornerRadius: 5).fill(Theme.glow).frame(width: 24, height: 24)
-                            .shadow(color: Theme.glow, radius: 6)
-                    } else {
-                        Circle().fill(Color.red).frame(width: 48, height: 48)
-                        Text("REC").font(Theme.mono(11, .bold)).foregroundStyle(.white)
-                    }
-                }
-                .frame(width: 70, height: 70)
-                .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!agganciato || preparo || attachTo != nil)
-            .accessibilityLabel(registrando ? "Ferma il video" : "Registra un video")
+            .frame(width: 84, height: 84)
+            .contentShape(Circle())
+            .shadow(color: tinta.opacity(0.6), radius: 10)
+            .scaleEffect(registrando ? 1.14 : 1)
+            .animation(.spring(duration: 0.3, bounce: 0.25), value: registrando)
         }
+        .opacity(agganciato && !preparo ? 1 : 0.5)
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in toccoScatto() }
+                .onEnded { _ in lasciaScatto() }
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(registrando ? "Ferma il video" : "Scatta una foto")
+        .accessibilityHint("Tieni premuto per registrare un video")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { registrando ? fermaREC() : scatta() }
+        .accessibilityAction(named: "Registra un video") { registra() }
+    }
+
+    /// Il dito appoggia sullo scatto: se resta 0,35 s parte il video (non se c'è un'«Altra foto» in attesa).
+    private func toccoScatto() {
+        guard premuto == nil, agganciato, !preparo else { return }
+        premuto = Date()
+        attesaVideo?.cancel()
+        attesaVideo = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, premuto != nil, attachTo == nil, !registrando else { return }
+            videoTenuto = true
+            registra()
+        }
+    }
+
+    /// Il dito si alza: se il video era partito tenendo premuto si ferma; altrimenti era un tocco = foto.
+    private func lasciaScatto() {
+        guard premuto != nil else { return }
+        premuto = nil
+        attesaVideo?.cancel()
+        attesaVideo = nil
+        if videoTenuto || registrando {
+            videoTenuto = false
+            fermaREC()
+        } else if !preparo {
+            scatta()
+        }
+    }
+
+    /// V82: le tre fotocamere, come le modalità della Fotocamera di iOS (si tocca la parola).
+    private var modi: some View {
+        HStack(spacing: 22) {
+            ForEach(Supporto.allCases) { s in
+                let on = s == supporto
+                Button {
+                    guard !on else { return }
+                    Suoni.tocco()
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    supportoRaw = s.rawValue
+                } label: {
+                    Text(s.nome)
+                        .font(Theme.mono(11, .bold)).tracking(2)
+                        .foregroundStyle(on ? Theme.glow : Color.white.opacity(0.55))
+                        .shadow(color: Theme.glow.opacity(on ? 0.6 : 0), radius: 6)
+                        .padding(.vertical, 6).padding(.horizontal, 2)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: supportoRaw)
     }
 
     /// Sotto la fotocamera, compatti (il mirino prende il resto dello schermo):
@@ -505,12 +610,12 @@ struct OcchioView: View {
             guard motore.sessione.isRunning else { return }
             agganciato = true
             Suoni.camera()
-            stato = "INQUADRA UN DISCO"
+            stato = ""
             return
         }
         agganciato = true
         Suoni.camera()
-        stato = "INQUADRA UN DISCO"
+        stato = ""
     }
 
     private func scatta() {
@@ -532,14 +637,15 @@ struct OcchioView: View {
                 } else {
                     seller.shoot([image], video: false, place: place, media: media, sleeve: sleeve, context: context)
                 }
-                if stato == "ANALISI" { stato = "INQUADRA UN DISCO" }
+                if stato == "ANALISI" { stato = "" }
             }
           }
         }
     }
 
     /// V60 · REC dal vivo: niente file video; le copertine si agganciano mentre si filma e ognuna è riconosciuta
-    /// subito con il suo fotogramma (come uno scatto). Si ferma toccando di nuovo REC o dopo 20 secondi.
+    /// subito con il suo fotogramma (come uno scatto). V82: parte tenendo premuto lo scatto e si ferma lasciando il dito
+    /// o dopo 1 minuto.
     private func registra() {
         guard agganciato, !registrando else { return }
         Suoni.tocco()
@@ -549,9 +655,9 @@ struct OcchioView: View {
         registrando = true
         recChiude = false
         seller.inizioREC = inizio
-        stato = "PASSA I DISCHI DAVANTI · TOCCA PER FERMARE"
+        stato = supporto.passa
         rec.inizia()
-        motore.avviaScansione()
+        motore.avviaScansione(supporto: supporto)
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(OcchioView.maxVideo))
             if registrando && inizioVideo == inizio { fermaREC() }
@@ -567,14 +673,14 @@ struct OcchioView: View {
         recChiude = true
         let n = rec.quanti(alias: seller.doppioneDi)
         if n > 0 { Suoni.fatto() }
-        let fine = n == 0 ? "NESSUN DISCO AGGANCIATO · RIPROVA" : (n == 1 ? "1 DISCO TROVATO" : "\(n) DISCHI TROVATI")
+        let fine = supporto.trovati(n)
         stato = fine
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(2200))
             if !registrando {
                 rec.pulisci()
                 withAnimation(.spring(duration: 0.45, bounce: 0.2)) { recChiude = false }
-                if stato == fine { stato = "INQUADRA UN DISCO" }
+                if stato == fine { stato = "" }
             }
         }
     }
@@ -638,6 +744,7 @@ struct OcchioView: View {
 struct HUDAnalisi: View {
     let da: Date
     let fine: Date?
+    var tipo = "DISCO"                  // V82: DISCO, CD o CASSETTA
 
     /// Avanzamento finto ma onesto: sale veloce e rallenta, senza mai arrivare da solo in fondo.
     private static func avanzamento(_ t: Double) -> Double { 0.95 * (1 - exp(-max(0, t) / 2.2)) }
@@ -693,7 +800,7 @@ struct HUDAnalisi: View {
                 .stroke(Theme.glow.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
                 .rotationEffect(.degrees(-t.truncatingRemainder(dividingBy: 1.0) * 360))
                 .padding(8)
-            Text("DISCO").font(Theme.mono(8, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
+            Text(tipo).font(Theme.mono(8, .bold)).tracking(1.5).foregroundStyle(Theme.glow)
         }
         .frame(width: 64, height: 64)
         .shadow(color: Theme.glow.opacity(0.6), radius: 4)
@@ -940,6 +1047,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
     var suCopertine: (@Sendable ([CopertinaVista]) -> Void)?
     /// Usate solo sulla coda dei fotogrammi (codaRiquadro).
     private var scansione = false
+    private var forma = Supporto.vinile             // V82: la forma da cercare nel REC (solo sulla coda dei fotogrammi)
     private var vogliaFotogramma: (@Sendable (UIImage?) -> Void)?
     private var angoliDaRitagliare: [CGPoint] = []
     private let contestoImmagini = CIContext()
@@ -1114,7 +1222,8 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
     }
 
     /// V60 · REC dal vivo: si accendono i fotogrammi dell'anteprima (niente file video).
-    func avviaScansione() {
+    /// V82: `supporto` dice che forma cercare (copertine quasi quadrate, custodie delle cassette rettangolari).
+    func avviaScansione(supporto: Supporto = .vinile) {
         coda.async {
             guard self.sessione.isRunning else { return }
             self.preset(.high)                              // fotogrammi da video (1920×1080): leggeri, come il REC di prima
@@ -1131,6 +1240,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
                 self.sequenza = VNSequenceRequestHandler()
                 self.inseguite = []
                 self.ultimaRicerca = .distantPast
+                self.forma = supporto
                 self.scansione = true
             }
         }
@@ -1209,7 +1319,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
             r.trackingLevel = .accurate
             if (try? sequenza.perform([r], on: buffer, orientation: .up)) != nil,
                let nuova = r.results?.first as? VNRectangleObservation, nuova.confidence >= 0.4,
-               CopertineVive.quasiQuadrata(nuova, larghezza: larghezza, altezza: altezza) {
+               CopertineVive.quasiQuadrata(nuova, larghezza: larghezza, altezza: altezza, minimo: forma.latiMinimo) {
                 tenute.append((id: v.id, oss: nuova))
             } else {
                 // persa: si libera l'inseguitore di Vision (ne tiene pochi)
@@ -1223,7 +1333,7 @@ final class MotoreOcchio: NSObject, AVCapturePhotoCaptureDelegate, AVCaptureFile
         let ora = Date()
         if inseguite.count < 4, ora.timeIntervalSince(ultimaRicerca) >= 0.25 {
             ultimaRicerca = ora
-            for o in CopertineVive.cerca(in: buffer) where inseguite.count < 4 {
+            for o in CopertineVive.cerca(in: buffer, supporto: forma) where inseguite.count < 4 {
                 let c = CGPoint(x: o.boundingBox.midX, y: o.boundingBox.midY)
                 if inseguite.contains(where: { $0.oss.boundingBox.insetBy(dx: -0.03, dy: -0.03).contains(c) }) { continue }
                 inseguite.append((id: UUID(), oss: o))

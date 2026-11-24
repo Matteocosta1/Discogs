@@ -21,9 +21,10 @@ enum Memoria {
     }
 
     /// Cerca nella memoria: per impronta della foto e/o per quello che ha letto l'AI.
-    static func cerca(impronta: String?, letture: [String] = []) async -> Risposta? {
+    /// V82: ogni supporto ha la sua memoria (lo stesso album in vinile e in cassetta sono release diverse).
+    static func cerca(impronta: String?, letture: [String] = [], supporto: Supporto = .vinile) async -> Risposta? {
         guard impronta != nil || !letture.isEmpty else { return nil }
-        var body: [String: Any] = ["task": "lookup", "reads": letture]
+        var body: [String: Any] = ["task": "lookup", "reads": letture, "format": supporto.rawValue]
         if let impronta { body["dhash"] = impronta }
         guard let data = await chiama(body) else { return nil }
         let d = JSONDecoder()
@@ -32,8 +33,9 @@ enum Memoria {
     }
 
     /// Insegna: questo disco (impronta / lettura) è questa release.
-    static func impara(impronta: String?, lettura: String?, release: Int, titolo: String, copertina: String?) async {
-        var body: [String: Any] = ["task": "learn", "release_id": release, "title": titolo]
+    static func impara(impronta: String?, lettura: String?, release: Int, titolo: String, copertina: String?,
+                       supporto: Supporto = .vinile) async {
+        var body: [String: Any] = ["task": "learn", "release_id": release, "title": titolo, "format": supporto.rawValue]
         if let impronta { body["dhash"] = impronta }
         if let lettura, !lettura.isEmpty { body["read"] = lettura }
         if let copertina { body["cover"] = copertina }

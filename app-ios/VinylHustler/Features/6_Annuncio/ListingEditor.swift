@@ -27,6 +27,7 @@ struct ListingEditor: View {
     @State private var price = 0.0
     @State private var media = Grade.vgPlus.discogs
     @State private var sleeve = Grade.vgPlus.discogs
+    @State private var supporto = Supporto.vinile        // V82: le parole della condizione (Vinile / CD / Cassetta)
     @State private var location = ""
     @State private var tags: Set<String> = []
     @State private var note = ""
@@ -106,10 +107,10 @@ struct ListingEditor: View {
             }
 
             Section("Condizione · Posizione") {
-                Picker("Vinile", selection: $media) {
+                Picker(supporto.nomeSupporto, selection: $media) {
                     ForEach(Grade.allCases.map(\.discogs), id: \.self) { Text($0).tag($0) }
                 }
-                Picker("Copertina", selection: $sleeve) {
+                Picker(supporto.nomeCustodia, selection: $sleeve) {
                     ForEach(sleeveOptions, id: \.self) { Text($0).tag($0) }
                 }
                 LabeledContent("Posizione") {
@@ -210,7 +211,7 @@ struct ListingEditor: View {
     // MARK: - Dati
 
     private func regenerate() {
-        let fresh = ListingText.build(media: media, sleeve: sleeve, tags: Array(tags), note: note)
+        let fresh = ListingText.build(media: media, sleeve: sleeve, tags: Array(tags), note: note, supporto: supporto)
         if comments == generated || comments.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { comments = fresh }
         generated = fresh
     }
@@ -231,7 +232,8 @@ struct ListingEditor: View {
             allowOffers = d.allowOffers
             status = initialStatus
             calculation = d.priceCalculation
-            generated = ListingText.build(media: media, sleeve: sleeve, tags: d.noteTags, note: note)
+            supporto = d.supporto
+            generated = ListingText.build(media: media, sleeve: sleeve, tags: d.noteTags, note: note, supporto: supporto)
             comments = d.comments.isEmpty ? generated : d.comments
         case .listing(let id):
             do {
@@ -247,11 +249,13 @@ struct ListingEditor: View {
                 allowOffers = l.allowOffers ?? true
                 status = l.status == "Draft" ? "Draft" : "For Sale"
                 editable = l.status == "For Sale" || l.status == "Draft"
+                supporto = Supporto.da(formato: l.release.format)
                 if let d = discs.first(where: { $0.listingID == id || (l.externalId != nil && $0.externalID == l.externalId) }) {
                     tags = Set(d.noteTags)
                     note = d.noteText
+                    supporto = d.supporto
                 }
-                generated = ListingText.build(media: media, sleeve: sleeve, tags: Array(tags), note: note)
+                generated = ListingText.build(media: media, sleeve: sleeve, tags: Array(tags), note: note, supporto: supporto)
                 if comments.isEmpty { comments = generated }
             } catch {
                 self.error = "Non riesco a leggere l'annuncio: \(error.localizedDescription)"

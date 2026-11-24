@@ -8,6 +8,8 @@ import UIKit
 struct Recognizer {
     let client: DiscogsClient
     var ai: AIService? = nil
+    /// V82: cosa si sta fotografando (vinile, CD, cassetta): l'AI lo sa e Discogs cerca solo in quel formato.
+    var supporto: Supporto = .vinile
 
     /// Un disco trovato nelle foto.
     struct Found {
@@ -31,7 +33,7 @@ struct Recognizer {
         if !video {
             let codes = await Task.detached(priority: .userInitiated) { images.flatMap(PhotoReader.barcodes) }.value
             for code in codes {
-                if let res = try? await client.search(["barcode": code]), !res.isEmpty {
+                if let res = try? await client.search(["barcode": code], formato: supporto.discogs), !res.isEmpty {
                     out.found = [Found(images: all, candidates: Self.candidates(res), read: "barcode \(code)", method: "barcode")]
                     return out
                 }
@@ -41,7 +43,7 @@ struct Recognizer {
         // 1b. La memoria condivisa: qualcuno ha già confermato questa copertina? Istantaneo e gratis.
         //     Solo per le foto: un video può avere più dischi.
         if !video, let first = images.first, let impronta = Memoria.impronta(first),
-           let ricordo = await Memoria.cerca(impronta: impronta)?.photo {
+           let ricordo = await Memoria.cerca(impronta: impronta, supporto: supporto)?.photo {
             out.found = [Found(images: all, candidates: [ricordo.candidate],
                                read: "memoria condivisa (\(ricordo.confirmations ?? 1) conferme)", method: "memoria")]
             return out
@@ -75,7 +77,7 @@ struct Recognizer {
         // 3. Senza AI: le scritte grandi della foto più centrale
         if let middle = images[safe: images.count / 2] {
             let text = await Task.detached(priority: .userInitiated) { PhotoReader.bigText(in: middle) }.value
-            if text.count >= 4, let res = try? await client.search(["q": text]), !res.isEmpty {
+            if text.count >= 4, let res = try? await client.search(["q": text], formato: supporto.discogs), !res.isEmpty {
                 out.found = [Found(images: all, candidates: Self.candidates(res), read: text, method: "testo")]
                 return out
             }
@@ -87,9 +89,9 @@ struct Recognizer {
     /// Una lettura dell'AI con un modello, già cercata su Discogs.
     private func aiFound(_ ai: AIService, model: String, jpegs: [Data], picked: [Int], all: [Int]) async throws
         -> (found: [Found], cost: Double) {
-        let scan = try await ai.scan(photos: jpegs, model: model)
+        let scan = try await ai.scan(photos: jpegs, model: model, supporto: supporto)
         // la memoria condivisa sa già a che disco porta questa lettura? (anche se l'AI l'ha storpiata)
-        let ricordi = await Memoria.cerca(impronta: nil, letture: scan.records.map(\.line))?.reads ?? [:]
+        let ricordi = await Memoria.cerca(impronta: nil, letture: scan.records.map(\.line), supporto: supporto)?.reads ?? [:]
         var found: [Found] = []
         for record in scan.records {
             let shown = record.images.compactMap { n in picked.indices.contains(n - 1) ? picked[n - 1] : nil }
@@ -119,7 +121,7 @@ struct Recognizer {
             tries.append(["q": "\(r.artist) \(r.title)"])
         }
         for params in tries {
-            if let res = try? await client.search(params), !res.isEmpty { return res }
+            if let res = try? await client.search(params, formato: supporto.discogs), !res.isEmpty { return res }
         }
         return []
     }

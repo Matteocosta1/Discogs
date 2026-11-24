@@ -1,6 +1,9 @@
 // memoria — la memoria condivisa dei dischi di tutti gli utenti di Vinyl Hustler.
 //   task "lookup": { dhash?: "hex16", reads?: [string] } -> { photo?: Rel, reads: { [read]: Rel } }
 //   task "learn":  { dhash?: "hex16", read?: string, release_id, title?, cover? } -> { ok: true }
+// V82: "format" = "vinile" (anche se manca: app vecchie), "cd" o "cassetta". Ogni supporto ha la sua memoria:
+//   lo stesso album in vinile e in cassetta sono release diverse. Per CD e cassette vale solo la memoria delle
+//   letture (chiave con davanti "cd|" o "cassetta|"); l'impronta della foto resta solo per i vinili.
 // Solo testo e impronte numeriche, niente foto. La tabella si tocca solo da qui (service role).
 // Una conferma conta una volta per persona (tabella disc_memory_votes): nessuno può "gonfiare" un disco sbagliato.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
@@ -51,20 +54,22 @@ Deno.serve(async (req) => {
   if (!auth?.user) return json({ error: "accesso richiesto" }, 401);
 
   const body = await req.json().catch(() => ({}));
+  const formato = body.format === "cd" || body.format === "cassetta" ? body.format : "vinile";
+  const chiave = (k: string) => formato === "vinile" ? k : `${formato}|${k}`;
 
   if (body.task === "lookup") {
     const out: { photo?: unknown; reads: Record<string, unknown> } = { reads: {} };
-    const big = typeof body.dhash === "string" ? toBig(body.dhash) : null;
+    const big = formato === "vinile" && typeof body.dhash === "string" ? toBig(body.dhash) : null;
     if (big) {
       const { data } = await admin.rpc("lookup_dhash_safe", { p_dhash: big, p_max: MAX_DIST, p_user: auth.user.id, p_min: MIN_PEOPLE });
       if (data?.[0]) out.photo = data[0];
     }
     const reads: string[] = Array.isArray(body.reads) ? body.reads.slice(0, 20).map(String) : [];
-    const keys = [...new Set(reads.map(norm).filter((k) => k.length >= 3))];
+    const keys = [...new Set(reads.map(norm).filter((k) => k.length >= 3).map(chiave))];
     if (keys.length) {
       const { data } = await admin.rpc("lookup_reads_safe", { p_keys: keys, p_user: auth.user.id, p_min: MIN_PEOPLE });
       for (const r of reads) {
-        const hit = (data ?? []).find((d: { key: string }) => d.key === norm(r));   // il più confermato per quella lettura
+        const hit = (data ?? []).find((d: { key: string }) => d.key === chiave(norm(r)));   // il più confermato per quella lettura
         if (hit) out.reads[r] = hit;
       }
     }
@@ -76,14 +81,14 @@ Deno.serve(async (req) => {
     if (!Number.isInteger(release) || release <= 0) return json({ error: "release mancante" }, 400);
     const title = await discogsTitle(release);       // V56: dal server, non dal telefono
     const cover = discogsCover(body.cover);
-    const big = typeof body.dhash === "string" ? toBig(body.dhash) : null;
+    const big = formato === "vinile" && typeof body.dhash === "string" ? toBig(body.dhash) : null;
     if (big) {
       await admin.rpc("learn_disc", { p_user: auth.user.id, p_kind: "dhash", p_key: body.dhash.toLowerCase(), p_dhash: big,
                                       p_release: release, p_title: title, p_cover: cover });
     }
     const read = body.read ? norm(String(body.read)) : "";
     if (read.length >= 3) {
-      await admin.rpc("learn_disc", { p_user: auth.user.id, p_kind: "read", p_key: read.slice(0, 200), p_dhash: null,
+      await admin.rpc("learn_disc", { p_user: auth.user.id, p_kind: "read", p_key: chiave(read).slice(0, 200), p_dhash: null,
                                       p_release: release, p_title: title, p_cover: cover });
     }
     return json({ ok: true });

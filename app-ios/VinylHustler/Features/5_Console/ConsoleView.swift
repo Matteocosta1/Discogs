@@ -128,6 +128,16 @@ struct ConsoleView: View {
             }
             .labelsHidden()
         }
+        // V82: Vacanza. Discogs non ha una modalità vacanza: si apre l'inventario, dove gli annunci In vendita
+        // si mettono su «Expire» e al ritorno si rimettono «For Sale» (guida di Discogs). Dall'app non si può fare.
+        RigaJarvis {
+            Text("Vacanza")
+            Spacer()
+            Link("Discogs ↗", destination: URL(string: "https://www.discogs.com/sell/manage")!)
+                .fontWeight(.semibold)
+                .foregroundStyle(Theme.accent)
+                .simultaneousGesture(TapGesture().onEnded { Suoni.tocco() })
+        }
         RigaJarvis(ultima: true) {
             Button("Cambia account Discogs", role: .destructive) { Suoni.tocco(); seller.logout() }
                 .foregroundStyle(Theme.warn)
@@ -136,10 +146,13 @@ struct ConsoleView: View {
     }
 
     private var accountFooter: some View {
-        Text(seller.currency == seller.discogsCurrency
+        (Text(seller.currency == seller.discogsCurrency
              ? "Il nome è quello con cui ti saluta la voce. La valuta è quella dei prezzi: di solito conviene lasciarla come su Discogs."
              : "Attenzione: su Discogs vendi in \(seller.discogsCurrency). L'app calcola i prezzi in \(seller.currency), ma Discogs li legge nella sua valuta: cambiala anche nelle impostazioni di Discogs, altrimenti i prezzi saranno sbagliati.")
-            .foregroundStyle(seller.currency == seller.discogsCurrency ? Theme.muted : Theme.warn)
+            .foregroundColor(seller.currency == seller.discogsCurrency ? Theme.muted : Theme.warn)
+         // V82: come funziona Vacanza (la riga sopra apre l'inventario su Discogs)
+         + Text(" Vacanza: Discogs non ha una modalità vacanza; apri l'inventario, metti gli annunci In vendita su «Expire» e al ritorno rimettili «For Sale».")
+            .foregroundColor(Theme.muted))
     }
 
     @ViewBuilder private var riconoscimentoRows: some View {

@@ -82,8 +82,10 @@ enum AIError: LocalizedError {
 struct AIService {
     /// Tutti i dischi che si vedono nelle foto (o nei fotogrammi di un video).
     /// model: "haiku" (economico, per primo) o "sonnet" (preciso, di riserva).
-    func scan(photos: [Data], model: String) async throws -> AIScan {
-        try await call(["task": "scan", "model": model, "photos": photos.map { $0.base64EncodedString() }])
+    /// V82: `supporto` dice all'AI cosa sta guardando (vinile, cd, cassetta).
+    func scan(photos: [Data], model: String, supporto: Supporto = .vinile) async throws -> AIScan {
+        try await call(["task": "scan", "model": model, "supporto": supporto.rawValue,
+                        "photos": photos.map { $0.base64EncodedString() }])
     }
 
     private func call<T: Decodable>(_ payload: [String: any Encodable]) async throws -> T {

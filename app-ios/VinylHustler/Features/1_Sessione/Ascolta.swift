@@ -11,6 +11,8 @@ struct PannelloDisco: View {
     let versione: String
     /// V64: 0 = pieno; 1 = senza cartellini e formato (telefoni piccoli); 2 = anche senza la riga DISCO / VERSIONE.
     var stretto = 0
+    /// V82: «● DISCO», «● CD» o «● CASSETTA» (la fotocamera con cui è stato fotografato).
+    var tipo = "DISCO"
     /// Quando il riquadro è comparso: da qui partono le decodifiche (una nuova release = un riquadro nuovo, con .id).
     @State private var aperto = Date()
     @State private var scan: CGFloat = 0
@@ -37,7 +39,7 @@ struct PannelloDisco: View {
             if stretto < 2 {
             riga(0) {
                 HStack {
-                    Text("● DISCO")
+                    Text("● \(tipo)")
                     Spacer(minLength: 8)
                     if !versione.isEmpty { decodifica("VERSIONE \(versione)", 0) }
                 }

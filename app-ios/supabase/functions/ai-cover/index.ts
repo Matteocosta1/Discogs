@@ -56,9 +56,19 @@ const SCAN_SCHEMA = {
   additionalProperties: false,
 };
 
-const SCAN_PROMPT = `The {n} numbered image(s) above were taken by a record seller with a phone camera: a single photo, or frames of a short video in which the seller shows one or more VINYL records (LP, 12", 10", 7") one after the other.
+// V82: la fotocamera scelta nell'app (VINILE · CD · CASSETTA) dice all'AI cosa sta guardando. Senza (app vecchie): vinile.
+const SUPPORTI: Record<string, { what: string; item: string; parts: string }> = {
+  vinile: { what: 'VINYL records (LP, 12", 10", 7")', item: "vinyl record",
+            parts: "front cover, back cover, centre label, close-ups" },
+  cd: { what: "CDs (compact discs: jewel case, digipak or card sleeve, booklet, the disc itself)", item: "CD",
+        parts: "front of the booklet or case, back tray card with the barcode, spine, the printed face of the disc, close-ups" },
+  cassetta: { what: "audio CASSETTES (the plastic case with its J-card inlay, the cassette shell itself)", item: "cassette",
+              parts: "front of the J-card, spine, back of the J-card with the barcode, the labels on the cassette shell, close-ups" },
+};
 
-List every DISTINCT vinyl record you can identify. The same record can appear in several images (front cover, back cover, centre label, close-ups): list it ONCE, with the numbers of all the images where it appears.
+const SCAN_PROMPT = `The {n} numbered image(s) above were taken by a record seller with a phone camera: a single photo, or frames of a short video in which the seller shows one or more {what} one after the other.
+
+List every DISTINCT {item} you can identify. The same {item} can appear in several images ({parts}): list it ONCE, with the numbers of all the images where it appears.
 
 For each record:
 - artist and title: from the main printed text (large on the cover or on the label) or, if you recognise the artwork, from your knowledge of the record.
@@ -99,7 +109,9 @@ Deno.serve(async (req) => {
     content.push({ type: "text", text: `Image ${i + 1}:` });
     content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data } });
   });
-  content.push({ type: "text", text: SCAN_PROMPT.replace("{n}", String(photos.length)) });
+  const sup = SUPPORTI[String(body.supporto ?? "")] ?? SUPPORTI.vinile;
+  content.push({ type: "text", text: SCAN_PROMPT.replace("{n}", String(photos.length)).replace("{what}", sup.what)
+    .replaceAll("{item}", sup.item).replace("{parts}", sup.parts) });
 
   // Una chiamata a un modello: risultato, costo, tempo. Registra costo e uso del mese.
   type Scan = { records: Record<string, unknown>[]; cost: number; ms: number; model: string; error?: string };

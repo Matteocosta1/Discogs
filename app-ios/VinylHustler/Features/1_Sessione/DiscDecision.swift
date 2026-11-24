@@ -220,6 +220,11 @@ struct DiscActions: View {
                             .buttonStyle(SignalButtonStyle())
                         Button("Bozza") { vendiPronto(draft: true) }
                             .buttonStyle(SignalButtonStyle(filled: false))
+                        // V82: anche dopo aver scelto una versione si può cambiarla di nuovo (o tornare alla prima)
+                        if disc.candidates.contains(where: { $0.id != disc.releaseID }) {
+                            Button("Versioni") { alternatives = true }
+                                .buttonStyle(SignalButtonStyle(filled: false))
+                        }
                     }
                     Button { editor = EditorRequest(status: "For Sale") } label: {
                         Label("Modifica annuncio", systemImage: "slider.horizontal.3")
@@ -342,14 +347,14 @@ struct DiscActions: View {
     /// la copertina va nell'annuncio.
     private var condizioneVideo: some View {
         VStack(spacing: 6) {
-            rigaCondizione("VINILE", attuale: disc.media) { g in
+            rigaCondizione(disc.supporto.nomeSupporto.uppercased(), attuale: disc.media) { g in
                 guard g != disc.media else { return }
                 disc.mediaRaw = g.rawValue
                 guard disc.releaseID != nil else { return }   // senza disco riconosciuto il prezzo resta com'è
                 disc.price = nil
                 Task { await seller.anteprimaPrezzo(disc) }
             }
-            rigaCondizione("COPERTINA", attuale: disc.sleeve) { g in
+            rigaCondizione(disc.supporto.nomeCustodia.uppercased(), attuale: disc.sleeve) { g in
                 disc.sleeveRaw = g.rawValue
             }
         }

@@ -127,7 +127,7 @@ final class Seller {
         guard disc.status != .tolto else { return }
         Suoni.guardo()
         let signedIn = await Backend.shared.accessToken() != nil
-        let recognizer = Recognizer(client: client, ai: signedIn ? AIService() : nil)
+        let recognizer = Recognizer(client: client, ai: signedIn ? AIService() : nil, supporto: disc.supporto)
         let outcome = await recognizer.scan(images, video: video)
         // V67: eliminato mentre lo stava riconoscendo: il risultato si butta, il disco non torna più
         guard disc.status != .tolto else { return }
@@ -152,6 +152,7 @@ final class Seller {
                               media: disc.media, sleeve: disc.sleeve)
                 target.photoKinds = found.images.compactMap { disc.photoKinds[safe: $0] }
                 target.box = disc.box
+                target.supportoRaw = disc.supportoRaw       // V82: stesso supporto della foto
                 target.aiCost = share
                 context.insert(target)
             }
@@ -216,20 +217,21 @@ final class Seller {
         }
     }
 
-    /// VERSIONI: dalla release proposta si risale all'album (master) e si prendono TUTTE le sue stampe in vinile.
+    /// VERSIONI: dalla release proposta si risale all'album (master) e si prendono TUTTE le sue stampe nel supporto del disco (V82: vinile, CD o cassetta).
     /// I candidati diventano: la proposta per prima, poi le altre stampe. Se l'album ha una stampa sola
     /// (o la release non ha un master) resta solo la proposta, e il tasto "Versioni" non compare.
     func loadVersions(_ disc: Disc) async {
         guard let rid = disc.releaseID, let best = disc.candidates.first(where: { $0.id == rid }) else { return }
+        let formato = disc.supporto.discogs                // V82: solo le stampe dello stesso supporto
         guard let master = (try? await client.release(rid, currency: currency))?.masterId,
-              let versions = try? await client.masterVersions(master) else {
+              let versions = try? await client.masterVersions(master, formato: formato) else {
             if disc.releaseID == rid { disc.candidates = [best] }
             return
         }
         let artist = best.title.components(separatedBy: " - ").first ?? ""
         let others: [Candidate] = versions
             .filter { $0.id != rid }
-            .filter { v in (v.majorFormats ?? ["Vinyl"]).contains("Vinyl") || (v.format ?? "").contains("Vinyl") }
+            .filter { v in (v.majorFormats ?? [formato]).contains(formato) || (v.format ?? "").contains(formato) }
             .map { v in
                 let label = [v.label, v.catno].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
                 let extra = [label, v.country ?? "", v.released ?? "", v.format ?? ""].filter { !$0.isEmpty }
@@ -273,9 +275,11 @@ final class Seller {
         // la lettura originale dell'AI (anche se poi l'utente ha scelto un'altra stampa: è proprio la correzione utile)
         let read = disc.details.hasPrefix("barcode") || disc.details.hasPrefix("memoria") ? nil : disc.details
         let cover = disc.coverURL?.absoluteString
+        let supporto = disc.supporto
         Task.detached(priority: .utility) {
             let impronta = photo.flatMap(Memoria.impronta)
-            await Memoria.impara(impronta: impronta, lettura: read, release: releaseID, titolo: title, copertina: cover)
+            await Memoria.impara(impronta: impronta, lettura: read, release: releaseID, titolo: title, copertina: cover,
+                                 supporto: supporto)
         }
     }
 
@@ -287,7 +291,7 @@ final class Seller {
         let tries = Self.manualTries(t)
         var found: [Candidate] = []
         for params in tries {
-            guard let res = try? await client.search(params) else { continue }
+            guard let res = try? await client.search(params, formato: disc.supporto.discogs) else { continue }
             for c in Recognizer.candidates(Array(res.prefix(15)), limit: 15) where !found.contains(where: { $0.id == c.id }) {
                 found.append(c)
             }
@@ -488,7 +492,8 @@ final class Seller {
     func description(for disc: Disc) -> String {
         let manual = disc.comments.trimmingCharacters(in: .whitespacesAndNewlines)
         if !manual.isEmpty { return manual }
-        return ListingText.build(media: disc.media.discogs, sleeve: disc.sleeve.discogs, tags: disc.noteTags, note: disc.noteText)
+        return ListingText.build(media: disc.media.discogs, sleeve: disc.sleeve.discogs, tags: disc.noteTags, note: disc.noteText,
+                                 supporto: disc.supporto)
     }
 
     /// SCHEDA ANNUNCIO: modifica un annuncio già su Discogs (prezzo, condizioni, posizione, descrizione, offerte, stato).

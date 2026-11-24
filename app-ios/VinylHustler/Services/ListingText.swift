@@ -1,7 +1,7 @@
 import Foundation
 
 /// La descrizione degli annunci (quella che leggono i compratori su Discogs), scritta da sola:
-///   1. la condizione per intero ("Vinyl: Near Mint (NM or M-) · Sleeve: Very Good Plus (VG+)");
+///   1. la condizione per intero ("Vinyl: Near Mint (NM or M-) · Sleeve: Very Good Plus (VG+)"; V82: CD / Cassette · Case);
 ///   2. le note veloci del disco ("Seam split · Insert included");
 ///   3. la nota scritta a mano;
 ///   4. il testo fisso della Console (spedizione, imballo…).
@@ -38,14 +38,16 @@ enum ListingText {
     static var fixedText: String { UserDefaults.standard.string(forKey: "descFisso") ?? "" }
 
     /// media e sleeve: le condizioni come le scrive Discogs ("Near Mint (NM or M-)").
+    /// V82: `supporto` cambia le parole della condizione: «Vinyl / Sleeve», «CD / Case», «Cassette / Case».
     static func build(media: String, sleeve: String, tags chosen: [String], note: String,
                       language: Language = language, includeCondition: Bool = includeCondition,
-                      fixed: String = fixedText) -> String {
+                      fixed: String = fixedText, supporto: Supporto = .vinile) -> String {
         var lines: [String] = []
         if includeCondition {
+            let s = supporto
             switch language {
-            case .en: lines.append("Vinyl: \(media) · Sleeve: \(sleeve)")
-            case .itEn: lines.append("Vinile / Vinyl: \(media) · Copertina / Sleeve: \(sleeve)")
+            case .en: lines.append("\(s.supportoInglese): \(media) · \(s.custodiaInglese): \(sleeve)")
+            case .itEn: lines.append("\(doppia(s.nomeSupporto, s.supportoInglese)): \(media) · \(doppia(s.nomeCustodia, s.custodiaInglese)): \(sleeve)")
             }
         }
         let picked = tags.filter { chosen.contains($0.it) }
@@ -58,4 +60,7 @@ enum ListingText {
         if !f.isEmpty { lines.append(f) }
         return lines.joined(separator: "\n")
     }
+
+    /// «Vinile / Vinyl», ma «CD» una volta sola quando le due parole sono uguali.
+    private static func doppia(_ it: String, _ en: String) -> String { it == en ? it : "\(it) / \(en)" }
 }

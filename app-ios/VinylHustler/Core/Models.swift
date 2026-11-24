@@ -57,6 +57,8 @@ final class Disc {
     var noteTags: [String] = []         // note veloci ("Copertina scollata", "Inserto incluso"…)
     var noteText: String = ""           // nota scritta a mano
     var allowOffers: Bool = true
+    /// V82: vinile, cd o cassetta (la fotocamera con cui è stato fotografato). I dischi di prima sono vinili.
+    var supportoRaw: String = "vinile"
 
     init(lot: String, photoFiles: [String], media: Grade, sleeve: Grade) {
         id = UUID()
@@ -79,6 +81,7 @@ final class Disc {
         price = nil
         listingID = nil
         allowOffers = UserDefaults.standard.object(forKey: "offerteDefault") as? Bool ?? true
+        supportoRaw = Supporto.attuale.rawValue         // V82: la fotocamera scelta (VINILE · CD · CASSETTA)
         // Foto › Commenti: il testo della sessione vale per tutti i dischi fotografati da lì in poi
         noteText = (UserDefaults.standard.string(forKey: "commentoSessione") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -88,6 +91,7 @@ final class Disc {
         set { statusRaw = newValue.rawValue }
     }
     var media: Grade { Grade(rawValue: mediaRaw) ?? .vgPlus }
+    var supporto: Supporto { Supporto(rawValue: supportoRaw) ?? .vinile }
     var sleeve: Grade { Grade(rawValue: sleeveRaw) ?? media }
     var candidates: [Candidate] {
         get { (try? JSONDecoder().decode([Candidate].self, from: candidatesData)) ?? [] }
