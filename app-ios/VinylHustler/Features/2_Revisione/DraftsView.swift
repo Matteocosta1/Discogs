@@ -64,8 +64,8 @@ struct DraftsView: View {
                                     .foregroundStyle(Theme.accent)
                                     .padding(.horizontal, 14)
                                     .frame(height: 30)
-                                    .overlay(Capsule().stroke(Theme.accent.opacity(0.4), lineWidth: 1))
-                                    .contentShape(Capsule())
+                                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Theme.accent.opacity(0.4), lineWidth: 1))   // V85: squadrato
+                                    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             }
                             .buttonStyle(.plain)
                         }
@@ -338,7 +338,7 @@ struct DraftRow: View {
                             Text("Vendi").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
                                 .lineLimit(1).fixedSize()          // V54: mai "V…", anche sugli schermi più stretti
                                 .padding(.horizontal, 12).frame(height: 30)
-                                .overlay(Capsule().stroke(Theme.accent, lineWidth: 1))
+                                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Theme.accent, lineWidth: 1))   // V85: squadrato
                         }
                         .buttonStyle(.plain)
                         .disabled(lit)

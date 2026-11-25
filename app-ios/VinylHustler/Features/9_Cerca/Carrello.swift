@@ -325,11 +325,14 @@ extension VoceCerca {
 final class NotificheDelegate: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificheDelegate()
     static let apriCarrello = Notification.Name("vh.apriCarrello")
+    /// V85: l'app è stata aperta toccando una notifica (allora non parte da Foto).
+    static let chiaveApertura = "vh.apertaDaNotifica"
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         if response.notification.request.content.userInfo["carrello"] != nil {
             UserDefaults.standard.set(4, forKey: "selectedTab")
+            UserDefaults.standard.set(true, forKey: Self.chiaveApertura)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 NotificationCenter.default.post(name: Self.apriCarrello, object: nil)
             }

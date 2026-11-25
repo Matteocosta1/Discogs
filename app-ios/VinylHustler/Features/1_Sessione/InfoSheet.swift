@@ -14,9 +14,7 @@ struct InfoHeader: View {
                 .foregroundStyle(Theme.glow)
                 .shadow(color: Theme.glow.opacity(0.4), radius: 3)
             Button(action: action) {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
+                SimboloInfo(colore: Theme.accent)                      // V85: la stessa «i» della fotocamera
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
@@ -25,6 +23,16 @@ struct InfoHeader: View {
             Spacer()
         }
         .textCase(nil)
+    }
+}
+
+/// V85 · La «i» delle spiegazioni (pagina Foto e fotocamera): tonda, con la «i» nel carattere dell'app (versione 1 del mock-up).
+struct SimboloInfo: View {
+    var colore: Color
+    var body: some View {
+        Text("i").font(.system(size: 11, weight: .bold)).foregroundStyle(colore)
+            .frame(width: 17, height: 17)
+            .overlay(Circle().stroke(colore.opacity(0.7), lineWidth: 1))
     }
 }
 

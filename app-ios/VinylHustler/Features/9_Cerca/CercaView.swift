@@ -163,7 +163,9 @@ struct CercaView: View {
     @State private var scheda: VoceCerca?
     @State private var carrelloAperto = false
     @State private var scansiona = false
-    @State private var scava = false
+    @State private var digging: PartenzaDigging?       // V85: Scava si chiama Digging ed è il tasto lungo sopra la lista
+    @State private var artista: ArtistaTrovato?        // V85: l'artista che si sta scrivendo (la sua riga in cima)
+    @State private var artistaAperto: ArtistaTrovato?
     @State private var filtriDa: PuntoFiltri?
     @State private var ascolta: BersaglioAscolto?
     private let carrello = Carrello.shared
@@ -191,6 +193,16 @@ struct CercaView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     pillole
+                    TastoDigging(numero: voci.isEmpty ? nil : totale, attivo: !voci.isEmpty) {
+                        Suoni.tocco()
+                        digging = PartenzaDigging(voci: mostrate, totale: totale,
+                                                  sorgente: SorgenteDigging(client: seller.client, parametri: filtri.parametri(testo),
+                                                                            pagina: pagina, pagine: pagine))
+                    }
+                    if let artista {
+                        RigaArtista(artista: artista)
+                            .onTapGesture { Suoni.tocco(); artistaAperto = artista }
+                    }
                     TestoDecodifica(testo: intestazione, da: cercaT, durata: 0.38)
                         .font(Theme.mono(10, .bold)).tracking(2).foregroundStyle(Theme.glow)
                         .padding(.horizontal, 2).padding(.top, 2)
@@ -235,7 +247,9 @@ struct CercaView: View {
             .fullScreenCover(isPresented: $scansiona) {
                 ScansionaView { v in scansiona = false; Task { try? await Task.sleep(for: .milliseconds(350)); scheda = v } }.environment(seller)
             }
-            .fullScreenCover(isPresented: $scava) { ScavaView(voci: mostrate).environment(seller) }
+            .fullScreenCover(item: $digging) { d in ScavaView(voci: d.voci, totale: d.totale, sorgente: d.sorgente).environment(seller) }
+            .sheet(item: $artistaAperto) { a in ArtistaView(artista: a).environment(seller) }
+            .task(id: testo) { await cercaArtista() }
             .fullScreenCover(item: $filtriDa) { p in
                 FinestraFiltri(filtri: $filtri, testo: testo, origine: p.punto) {
                     var t = Transaction(); t.disablesAnimations = true
@@ -271,7 +285,7 @@ struct CercaView: View {
                             Text(f.0).font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(on ? Color.black : Theme.text)
                                 .padding(.horizontal, 12).frame(height: 30)
-                                .background(on ? Theme.accent : Theme.panelHigh, in: Capsule())
+                                .background(on ? Theme.accent : Theme.panelHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))   // V85: squadrate
                         }
                         .buttonStyle(.plain)
                         .accessibilityAddTraits(on ? .isSelected : [])
@@ -289,8 +303,8 @@ struct CercaView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(filtri.attivi > 0 ? Theme.money : Theme.accent)
                         .frame(width: g.size.width, height: 30)
-                        .background(filtri.attivi > 0 ? Theme.military : Color.clear, in: Capsule())
-                        .overlay(Capsule().stroke(filtri.attivi > 0 ? Color.clear : Theme.accent.opacity(0.4), lineWidth: 1))
+                        .background(filtri.attivi > 0 ? Theme.military : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(filtri.attivi > 0 ? Color.clear : Theme.accent.opacity(0.4), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
             }
@@ -299,10 +313,6 @@ struct CercaView: View {
     }
 
     @ToolbarContentBuilder private var strumenti: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button("Scava") { Suoni.tocco(); scava = true }
-                .disabled(voci.isEmpty)
-        }
         ToolbarItem(placement: .topBarTrailing) {
             Button { Suoni.camera(); scansiona = true } label: { Image(systemName: "viewfinder.circle") }
                 .accessibilityLabel("Scansiona un disco")
@@ -330,8 +340,7 @@ struct CercaView: View {
 
     private func cerca(daCapo: Bool) async {
         if daCapo { pagina = 1 }
-        let suona = conTesto && daCapo
-        if suona { Suoni.schedaApre() }
+        let suona = conTesto && daCapo              // V85: niente suono mentre si scrive; resta solo quello d'errore
         carico = true
         errore = nil
         defer { carico = false }
@@ -342,7 +351,6 @@ struct CercaView: View {
             if daCapo { voci = nuove; cercaT = Date() } else { voci += nuove }
             totale = r.pagination?.items ?? voci.count
             pagine = r.pagination?.pages ?? 1
-            if suona { Suoni.schedaPronta() }
             // con «Prezzo più basso» servono i prezzi di tutti i dischi letti
             if filtri.ordine == .prezzo {
                 for v in voci { await prezzi.carica(v.id, client: seller.client, valuta: seller.currency) }
@@ -352,6 +360,17 @@ struct CercaView: View {
             if suona { Suoni.errore() }
             errore = error.localizedDescription
         }
+    }
+
+    /// V85: se il testo è il nome di un artista, la sua riga va in cima ai risultati.
+    private func cercaArtista() async {
+        let q = testo.trimmingCharacters(in: .whitespaces)
+        guard q.count >= 3 else { artista = nil; return }
+        try? await Task.sleep(for: .milliseconds(450))
+        if Task.isCancelled { return }
+        let trovati = (try? await seller.client.cercaArtista(q)) ?? []
+        if Task.isCancelled { return }
+        artista = ArtistaTrovato.scegli(trovati, testo: q)
     }
 
     private func altre() async {

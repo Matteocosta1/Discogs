@@ -132,7 +132,7 @@ struct SessionView: View {
                                 Image(systemName: "plus").font(.system(size: 14, weight: .semibold))
                                     .frame(width: 36, height: 30)
                                     .foregroundStyle(Theme.accent)
-                                    .background(Theme.panelHigh, in: Capsule())
+                                    .background(Theme.panelHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))   // V85: squadrato come Condizione
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Aggiungi un contenitore")
@@ -161,19 +161,7 @@ struct SessionView: View {
                         .focused($scrivo)
                 }
 
-                InfoHeader(title: "Fotocamera") { info = .fotocamera }
-                    // V62: «VINYL HUSTLER · IN LINEA» piccola, a destra, sulla riga di FOTOCAMERA: si decodifica
-                    // all'avvio (dopo la scritta d'apertura) e poi resta
-                    .overlay(alignment: .trailing) {
-                        TestoDecodifica(testo: "VINYL HUSTLER · IN LINEA", da: Avvio.quando, ritardo: 2.4, durata: 0.6)
-                            .font(Theme.mono(8, .bold))
-                            .tracking(1.5)
-                            .foregroundStyle(Theme.glow)
-                            .shadow(color: Theme.glow.opacity(0.6), radius: 3)
-                            .lineLimit(1)
-                            .allowsHitTesting(false)
-                            .accessibilityLabel("Vinyl Hustler in linea")
-                    }
+                InfoHeader(title: "Fotocamera") { info = .fotocamera }   // V85: tolta «VINYL HUSTLER · IN LINEA»
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sopra = $0 }
 
@@ -242,7 +230,7 @@ struct SessionView: View {
             Text(kind).font(.system(size: 14, weight: .semibold))
                 .padding(.horizontal, 12).padding(.vertical, 6)
                 .foregroundStyle(kind == placeKind ? Color.black : Theme.text)
-                .background(kind == placeKind ? Theme.accent : Theme.panelHigh, in: Capsule())
+                .background(kind == placeKind ? Theme.accent : Theme.panelHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))   // V85: squadrato come Condizione
         }
         .buttonStyle(.plain)
         .contextMenu {

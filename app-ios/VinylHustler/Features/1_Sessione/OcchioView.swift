@@ -292,9 +292,7 @@ struct OcchioView: View {
                         Suoni.testa()
                         info = true
                     } label: {
-                        Text("i").font(Theme.mono(10, .bold))
-                            .frame(width: 17, height: 17)
-                            .overlay(Circle().stroke(tinta.opacity(0.7), lineWidth: 1))
+                        SimboloInfo(colore: tinta)                   // V85: la «i» nel carattere dell'app
                             .frame(width: 32, height: 32)            // il dito la prende facilmente
                             .contentShape(Rectangle())
                     }
@@ -837,17 +835,10 @@ struct MirinoOcchio: View {
     }
 
     private var scala: CGFloat { analizzo ? 0.9 : (preso ? 1.03 : 1) }
-    private var etichetta: String {
-        if scattando { return "● REC" }
-        if analizzo { return "AGGANCIO…" }
-        if preso { return "● LOCK" }
-        return agganciato ? "PRONTO" : "…"
-    }
 
     var body: some View {
         GeometryReader { geo in
             let m = Self.misure(Double(geo.size.width), Double(geo.size.height))
-            let lato = CGFloat(m.lato)
             let centroY: CGFloat = geo.size.height > 0 ? CGFloat(m.y0 + m.lato / 2) / geo.size.height : 0.5
             let ancora = UnitPoint(x: 0.5, y: centroY)
             ZStack {
@@ -856,20 +847,11 @@ struct MirinoOcchio: View {
                 }
                 // si stringe e si allarga attorno al centro della cornice (che non sempre è il centro della vista)
                 .scaleEffect(scala, anchor: ancora)
-                // le scritte sopra gli angoli della cornice
-                HStack {
-                    Text("AF · AUTO")
-                    Spacer()
-                    Text(etichetta).contentTransition(.opacity)
-                }
-                .font(Theme.mono(9, .bold)).tracking(1.5)
-                .foregroundStyle((scattando ? Theme.glow : (preso ? Theme.glow : tinta)).opacity(0.85))   // V65: niente rosso col video
-                .frame(width: lato * scala)
-                .position(x: geo.size.width / 2, y: CGFloat(m.y0) + lato * (1 - scala) / 2 - 12)
+                // V85: tolte le scritte sopra gli angoli della cornice (AF · AUTO e PRONTO / AGGANCIO… / LOCK / REC):
+                // si deciderà cosa scriverci
             }
             .opacity(m.lato < 120 ? 0 : 1)                       // spazio troppo piccolo: niente mirino
             .animation(.spring(duration: 0.45, bounce: 0.35), value: scala)
-            .animation(.easeOut(duration: 0.2), value: etichetta)
         }
     }
 

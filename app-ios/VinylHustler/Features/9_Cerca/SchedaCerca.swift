@@ -366,7 +366,12 @@ struct ScansionaView: View {
 // MARK: - Scava: un disco alla volta, parte subito la prima traccia; a sinistra salti, a destra nel carrello
 
 struct ScavaView: View {
-    let voci: [VoceCerca]
+    /// V85: Digging continua da solo con le pagine dopo (tutte le uscite, non solo quelle già lette).
+    @State private var voci: [VoceCerca]
+    let totale: Int?
+    let sorgente: SorgenteDigging?
+    @State private var rifornisco = false
+    @State private var fermo = false                // la pagina dopo non è arrivata (rete): la fila finisce qui
     @Environment(Seller.self) private var seller
     @Environment(\.dismiss) private var dismiss
     @State private var pos = 0
@@ -377,11 +382,23 @@ struct ScavaView: View {
     private let carrello = Carrello.shared
     private let prezzi = PrezziCerca.shared
 
+    init(voci: [VoceCerca], totale: Int? = nil, sorgente: SorgenteDigging? = nil) {
+        _voci = State(initialValue: voci)
+        self.totale = totale
+        self.sorgente = sorgente
+    }
+
+    /// Quanti in tutto: quelli detti da Discogs, mai meno di quelli già in fila.
+    private var quanti: Int { max(totale ?? voci.count, voci.count) }
+    private var finiti: Bool { !rifornisco && (fermo || (sorgente?.finita ?? true)) }
+    /// Cambia quando cambia il disco davanti (anche se arriva dopo, a fine fila).
+    private var discoDavanti: Int { pos < voci.count ? voci[pos].id : 0 }
+
     var body: some View {
         VStack(spacing: 12) {
             HStack(spacing: 10) {
-                Text("SCAVA").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
-                Text(pos < voci.count ? "\(pos + 1) / \(voci.count)" : "").font(Theme.mono(10)).tracking(1).foregroundStyle(Theme.muted)
+                Text("DIGGING").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
+                Text(pos < voci.count ? "\(RigaCerca.numero(pos + 1)) / \(RigaCerca.numero(quanti))" : "").font(Theme.mono(10)).tracking(1).foregroundStyle(Theme.muted)
                 Spacer()
                 Button("Chiudi") { Suoni.testa(); ascolto.chiudi(); dismiss() }
                     .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
@@ -392,6 +409,10 @@ struct ScavaView: View {
                 comandi
                 Text("Scorri: a sinistra salti, a destra nel carrello. Tocca la copertina per la scheda.")
                     .font(.system(size: 12)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
+            } else if !finiti {
+                Spacer()
+                ProgressView().tint(Theme.accent)
+                Spacer()
             } else {
                 Spacer()
                 Text("FINITI").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
@@ -407,7 +428,8 @@ struct ScavaView: View {
             try? await Task.sleep(for: .milliseconds(500))
             Suoni.chatPronta()
         }
-        .task(id: pos) { await suonaDisco() }
+        .task(id: discoDavanti) { await suonaDisco() }
+        .task(id: pos) { await rifornisci() }
         .onDisappear { ascolto.chiudi() }
         .sheet(item: $scheda) { v in SchedaCerca(voce: v).environment(seller) }
     }
@@ -508,6 +530,16 @@ struct ScavaView: View {
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { spinta = 0; pos += 1 }
         }
+    }
+
+    /// Quando mancano pochi dischi alla fine della fila, legge la pagina dopo.
+    private func rifornisci() async {
+        guard pos >= voci.count - 3, !rifornisco, let s = sorgente, !s.finita else { return }
+        rifornisco = true
+        defer { rifornisco = false }
+        let nuove = await s.altre(dopo: voci)
+        if nuove.isEmpty && !s.finita { fermo = true }
+        voci += nuove
     }
 
     /// La prima traccia che si può ascoltare parte da sola.

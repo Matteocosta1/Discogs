@@ -71,7 +71,16 @@ struct RootView: View {
         }
         .onChange(of: tab) { _, _ in Suoni.sezione() }      // V78: il suono delle icone in basso
         .onChange(of: seller.lastError) { _, e in if e != nil { Suoni.nego() } }
-        .onAppear { if !(0...6).contains(tab) { tab = 0 } }
+        .onAppear {
+            // V85: ogni volta che l'app si apre (da chiusa) parte da Foto; se l'ha aperta una notifica, va dove porta la notifica.
+            // Tornando da un'altra app RootView non riappare: resta dov'era.
+            if UserDefaults.standard.bool(forKey: NotificheDelegate.chiaveApertura) {
+                UserDefaults.standard.set(false, forKey: NotificheDelegate.chiaveApertura)
+            } else {
+                tab = 0
+            }
+            if !(0...6).contains(tab) { tab = 0 }
+        }
         .alert(seller.lastError ?? "", isPresented: Binding(get: { seller.lastError != nil },
                                                             set: { if !$0 { seller.lastError = nil } })) {}
     }

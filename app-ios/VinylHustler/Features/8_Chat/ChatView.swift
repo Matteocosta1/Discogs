@@ -30,8 +30,8 @@ struct ChatView: View {
                         // V83: i tasti con l'iniziale maiuscola, come Filtri e Pubblica (in maiuscolo solo le etichette CHAT · N)
                         Text("Invita").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
                             .padding(.horizontal, 14).frame(height: 30)
-                            .overlay(Capsule().stroke(Theme.accent.opacity(0.4), lineWidth: 1))
-                            .contentShape(Capsule())
+                            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Theme.accent.opacity(0.4), lineWidth: 1))   // V85: squadrato
+                            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                 }
                 .padding(.top, 14)
