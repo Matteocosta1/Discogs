@@ -107,7 +107,13 @@ struct DraftsView: View {
             .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Titolo, artista, scatola…")
             .overlay { if loading && drafts.isEmpty { ProgressView("Leggo Discogs…").tint(Theme.accent) } }
             .refreshable { await Task { await loadDrafts() }.value }
-            .task(id: visibile) { guard visibile else { return }; await Task { await loadDrafts() }.value }
+            .task(id: visibile) {
+                guard visibile else { return }
+                // V91: la lista che c'è si stampa subito, al tocco; la prima volta (vuota) quando arrivano i dati
+                let gia = local.count + shownDrafts.count > 0
+                if gia { stampaLista() }
+                await Task { await loadDrafts(stampa: !gia) }.value
+            }
             // V83: in basso resta solo la barra mentre pubblica (il tasto Pubblica è in alto, accanto a BOZZE · N)
             .safeAreaInset(edge: .bottom) {
                 if publishing && total > 0 {
@@ -252,12 +258,14 @@ struct DraftsView: View {
         guard righe > 0 else { stampaT = nil; return }
         stampaT = Date()
         stampando = true
-        Suoni.chatCarica()
-        let durata = ritardoStampa(righe - 1) + 0.45
+        // V91: il suono finisce esattamente quando l'ultima riga è stampata (dischi dell'app 0,45 s, bozze Discogs 0,32 s)
+        let fineLocali = local.isEmpty ? 0 : ritardoStampa(local.count - 1) + 0.45
+        let fineBozze = shownDrafts.isEmpty ? 0 : ritardoStampa(local.count + shownDrafts.count - 1) + 0.32
+        let durata = max(fineLocali, fineBozze)
+        Suoni.stampa(durata)
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(Int(durata * 1000)))
             stampando = false
-            Suoni.chatPronta()
         }
     }
 
@@ -268,13 +276,13 @@ struct DraftsView: View {
         } catch { seller.lastError = error.localizedDescription }
     }
 
-    private func loadDrafts() async {
+    private func loadDrafts(stampa: Bool = true) async {
         loading = true
         defer { loading = false }
         if let all = try? await seller.syncInventory(discs: discs) {
             drafts = all.filter { $0.status == "Draft" }
         }
-        stampaLista()
+        if stampa { stampaLista() }
     }
 }
 

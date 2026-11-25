@@ -38,6 +38,8 @@ struct SchedaCerca: View {
     @State private var lavoro = false
     @State private var ascolta: BersaglioAscolto?
     @State private var copie = false                // V83: COPIE · N, la pagina di Discogs con tutte le copie in vendita
+    /// V91 · l'artista o l'etichetta toccati: la loro pagina (uguale per tutti e due).
+    @State private var pagina: ArtistaTrovato?
     private let carrello = Carrello.shared
     private let prezzi = PrezziCerca.shared
 
@@ -53,10 +55,18 @@ struct SchedaCerca: View {
     private var titolo: String { release?.title ?? voce.album }
     private var meta: String {
         let anno = release?.year.map { String($0) } ?? voce.anno
-        let riga1 = [anno, release?.country ?? voce.paese, release?.formats?.first.map { f in ([f.name ?? ""] + (f.descriptions ?? []).prefix(2)).filter { !$0.isEmpty }.joined(separator: ", ") } ?? voce.formato]
+        return [anno, release?.country ?? voce.paese, release?.formats?.first.map { f in ([f.name ?? ""] + (f.descriptions ?? []).prefix(2)).filter { !$0.isEmpty }.joined(separator: ", ") } ?? voce.formato]
             .filter { !$0.isEmpty }.joined(separator: " · ")
-        let riga2 = [release?.labels?.first?.name ?? voce.etichetta, voce.genere].filter { !$0.isEmpty }.joined(separator: " · ")
-        return [riga1, riga2].filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+    private var nomeEtichetta: String { ArtistaTrovato.pulito(release?.labels?.first?.name ?? voce.etichetta) }
+    /// V91 · l'artista e l'etichetta della stampa, da toccare (non «Various» né «Not On Label»: non hanno una pagina vera).
+    private var paginaArtista: ArtistaTrovato? {
+        guard let a = release?.artists?.first, let i = a.id, i > 0, a.name != "Various" else { return nil }
+        return ArtistaTrovato(id: i, nome: ArtistaTrovato.pulito(a.name), foto: nil)
+    }
+    private var paginaEtichetta: ArtistaTrovato? {
+        guard let l = release?.labels?.first, let i = l.id, i > 0, !l.name.hasPrefix("Not On Label") else { return nil }
+        return ArtistaTrovato(id: i, nome: ArtistaTrovato.pulito(l.name), foto: nil, etichetta: true)
     }
     private var nome: String { artista.isEmpty ? titolo : "\(artista) – \(titolo)" }
 
@@ -69,20 +79,37 @@ struct SchedaCerca: View {
                             .frame(width: 112, height: 112)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(artista).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.muted).lineLimit(1)
+                            if let a = paginaArtista {
+                                Button { Suoni.tocco(); pagina = a } label: {
+                                    Text(artista + " ›").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent).lineLimit(1)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityHint("Apre la pagina dell'artista")
+                            } else {
+                                Text(artista).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.muted).lineLimit(1)
+                            }
                             Text(titolo).font(.system(size: 20, weight: .bold)).lineLimit(3)
                             Text(meta).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            HStack(spacing: 0) {
+                                if let e = paginaEtichetta {
+                                    Button { Suoni.tocco(); pagina = e } label: {
+                                        Text(nomeEtichetta + " ›").fontWeight(.semibold).foregroundStyle(Theme.accent).lineLimit(1)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityHint("Apre la pagina dell'etichetta")
+                                } else if !nomeEtichetta.isEmpty {
+                                    Text(nomeEtichetta).lineLimit(1)
+                                }
+                                if !voce.genere.isEmpty { Text((nomeEtichetta.isEmpty ? "" : " · ") + voce.genere).lineLimit(1) }
+                            }
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         }
                     }
                     numeri
                     HStack(spacing: 8) {
+                        // V91: come gli altri tasti (dentro nero, bordo verde); nel carrello si accende come Wantlist
                         Button { mettiNelCarrello() } label: {
-                            Text(carrello.contiene(id) ? "Nel carrello ✓" : "Aggiungi al carrello")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(carrello.contiene(id) ? Theme.money : Color.black)
-                                .lineLimit(1).minimumScaleFactor(0.8)
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                                .background(carrello.contiene(id) ? Theme.military : Theme.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            tastoBordo(carrello.contiene(id) ? "Nel carrello ✓" : "Aggiungi al carrello", acceso: carrello.contiene(id))
                         }
                         .buttonStyle(.plain)
                         Button { Task { await wantlist() } } label: {
@@ -137,6 +164,7 @@ struct SchedaCerca: View {
             .sheet(isPresented: $copie) {
                 CopieView(releaseID: id, quante: prezzi.prezzo(id)?.inVendita, nome: nome)
             }
+            .sheet(item: $pagina) { p in ArtistaView(artista: p).environment(seller) }
         }
         .preferredColorScheme(.dark)
     }
@@ -555,7 +583,9 @@ struct ScavaView: View {
 
     private func copertina(_ v: VoceCerca, w: Double, h: Double, scuro: Double, video: Bool) -> some View {
         let forma = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        let foto = AsyncImage(url: v.copertina ?? v.miniatura) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+        // V91: la copertina grande della scheda, appena letta (dalla pagina artista/etichetta arrivano solo quelle piccole)
+        let grande = seller.schede[v.id]?.sortedImages.first.flatMap { ($0.uri ?? $0.uri150).flatMap(URL.init(string:)) }
+        let foto = AsyncImage(url: grande ?? v.copertina ?? v.miniatura) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
         return foto
             .frame(width: w, height: h)
             .overlay {
@@ -781,6 +811,9 @@ struct ScavaView: View {
         leggo = true
         defer { leggo = false }
         guard let r = await seller.scheda(id), !Task.isCancelled else { return }
+        // V91: la scheda del disco dopo, già pronta quando arriva al centro (copertina grande; la richiesta è la stessa che
+        // partirebbe arrivandoci, solo un po' prima)
+        if pos + 1 < voci.count { let dopo = voci[pos + 1].id; Task { _ = await seller.scheda(dopo) } }
         await seller.preparaAscolto(r)                  // V90 · B: se la stampa è muta, le tracce della principale
         guard !Task.isCancelled, ascolto.releaseID == id else { return }
         if let i = ascolto.brani.firstIndex(where: { ascolto.fonteDi($0) != .nessuna }) { ascolto.metti(i) }

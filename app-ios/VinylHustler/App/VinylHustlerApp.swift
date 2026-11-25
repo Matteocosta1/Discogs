@@ -13,6 +13,7 @@ struct VinylHustlerApp: App {
         OrderWatcher.register()
         Theme.configureUIKit()
         UNUserNotificationCenter.current().delegate = NotificheDelegate.shared     // V79: «Prezzo sceso» → Carrello
+        SessioneAudio.inApp()                           // V91: prima del suono d'apertura
     }
 
     var body: some Scene {
@@ -26,6 +27,9 @@ struct VinylHustlerApp: App {
         .modelContainer(for: Disc.self)
         .onChange(of: phase) { _, newPhase in
             if newPhase == .background { OrderWatcher.schedule() }
+            // V91: entrando la musica di fuori si abbassa; uscendo torna alle altre app
+            if newPhase == .active { SessioneAudio.inApp() }
+            if newPhase == .background { SessioneAudio.fuori() }
         }
     }
 }
@@ -138,7 +142,7 @@ struct BarraSezioni: View {
         TimelineView(.animation(minimumInterval: 1.0 / 120, paused: avvio == nil)) { ctx in
             HStack(spacing: 0) {
                 ForEach(0..<7, id: \.self) { k in
-                    Button { tab = k } label: { icona(k, t: avvio.map { ctx.date.timeIntervalSince($0) }) }
+                    Button { Suoni.fermaStampa(); tab = k } label: { icona(k, t: avvio.map { ctx.date.timeIntervalSince($0) }) }
                         .buttonStyle(.plain)
                         .accessibilityLabel(Self.nomi[k])
                         .accessibilityAddTraits(tab == k ? .isSelected : [])

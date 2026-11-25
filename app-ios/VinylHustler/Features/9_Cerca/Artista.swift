@@ -21,6 +21,58 @@ struct ArtistaDiscogs: Decodable {
     }
 }
 
+/// V91 · La scheda di un'etichetta su Discogs (/labels/{id}).
+struct EtichettaDiscogs: Decodable {
+    var id: Int
+    var name: String
+    var profile: String?
+    var images: [ReleaseImage]?
+    var parentLabel: Rif?
+
+    struct Rif: Decodable { var name: String }
+}
+
+/// V91 · Un'uscita dell'elenco ufficiale di un artista (/artists/{id}/releases) o di un'etichetta (/labels/{id}/releases):
+/// si legge dal codice Discogs, quindi niente omonimi. Per l'artista c'è il ruolo («Main»: il disco è suo) e l'album (master)
+/// con la sua stampa principale.
+struct UscitaDiscogs: Decodable {
+    var id: Int
+    var type: String?
+    var mainRelease: Int?
+    var role: String?
+    var title: String?
+    var artist: String?
+    var year: Int?
+    var thumb: String?
+    var format: String?
+    var label: String?
+    var stats: Statistiche?
+
+    struct Statistiche: Decodable {
+        struct Comunita: Decodable { var inWantlist: Int?; var inCollection: Int? }
+        var community: Comunita?
+    }
+
+    /// La riga per Cerca, Digging e le liste: la stampa da ascoltare e da comprare (per l'album, la principale).
+    var voce: VoceCerca {
+        let master = type == "master"
+        var r = SearchResult(id: master ? (mainRelease ?? id) : id, title: "\(artist ?? "") - \(title ?? "")")
+        r.year = year.map(String.init)
+        r.format = format.map { [$0] }
+        r.label = label.map { [$0] }
+        r.thumb = thumb
+        r.coverImage = thumb
+        r.community = SearchCommunity(want: stats?.community?.inWantlist, have: stats?.community?.inCollection)
+        r.masterId = master ? id : nil
+        return VoceCerca(r)
+    }
+}
+
+struct PaginaUsciteDiscogs: Decodable {
+    var pagination: Pagination?
+    var releases: [UscitaDiscogs]
+}
+
 extension DiscogsClient {
     /// Gli artisti che si chiamano come il testo cercato (i primi 5).
     func cercaArtista(_ testo: String) async throws -> [SearchResult] {
@@ -30,6 +82,21 @@ extension DiscogsClient {
 
     func artista(_ id: Int) async throws -> ArtistaDiscogs {
         try await request("GET", "/artists/\(id)")
+    }
+
+    /// V91 · Le uscite di un artista dal suo codice, dalla più vecchia (100 per pagina).
+    func usciteArtista(_ id: Int, pagina: Int) async throws -> PaginaUsciteDiscogs {
+        try await request("GET", "/artists/\(id)/releases", query: ["sort": "year", "sort_order": "asc", "per_page": "100", "page": String(pagina)])
+    }
+
+    func etichetta(_ id: Int) async throws -> EtichettaDiscogs {
+        try await request("GET", "/labels/\(id)")
+    }
+
+    /// V91 · Le uscite di un'etichetta dal suo codice (100 per pagina); `ultima`: dalla più recente, una sola (per «AL»).
+    func usciteEtichetta(_ id: Int, pagina: Int, ultima: Bool = false) async throws -> PaginaUsciteDiscogs {
+        try await request("GET", "/labels/\(id)/releases", query: ["sort": "year", "sort_order": ultima ? "desc" : "asc",
+                                                                   "per_page": ultima ? "1" : "100", "page": String(pagina)])
     }
 
     /// Gli album (master) di un artista, uno solo per pagina: dice quanti sono e l'anno del primo (o dell'ultimo).
@@ -45,6 +112,8 @@ struct ArtistaTrovato: Identifiable, Hashable {
     let id: Int
     let nome: String
     let foto: URL?
+    /// V91: la stessa pagina, per un'etichetta (dalla scheda del disco).
+    var etichetta = false
 
     /// «Daft Punk (2)» → «Daft Punk»: il numero lo mette Discogs per distinguere gli omonimi.
     static func pulito(_ s: String) -> String {
@@ -121,38 +190,87 @@ struct RigaArtista: View {
 /// Le pagine successive di una ricerca Discogs, una riga per album (la usano Cerca e la pagina dell'artista).
 @MainActor
 final class SorgenteDigging {
+    /// Da dove arrivano le righe: una ricerca di Cerca, oppure (V91) l'elenco ufficiale di un artista o di un'etichetta.
+    enum Modo {
+        case ricerca([String: String])
+        case artista(Int)
+        case etichetta(Int)
+    }
     private let client: DiscogsClient
-    private let parametri: [String: String]
+    private let modo: Modo
     private let soloConAnno: Bool
     private(set) var pagina: Int
     private(set) var pagine: Int
+    /// V91 · Quante uscite ha in tutto l'elenco (tutte le stampe e i ruoli): si sa dalla prima pagina.
+    private(set) var totale: Int?
 
-    init(client: DiscogsClient, parametri: [String: String], pagina: Int, pagine: Int, soloConAnno: Bool = false) {
+    init(client: DiscogsClient, modo: Modo, pagina: Int = 0, pagine: Int = 1, soloConAnno: Bool = false) {
         self.client = client
-        self.parametri = parametri
+        self.modo = modo
         self.pagina = pagina
         self.pagine = pagine
         self.soloConAnno = soloConAnno
+    }
+
+    convenience init(client: DiscogsClient, parametri: [String: String], pagina: Int, pagine: Int, soloConAnno: Bool = false) {
+        self.init(client: client, modo: .ricerca(parametri), pagina: pagina, pagine: pagine, soloConAnno: soloConAnno)
     }
 
     var finita: Bool { pagina >= pagine }
 
     /// Una copia che va avanti per conto suo (la lista e Digging leggono pagine diverse).
     func copia() -> SorgenteDigging {
-        SorgenteDigging(client: client, parametri: parametri, pagina: pagina, pagine: pagine, soloConAnno: soloConAnno)
+        let c = SorgenteDigging(client: client, modo: modo, pagina: pagina, pagine: pagine, soloConAnno: soloConAnno)
+        c.totale = totale
+        return c
     }
 
     /// Le righe nuove della pagina dopo (salta le pagine che hanno solo album già visti).
     func altre(dopo gia: [VoceCerca]) async -> [VoceCerca] {
         while pagina < pagine {
-            guard let r = try? await client.cercaCatalogo(parametri, pagina: pagina + 1) else { return [] }
+            guard let righe = await leggi(pagina + 1) else { return [] }
             pagina += 1
-            pagine = r.pagination?.pages ?? pagina
-            let righe = r.results.map(VoceCerca.init).filter { !soloConAnno || (!$0.anno.isEmpty && $0.anno != "0") }
-            let nuove = CercaView.unaPerAlbum(righe, gia: gia)
+            let nuove: [VoceCerca]
+            switch modo {
+            case .ricerca: nuove = CercaView.unaPerAlbum(righe, gia: gia)
+            case .artista, .etichetta: nuove = Self.unaPerTitolo(righe, gia: gia)
+            }
             if !nuove.isEmpty { return nuove }
         }
         return []
+    }
+
+    /// Una pagina, già filtrata (nil: Discogs non ha risposto).
+    private func leggi(_ n: Int) async -> [VoceCerca]? {
+        switch modo {
+        case .ricerca(let parametri):
+            guard let r = try? await client.cercaCatalogo(parametri, pagina: n) else { return nil }
+            pagine = r.pagination?.pages ?? n
+            if totale == nil { totale = r.pagination?.items }
+            return r.results.map(VoceCerca.init).filter { !soloConAnno || (!$0.anno.isEmpty && $0.anno != "0") }
+        case .artista(let id):
+            // solo i dischi suoi («Main»): niente remix, comparsate e compilation di altri
+            guard let r = try? await client.usciteArtista(id, pagina: n) else { return nil }
+            pagine = r.pagination?.pages ?? n
+            if totale == nil { totale = r.pagination?.items }
+            return r.releases.filter { ($0.role ?? "Main") == "Main" && ($0.year ?? 0) > 0 }.map(\.voce)
+        case .etichetta(let id):
+            guard let r = try? await client.usciteEtichetta(id, pagina: n) else { return nil }
+            pagine = r.pagination?.pages ?? n
+            if totale == nil { totale = r.pagination?.items }
+            return r.releases.filter { ($0.year ?? 0) > 0 }.map(\.voce)
+        }
+    }
+
+    /// Lo stesso disco in più formati (LP, CD…) o lo stesso album: una riga sola, la prima.
+    static func unaPerTitolo(_ righe: [VoceCerca], gia: [VoceCerca]) -> [VoceCerca] {
+        func chiave(_ v: VoceCerca) -> String { v.masterID.map { "m\($0)" } ?? "t" + v.nome.lowercased() }
+        var visti = Set(gia.map(chiave)), out: [VoceCerca] = []
+        for v in righe where !visti.contains(chiave(v)) {
+            visti.insert(chiave(v))
+            out.append(v)
+        }
+        return out
     }
 }
 
@@ -185,13 +303,17 @@ struct TastoDigging: View {
     }
 }
 
-// MARK: - La pagina dell'artista
+// MARK: - La pagina dell'artista (V91: e dell'etichetta, uguale)
 
 struct ArtistaView: View {
     let artista: ArtistaTrovato
     @Environment(Seller.self) private var seller
     @Environment(\.dismiss) private var dismiss
     @State private var dettagli: ArtistaDiscogs?
+    @State private var dettagliEt: EtichettaDiscogs?
+    /// V91 · la bio: sei righe; se va oltre, «Leggi tutto» la apre intera.
+    @State private var bioAperta = false
+    @State private var bioLunga = false
     @State private var voci: [VoceCerca] = []
     @State private var sorgente: SorgenteDigging?
     @State private var carico = false
@@ -205,11 +327,17 @@ struct ArtistaView: View {
     private let prezzi = PrezziCerca.shared
 
     private var foto: URL? {
-        let img = dettagli?.images?.first(where: { $0.type == "primary" }) ?? dettagli?.images?.first
+        let immagini = artista.etichetta ? dettagliEt?.images : dettagli?.images
+        let img = immagini?.first(where: { $0.type == "primary" }) ?? immagini?.first
         return (img?.uri ?? img?.uri150).flatMap(URL.init(string:)) ?? artista.foto
     }
     private var gruppo: Bool { !(dettagli?.members ?? []).isEmpty }
-    private var profilo: String { ArtistaTrovato.profilo(dettagli?.profile) }
+    private var profilo: String { ArtistaTrovato.profilo(artista.etichetta ? dettagliEt?.profile : dettagli?.profile) }
+    private var tipo: String { artista.etichetta ? "Etichetta" : (gruppo ? "Gruppo" : "Artista") }
+    /// Chi fa parte del gruppo, il nome vero; per l'etichetta, quella di cui fa parte.
+    private var chi: String {
+        artista.etichetta ? (dettagliEt?.parentLabel.map { "Parte di \(ArtistaTrovato.pulito($0.name))" } ?? "") : ArtistaTrovato.chi(dettagli)
+    }
 
     var body: some View {
         NavigationStack {
@@ -220,9 +348,8 @@ struct ArtistaView: View {
                             .frame(width: 112, height: 112)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(gruppo ? "Gruppo" : "Artista").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.muted)
+                            Text(tipo).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.muted)
                             Text(artista.nome).font(.system(size: 20, weight: .bold)).lineLimit(3)
-                            let chi = ArtistaTrovato.chi(dettagli)
                             if !chi.isEmpty { Text(chi).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(3) }
                         }
                     }
@@ -231,10 +358,7 @@ struct ArtistaView: View {
                         Suoni.tocco()
                         digging = PartenzaDigging(voci: voci, totale: uscite, sorgente: sorgente?.copia())
                     }
-                    if !profilo.isEmpty {
-                        Text(profilo).font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(6)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    if !profilo.isEmpty { bio }
                     Text(uscite.map { "USCITE · \(RigaCerca.numero($0)) · DALLA PRIMA" } ?? "USCITE · DALLA PRIMA")
                         .font(Theme.mono(10, .bold)).tracking(2).foregroundStyle(Theme.glow)
                         .padding(.top, 2)
@@ -258,7 +382,7 @@ struct ArtistaView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("ARTISTA").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
+                    Text(artista.etichetta ? "ETICHETTA" : "ARTISTA").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Chiudi") { Suoni.testa(); dismiss() }.foregroundStyle(Theme.accent)
@@ -272,6 +396,33 @@ struct ArtistaView: View {
             .finestraAscolto($ascolta, seller: seller)
         }
         .preferredColorScheme(.dark)
+    }
+
+    /// La bio: sei righe; se il testo è più lungo, «Leggi tutto» / «Riduci».
+    private var bio: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(profilo).font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(bioAperta ? nil : 6)
+                .fixedSize(horizontal: false, vertical: true)
+                .background {
+                    // il testo intero, invisibile, per sapere se le sei righe lo tagliano
+                    GeometryReader { corto in
+                        Text(profilo).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
+                            .frame(width: corto.size.width, alignment: .leading)
+                            .hidden()
+                            .background(GeometryReader { lungo in
+                                Color.clear.onChange(of: lungo.size.height, initial: true) { _, h in
+                                    if !bioAperta { bioLunga = h > corto.size.height + 1 }
+                                }
+                            })
+                    }
+                    .hidden()
+                }
+            if bioLunga {
+                Button(bioAperta ? "Riduci" : "Leggi tutto") { Suoni.tocco(); bioAperta.toggle() }
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                    .buttonStyle(.plain)
+            }
+        }
     }
 
     private var numeri: some View {
@@ -300,6 +451,18 @@ struct ArtistaView: View {
 
     private func carica() async {
         let client = seller.client
+        if artista.etichetta {
+            // V91 · l'etichetta: la sua scheda e le sue uscite dal codice Discogs (niente omonimi), dalla più vecchia
+            async let e = try? client.etichetta(artista.id)
+            async let ultima = try? client.usciteEtichetta(artista.id, pagina: 1, ultima: true)
+            sorgente = SorgenteDigging(client: client, modo: .etichetta(artista.id))
+            await altre()
+            dettagliEt = await e
+            uscite = sorgente?.totale ?? voci.count
+            dal = voci.first?.anno ?? ""
+            al = await ultima?.releases.first?.year.map(String.init) ?? ""
+            return
+        }
         async let d = try? client.artista(artista.id)
         async let primo = try? client.albumArtista(artista.nome, ultimo: false)
         async let ultimo = try? client.albumArtista(artista.nome, ultimo: true)
@@ -309,9 +472,9 @@ struct ArtistaView: View {
             dal = p.results.first?.year ?? ""
         }
         al = await ultimo?.results.first?.year ?? ""
-        // le uscite: tutte le stampe dell'artista dalla più vecchia, una riga per album (come Cerca)
-        sorgente = SorgenteDigging(client: client, parametri: ["artist": artista.nome, "sort": "year", "sort_order": "asc"],
-                                   pagina: 0, pagine: 1, soloConAnno: true)
+        // V91: le uscite dall'elenco ufficiale dell'artista (dal suo codice Discogs: niente omonimi), solo i dischi suoi,
+        // dalla più vecchia, una riga per album con la sua stampa principale
+        sorgente = SorgenteDigging(client: client, modo: .artista(artista.id))
         await altre()
     }
 

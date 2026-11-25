@@ -174,6 +174,89 @@ private struct PaginaDiscogs: UIViewRepresentable {
     }
 }
 
+// MARK: - V91 · Una pagina di Discogs dentro l'app (la copia scelta, il carrello)
+
+/// La pagina da aprire: quella di una copia (per «Add to Cart») o il carrello di Discogs (per «Remove»).
+/// I tasti di Discogs li preme la persona: le regole di Discogs vietano di farli premere a un programma.
+struct PaginaWeb: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+    var indirizzo: String { url.host.map { $0.replacingOccurrences(of: "www.", with: "") + url.path } ?? url.absoluteString }
+    static func copia(_ id: Int) -> PaginaWeb { PaginaWeb(url: URL(string: "https://www.discogs.com/sell/item/\(id)")!) }
+    static let carrelloDiscogs = PaginaWeb(url: URL(string: "https://www.discogs.com/sell/cart")!)
+}
+
+struct PaginaWebView: View {
+    let pagina: PaginaWeb
+    @Environment(\.dismiss) private var dismiss
+    @State private var carico = true
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "lock.fill").font(.system(size: 10, weight: .semibold))
+                    Text(pagina.indirizzo).lineLimit(1)
+                }
+                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                .frame(maxWidth: .infinity).frame(height: 30)
+                .background(Theme.panelHigh, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                WebSemplice(url: pagina.url, carico: $carico)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay { if carico { ProgressView().tint(Theme.accent) } }
+            }
+            .padding(.horizontal, 16).padding(.bottom, 8)
+            .sfondoHUD()
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("DISCOGS").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Chiudi") { Suoni.testa(); dismiss() }.foregroundStyle(Theme.accent)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+/// Il sito di Discogs così com'è, con l'accesso che resta (lo stesso delle COPIE): l'app non legge né tocca la pagina.
+private struct WebSemplice: UIViewRepresentable {
+    let url: URL
+    @Binding var carico: Bool
+
+    func makeCoordinator() -> Ponte { Ponte(carico: $carico) }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let conf = WKWebViewConfiguration()
+        conf.websiteDataStore = .default()
+        let w = WKWebView(frame: .zero, configuration: conf)
+        w.allowsBackForwardNavigationGestures = true
+        w.isOpaque = false
+        w.backgroundColor = .black
+        let c = $carico
+        context.coordinator.osservatore = w.observe(\.isLoading, options: [.new]) { web, _ in
+            Task { @MainActor in c.wrappedValue = web.isLoading }
+        }
+        w.load(URLRequest(url: url))
+        return w
+    }
+
+    func updateUIView(_ w: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ w: WKWebView, coordinator: Ponte) {
+        coordinator.osservatore = nil
+        w.stopLoading()
+    }
+
+    final class Ponte {
+        let carico: Binding<Bool>
+        var osservatore: NSKeyValueObservation?
+        init(carico: Binding<Bool>) { self.carico = carico }
+    }
+}
+
 // MARK: - COPIA: la nostra scheda di una copia
 
 struct CopiaSheet: View {
@@ -183,6 +266,7 @@ struct CopiaSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var copia: CopiaInVendita?
     @State private var errore = false
+    @State private var web: PaginaWeb?
     private let carrello = Carrello.shared
 
     var body: some View {
@@ -214,6 +298,7 @@ struct CopiaSheet: View {
             .task(id: copiaID) {
                 do { copia = try await seller.client.copia(copiaID, currency: seller.currency) } catch { errore = true }
             }
+            .sheet(item: $web) { p in PaginaWebView(pagina: p) }
         }
         .presentationDetents([.large])
         .preferredColorScheme(.dark)
@@ -256,18 +341,28 @@ struct CopiaSheet: View {
         let dentro = carrello.contieneCopia(c.id)
         HStack(spacing: 10) {
             Button {
-                if dentro { Suoni.svuota(); carrello.togliCopia(c.id) } else {
+                if dentro {
+                    let suDiscogs = carrello.suDiscogs(c.id)
+                    Suoni.svuota(); carrello.togliCopia(c.id)
+                    if suDiscogs { web = .carrelloDiscogs }                 // V91: e dal carrello Discogs, con «Remove»
+                } else {
                     Suoni.tocco()
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     carrello.mettiCopia(c, valuta: seller.currency)
+                    // V91: subito la pagina di questa copia su Discogs, per metterla anche nel carrello Discogs («Add to Cart»)
+                    carrello.segnaSuDiscogs(c.id)
+                    web = .copia(c.id)
                 }
             } label: {
+                // V91: come gli altri tasti (dentro nero, bordo verde); nel carrello si accende
                 Text(dentro ? "Nel carrello ✓" : "Aggiungi al carrello")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(dentro ? Theme.money : Color.black)
+                    .foregroundStyle(dentro ? Theme.money : Theme.accent)
                     .lineLimit(1).minimumScaleFactor(0.8)
                     .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(dentro ? Theme.military : Theme.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(dentro ? Theme.military : Color.clear, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(dentro ? Color.clear : Theme.accent, lineWidth: 1.5))
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(!c.inVendita && !dentro)

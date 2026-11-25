@@ -384,12 +384,12 @@ struct CercaView: View {
         guard righe > 0 else { stampaT = nil; return }
         stampaT = Date()
         stampando = true
-        Suoni.chatCarica()
+        // V91: il suono finisce esattamente con l'ultima riga (le righe di Cerca si stampano in 0,45 s)
         let durata = ritardoStampa(righe - 1) + 0.45
+        Suoni.stampa(durata)
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(Int(durata * 1000)))
             stampando = false
-            Suoni.chatPronta()
         }
     }
 

@@ -94,6 +94,7 @@ struct ReleaseFormat: Codable, Hashable {
 struct NamedRef: Codable, Hashable {
     var name: String
     var catno: String?
+    var id: Int?                    // V91: il codice Discogs dell'artista o dell'etichetta (pagina Artista / Etichetta)
 }
 
 /// Un brano della tracklist ("type_" = track / heading / index: si tengono solo i track).

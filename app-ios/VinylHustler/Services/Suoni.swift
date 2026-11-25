@@ -53,6 +53,30 @@ enum Suoni {
         lettoreScheda = nil
         riproduci("schedapronta", volume: 1.0)
     }
+    /// V91 · La stampa delle liste (Bozze, Inventario, Cerca): il suono del caricamento si ripete finché serve e si chiude
+    /// esattamente quando l'ultimo disco è stampato (sfuma negli ultimi 60 ms). Ogni stampa spegne solo il suo suono.
+    static func stampa(_ secondi: Double) {
+        fermaStampa()
+        guard attivi, secondi > 0, let p = lettore("chatcarica", volume: 0.7) else { return }
+        p.numberOfLoops = -1
+        lettoreStampa = p
+        let giro = giroStampa
+        p.play()
+        let sfumo = min(0.06, secondi / 3)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(Int((secondi - sfumo) * 1000)))
+            guard giro == giroStampa, let q = lettoreStampa else { return }
+            lettoreStampa = nil
+            sfuma(q, sfumo)
+        }
+    }
+    /// V91 · Si cambia sezione: il suono della stampa si spegne nell'istante del tocco (30 ms, solo per non fare «clic»).
+    static func fermaStampa() {
+        giroStampa += 1
+        sfuma(lettoreStampa, 0.03)
+        lettoreStampa = nil
+    }
+
     /// Il testo che si stampa: sfuma con `chatPronta()`.
     static func chatCarica() {
         guard attivi, let p = lettore("chatcarica", volume: 0.7) else { return }
@@ -108,6 +132,8 @@ enum Suoni {
 
     private static var lettoreScheda: AVAudioPlayer?
     private static var lettoreChat: AVAudioPlayer?
+    private static var lettoreStampa: AVAudioPlayer?
+    private static var giroStampa = 0
     private static var lettori: [AVAudioPlayer] = []
     private static var cacheErrore: Data?
 
@@ -121,7 +147,7 @@ enum Suoni {
         guard let url = ["m4a", "mp3", "wav", "caf"].lazy
                 .compactMap({ Bundle.main.url(forResource: nome, withExtension: $0) }).first,
               let p = try? AVAudioPlayer(contentsOf: url) else { return nil }
-        try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
+        // V91: la sessione audio la decide SessioneAudio (prima ogni tick la rimetteva «mescola», anche mentre suonava una traccia)
         p.volume = volume
         return p
     }

@@ -7,6 +7,7 @@ import UIKit
 /// (scorri a sinistra) o selezionandone tante insieme (Seleziona).
 struct WarehouseView: View {
     @Environment(Seller.self) private var seller
+    @Environment(\.sezioneVisibile) private var visibile        // V91: tornando qui la lista si stampa al tocco
     @Query private var discs: [Disc]
     @State private var listings: [Listing] = []
     @State private var search = ""
@@ -125,6 +126,8 @@ struct WarehouseView: View {
             .safeAreaInset(edge: .bottom) { deleteBar }
             .animation(.snappy, value: selected.isEmpty)
             .task { if listings.isEmpty { await Task { await sync() }.value } }
+            // V91: tornando in Inventario la lista si stampa subito, al tocco (come Bozze e Cerca)
+            .onChange(of: visibile) { _, v in if v && !listings.isEmpty && !loading { stampaRighe(lettura: false) } }
     }
 
     @ToolbarContentBuilder private var toolbarItems: some ToolbarContent {
@@ -334,19 +337,19 @@ struct WarehouseView: View {
     }
 
     /// V60 · p8: i dati sono arrivati: la barra va al 100%, le righe si stampano e i numeri contano da zero.
-    private func stampaRighe() {
+    private func stampaRighe(lettura: Bool = true) {
         let ora = Date()
-        letturaFine = ora
+        if lettura { letturaFine = ora }
         stampaT = ora
         contaDa = Conteggi(online: 0, bozze: 0, euro: 0)
         contaT = ora
         let righe = min(shown.count, 13)
-        Suoni.chatCarica()
-        let durata = (righe > 0 ? ritardoStampa(righe - 1) : 0) + 0.35
+        // V91: il suono finisce esattamente con l'ultima riga (`.stampa` dura 0,32 s)
+        let durata = (righe > 0 ? ritardoStampa(righe - 1) : 0) + 0.32
+        if righe > 0 { Suoni.stampa(durata) }
+        guard lettura else { return }
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(Int(durata * 1000)))
-            Suoni.chatPronta()
-            try? await Task.sleep(for: .milliseconds(900))
+            try? await Task.sleep(for: .milliseconds(Int(durata * 1000) + 900))
             if letturaFine == ora { letturaT = nil }            // la barra sparisce
         }
     }

@@ -54,7 +54,54 @@ final class Ascolto {
     private var lettore30: AVPlayer?
     private var orologio: Task<Void, Never>?
 
-    private init() {}
+    private init() { ascoltaSistema() }
+
+    // MARK: - V91 · Chiamate, Siri, sveglie e cuffie
+
+    /// Suonava quando è arrivata la chiamata (o Siri, una sveglia…).
+    private var suonavaPrima = false
+
+    private func ascoltaSistema() {
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] n in
+            let tipo = (n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+            let opzioni = AVAudioSession.InterruptionOptions(rawValue: (n.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0)
+            MainActor.assumeIsolated { self?.interruzione(tipo, riprendi: opzioni.contains(.shouldResume)) }
+        }
+        nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] n in
+            let motivo = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt).flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+            // cuffie tolte, AirPods scollegate: in pausa (la musica non parte dall'altoparlante)
+            MainActor.assumeIsolated { if motivo == .oldDeviceUnavailable { self?.pausaDalSistema() } }
+        }
+    }
+
+    /// Chiamata, Siri, sveglia: in pausa; finita, riparte da sola solo se iOS dice che si può.
+    private func interruzione(_ tipo: AVAudioSession.InterruptionType?, riprendi: Bool) {
+        switch tipo {
+        case .began:
+            suonavaPrima = suona
+            pausaDalSistema()
+        case .ended:
+            if suonavaPrima && riprendi && !suona {
+                SessioneAudio.traccia()
+                playPausa()
+            }
+            suonavaPrima = false
+        default:
+            break
+        }
+    }
+
+    private func pausaDalSistema() {
+        guard suona else { return }
+        switch fonte {
+        case .intero: ApplicationMusicPlayer.shared.pause()
+        case .anteprima: lettore30?.pause()
+        case .video: comandoVideo?("pausa")
+        case .nessuna: break
+        }
+        suona = false
+    }
 
     var corrente: Brano? { brani.indices.contains(indice) ? brani[indice] : nil }
 
@@ -198,6 +245,7 @@ final class Ascolto {
         if let u = b.anteprima {
             suonaAnteprima(u)
         } else if let v = b.video {
+            SessioneAudio.traccia()
             fonte = .video
             videoID = v
             durata = b.secondiVideo ?? 0
@@ -218,6 +266,7 @@ final class Ascolto {
     }
 
     private func suonaIntero(id: String, brano b: Brano) async -> Bool {
+        SessioneAudio.traccia()
         do {
             let richiesta = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(id))
             guard let song = try await richiesta.response().items.first, indice == b.id else { return false }
@@ -237,9 +286,7 @@ final class Ascolto {
     }
 
     private func suonaAnteprima(_ u: URL) {
-        let sessione = AVAudioSession.sharedInstance()
-        try? sessione.setCategory(.playback, mode: .default)
-        try? sessione.setActive(true)
+        SessioneAudio.traccia()                         // V91: parte una nostra traccia, la musica di fuori si ferma
         let p = AVPlayer(url: u)
         lettore30 = p
         p.play()
@@ -406,5 +453,29 @@ final class Ascolto {
         guard let risposta = try? await URLSession.shared.data(for: req),
               let r = try? JSONDecoder().decode(RispostaApple.self, from: risposta.0) else { return [] }
         return r.results
+    }
+}
+
+/// V91 · Chi comanda l'audio (entrando nell'app la musica di fuori si abbassa).
+///   · nell'app: i suoni dell'interfaccia stanno sopra la musica delle altre app, che iOS abbassa sfumando;
+///   · parte una nostra traccia (anteprima, brano intero, video): la musica di fuori si ferma;
+///   · fuori dall'app: l'audio torna alle altre app, la loro musica risale (o riparte, se l'app lo fa).
+/// Le chiamate vincono sempre: lo decide iOS.
+@MainActor
+enum SessioneAudio {
+    static func inApp() {
+        let s = AVAudioSession.sharedInstance()
+        try? s.setCategory(.playback, mode: .default, options: [.mixWithOthers, .duckOthers])
+        try? s.setActive(true)
+    }
+
+    static func traccia() {
+        let s = AVAudioSession.sharedInstance()
+        try? s.setCategory(.playback, mode: .default, options: [])
+        try? s.setActive(true)
+    }
+
+    static func fuori() {
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
