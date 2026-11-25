@@ -211,6 +211,12 @@ final class DiscogsClient: @unchecked Sendable {
         try await request("GET", "/releases/\(id)", query: currency.map { ["curr_abbr": $0] } ?? [:])
     }
 
+    /// V90 · La stampa principale di un album (quella che Discogs mostra sulla pagina del master).
+    func stampaPrincipale(_ masterID: Int) async throws -> Int? {
+        let m: MasterPrincipale = try await request("GET", "/masters/\(masterID)")
+        return m.mainRelease
+    }
+
     /// Tutte le stampe di un album (master) in un formato (V82: Vinyl, CD o Cassette), fino a 100.
     func masterVersions(_ masterID: Int, formato: String = "Vinyl") async throws -> [MasterVersion] {
         let page: MasterVersionsPage = try await request("GET", "/masters/\(masterID)/versions",

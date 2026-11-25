@@ -135,7 +135,7 @@ struct FinestraAscolto: View {
         defer { leggo = false }
         if let r = letta, !Task.isCancelled {
             if case .chiude(_) = fase { return }        // chiusa mentre arrivava la scheda: niente tracce caricate
-            await ascolto.prepara(r)
+            await seller.preparaAscolto(r)                   // V90 · B: se la stampa è muta, le tracce della principale
         }
     }
 

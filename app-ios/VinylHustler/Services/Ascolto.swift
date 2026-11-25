@@ -32,6 +32,8 @@ final class Ascolto {
     }
 
     private(set) var releaseID: Int?
+    /// V90 · La stampa da cui vengono le tracce: di solito è `releaseID`; con B è la principale dello stesso album.
+    private var releaseTracce: Int?
     private(set) var titoloDisco = ""
     private(set) var artista = ""
     private(set) var copertina: URL?
@@ -91,10 +93,13 @@ final class Ascolto {
     // MARK: - Preparazione: tracklist, Apple, video
 
     /// Il disco riconosciuto è cambiato: nuova tracklist e nuove ricerche. Lo stesso disco: niente.
-    func prepara(_ r: Release) async {
-        guard r.id != releaseID else { return }
+    /// V90 · `come`: le tracce di `r` per la stampa `come` (B: la stampa in lista è muta, si ascolta la principale).
+    func prepara(_ r: Release, come: Int? = nil) async {
+        let chiave = come ?? r.id
+        guard chiave != releaseID || r.id != releaseTracce else { return }
         fermaRiproduzione()
-        releaseID = r.id
+        releaseID = chiave
+        releaseTracce = r.id
         titoloDisco = r.title
         artista = r.artist.replacingOccurrences(of: #" \(\d+\)$"#, with: "", options: .regularExpression)
         let img = r.sortedImages.first
@@ -110,7 +115,7 @@ final class Ascolto {
         guard !lista.isEmpty else { return }
         cercando = true
         let canzoni = await Self.cercaSuApple(r, artista: artista)
-        guard releaseID == r.id else { return }              // nel frattempo è cambiato disco
+        guard releaseID == chiave, releaseTracce == r.id else { return }      // nel frattempo è cambiato disco
         var conApple = brani
         Self.abbinaApple(&conApple, canzoni: canzoni)
         brani = conApple
@@ -124,10 +129,14 @@ final class Ascolto {
     func chiudi() {
         fermaRiproduzione()
         releaseID = nil
+        releaseTracce = nil
         brani = []
         copertina = nil
         cercando = false
     }
+
+    /// V90 · Nessun brano ha qualcosa da suonare (né Apple né video): la stampa è muta.
+    var muta: Bool { !brani.contains { fonteDi($0) != .nessuna } }
 
     // MARK: - Comandi
 

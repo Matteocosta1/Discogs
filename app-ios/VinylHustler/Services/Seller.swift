@@ -8,6 +8,17 @@ import UIKit
 @MainActor
 @Observable
 final class Seller {
+    /// V90 · B: le tracce di una stampa per ascoltarla; se è muta (né Apple né video), quelle della stampa principale
+    /// dello stesso album, sotto il nome della stampa mostrata. Al massimo due richieste in più a Discogs, solo quando serve.
+    func preparaAscolto(_ r: Release) async {
+        let a = Ascolto.shared
+        await a.prepara(r)
+        guard !Task.isCancelled, a.releaseID == r.id, a.muta, let m = r.masterId, m > 0,
+              let p = try? await client.stampaPrincipale(m), p != r.id,
+              let rp = await scheda(p), !Task.isCancelled, a.releaseID == r.id else { return }
+        await a.prepara(rp, come: r.id)
+    }
+
     let client: DiscogsClient
     var username = ""
     var currency = "EUR"

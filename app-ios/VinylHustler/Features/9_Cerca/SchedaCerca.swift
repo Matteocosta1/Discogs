@@ -389,6 +389,8 @@ struct ScavaView: View {
     /// V87 · giù sulla copertina al centro: la finestra ASCOLTO con le tracce del disco.
     @State private var tracce: BersaglioAscolto?
     @State private var leggo = true
+    /// V90 · C «Cinema»: la traccia è un video e la copertina è ferma al centro: si allarga a tutta larghezza in 16:9.
+    @State private var cinema = false
     private let ascolto = Ascolto.shared
     private let carrello = Carrello.shared
     private let prezzi = PrezziCerca.shared
@@ -406,6 +408,14 @@ struct ScavaView: View {
     private var discoDavanti: Int { pos < voci.count ? voci[pos].id : 0 }
 
     private enum AsseDito { case nessuno, lato, su, giu, nulla }
+
+    /// V90 · Il video YouTube della traccia sta sulla copertina al centro (non mentre è aperta la finestra delle tracce,
+    /// che ha il suo lettore: due lettori insieme suonerebbero due volte).
+    private var videoMostrato: Bool {
+        tracce == nil && ascolto.fonte == .video && ascolto.videoID != nil && pos < voci.count && ascolto.releaseID == voci[pos].id
+    }
+    /// Il cinema si apre quando la copertina col video è ferma al centro; scorrendo si richiude.
+    private var cinemaAperto: Bool { videoMostrato && corsa == nil && asse != .lato && abs(off - Double(pos)) < 0.02 }
 
     /// Il viaggio verso una copertina (inerzia del dito, un tocco di lato, ✕, il carrello): rallenta arrivando.
     private struct CorsaFlusso: Equatable {
@@ -439,7 +449,8 @@ struct ScavaView: View {
                     info(voci[k])
                     brano
                     comandi
-                    Text("Scorri le copertine. Tocca quella al centro per la scheda; su: nel carrello; giù: le tracce.")
+                    Text(videoMostrato ? "Scorri le copertine. Sul video: pausa; il nome apre la scheda; su: nel carrello; giù: le tracce."
+                                       : "Scorri le copertine. Tocca quella al centro per la scheda; su: nel carrello; giù: le tracce.")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
                 } else if !finiti {
                     Spacer()
@@ -471,6 +482,13 @@ struct ScavaView: View {
         }
         .task(id: pos) { await rifornisci() }
         .onDisappear { if tracce == nil { ascolto.chiudi() } }           // V87: con le tracce aperte sopra la musica continua
+        .onChange(of: cinemaAperto) { _, v in withAnimation(.easeInOut(duration: 0.4)) { cinema = v } }
+        .onChange(of: tracce == nil) { _, chiusa in
+            // V90: chiusa la finestra delle tracce, se la traccia scelta è un video riparte qui, sulla copertina
+            guard chiusa, ascolto.fonte == .nessuna, let b = ascolto.corrente, ascolto.fonteDi(b) == .video,
+                  pos < voci.count, ascolto.releaseID == voci[pos].id else { return }
+            ascolto.metti(ascolto.indice)
+        }
         .sheet(item: $scheda) { v in SchedaCerca(voce: v).environment(seller) }
         .finestraAscolto($tracce, seller: seller)
     }
@@ -491,6 +509,10 @@ struct ScavaView: View {
             let (cw, top) = Self.misure(W, H)
             let fuori = g.frame(in: .global)
             let centroCopertina = CGPoint(x: fuori.minX + W / 2, y: fuori.minY + top + cw / 2)
+            // V90 · C: il cinema a tutta larghezza, 16:9, mai meno di 200 di altezza (il minimo del lettore di YouTube)
+            let wv = W - 36, hv = min(H - 34, max(200, wv * 9 / 16))
+            let wc = cinema ? wv : cw, hc = cinema ? hv : cw
+            let zonaVideo: CGRect? = videoMostrato ? CGRect(x: W / 2 - wc / 2, y: top + (cw - hc) / 2, width: wc, height: hc) : nil
             ZStack(alignment: .topLeading) {
                 LinearGradient(stops: [.init(color: Theme.glow.opacity(0), location: 0), .init(color: Theme.glow.opacity(0.75), location: 0.3),
                                        .init(color: Theme.glow.opacity(0.75), location: 0.7), .init(color: Theme.glow.opacity(0), location: 1)],
@@ -505,14 +527,17 @@ struct ScavaView: View {
                     if ad <= 3.6 {
                         let su = cartaSu == i ? alzata : 0
                         let u = min(1, max(0, Double(-su) / (cw * 1.1)))
-                        copertina(v, lato: cw, scuro: 0.45 * min(1, ad))
+                        let alCentro = i == pos, video = alCentro && videoMostrato
+                        let w = alCentro ? wc : cw, h = alCentro ? hc : cw
+                        let scosta = cinema && !alCentro ? (d < 0 ? -1.0 : 1.0) * cw * 0.9 : 0  // C: le altre si fanno da parte
+                        copertina(v, w: w, h: h, scuro: 0.45 * min(1, ad), video: video)
                             .modifier(FlussoCoverFlow(d: d, cw: cw))
                             .scaleEffect(CGFloat(vola == i ? 0.82 : 1 - 0.18 * u))
                             .offset(y: vola == i ? CGFloat(-cw * 1.4) : su)
-                            .opacity(vola == i ? 0 : (ad > 3.2 ? 0 : min(1, 3.6 - ad)) * (1 - 0.75 * u))
-                            .offset(x: W / 2 - cw / 2, y: top)
+                            .opacity(vola == i ? 0 : (ad > 3.2 ? 0 : min(1, 3.6 - ad)) * (1 - 0.75 * u) * (cinema && !alCentro ? 0.3 : 1))
+                            .offset(x: W / 2 - w / 2 + scosta, y: top + (cw - h) / 2)
                             .zIndex(200 - (ad * 10).rounded())
-                            .allowsHitTesting(false)
+                            .allowsHitTesting(video)                                 // sul video i tocchi sono del lettore di YouTube
                     }
                 }
             }
@@ -520,32 +545,38 @@ struct ScavaView: View {
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { segue($0, W: W, cw: cw) }
-                    .onEnded { fine($0, W: W, cw: cw, origine: centroCopertina) }
+                    .onChanged { segue($0, W: W, cw: cw, zonaVideo: zonaVideo) }
+                    .onEnded { fine($0, W: W, cw: cw, origine: centroCopertina, zonaVideo: zonaVideo) }
             )
         }
         .padding(.horizontal, -18)                                         // le copertine di lato arrivano ai bordi dello schermo
         .clipped()
     }
 
-    private func copertina(_ v: VoceCerca, lato: Double, scuro: Double) -> some View {
+    private func copertina(_ v: VoceCerca, w: Double, h: Double, scuro: Double, video: Bool) -> some View {
         let forma = RoundedRectangle(cornerRadius: 12, style: .continuous)
         let foto = AsyncImage(url: v.copertina ?? v.miniatura) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
         return foto
-            .frame(width: lato, height: lato)
-            .overlay(Color.black.opacity(scuro))
+            .frame(width: w, height: h)
+            .overlay {
+                // V90 · il lettore ufficiale di YouTube al posto della copertina (si vede tutto, niente sopra)
+                if video, let id = ascolto.videoID {
+                    VideoYouTube(videoID: id, ascolto: ascolto).id(id)
+                }
+            }
+            .overlay(Color.black.opacity(scuro).allowsHitTesting(false))
             .clipShape(forma)
             .shadow(color: .black.opacity(0.65), radius: 18, y: 9)
             // il riflesso sotto, che sfuma (si gira con la copertina)
             .overlay(alignment: .top) {
                 foto
-                    .frame(width: lato, height: lato)
-                    .overlay(Color.black.opacity(scuro))
+                    .frame(width: w, height: h)
+                    .overlay(Color.black.opacity(video ? 1 : scuro))
                     .clipShape(forma)
                     .scaleEffect(x: 1, y: -1)
                     .mask(LinearGradient(stops: [.init(color: .black.opacity(0.22), location: 0), .init(color: .clear, location: 0.28)],
                                          startPoint: .top, endPoint: .bottom))
-                    .offset(y: lato + 3)
+                    .offset(y: h + 3)
                     .allowsHitTesting(false)
             }
     }
@@ -566,7 +597,7 @@ struct ScavaView: View {
         return meglio?.i
     }
 
-    private func segue(_ v: DragGesture.Value, W: Double, cw: Double) {
+    private func segue(_ v: DragGesture.Value, W: Double, cw: Double, zonaVideo: CGRect?) {
         guard vola == nil, !voci.isEmpty else { return }
         let dx = Double(v.translation.width), dy = Double(v.translation.height)
         if asse == .nessuno {
@@ -574,7 +605,8 @@ struct ScavaView: View {
             off = offAdesso(Date())
             corsa = nil
             off0 = off
-            let carta = cartaSotto(Double(v.startLocation.x), W: W, cw: cw)
+            // V90 · nel cinema la copertina al centro è larga quanto lo schermo
+            let carta = zonaVideo?.contains(v.startLocation) == true ? Optional(pos) : cartaSotto(Double(v.startLocation.x), W: W, cw: cw)
             let alCentro = carta != nil && carta == indice(off)
             asse = abs(dx) >= abs(dy) ? .lato : (alCentro ? (dy < 0 ? .su : .giu) : .nulla)
             cartaSu = asse == .su || asse == .giu ? carta : nil
@@ -594,7 +626,7 @@ struct ScavaView: View {
         }
     }
 
-    private func fine(_ v: DragGesture.Value, W: Double, cw: Double, origine: CGPoint) {
+    private func fine(_ v: DragGesture.Value, W: Double, cw: Double, origine: CGPoint, zonaVideo: CGRect?) {
         defer { asse = .nessuno }
         guard vola == nil, !voci.isEmpty else { return }
         switch asse {
@@ -624,7 +656,8 @@ struct ScavaView: View {
         case .nulla:
             break
         case .nessuno:
-            // un tocco: di lato la porta al centro, al centro apre la scheda
+            // un tocco: di lato la porta al centro, al centro apre la scheda (V90: sul video lo comanda YouTube)
+            if zonaVideo?.contains(v.startLocation) == true { return }
             guard let i = cartaSotto(Double(v.startLocation.x), W: W, cw: cw), voci.indices.contains(i) else { return }
             if i != indice(offAdesso(Date())) { Suoni.tocco(); vaiA(i) }
             else { Suoni.tocco(); scheda = voci[i] }
@@ -677,6 +710,7 @@ struct ScavaView: View {
     private func info(_ v: VoceCerca) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(v.nome).font(.system(size: 20, weight: .bold)).lineLimit(1)
+                .onTapGesture { if videoMostrato { Suoni.tocco(); scheda = v } }      // V90: col video la scheda si apre dal nome
             Text(v.meta).font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
             let p = prezzi.prezzo(v.id)
             (Text(PrezziCerca.testo(p)).foregroundColor(Theme.money).fontWeight(.bold)
@@ -747,7 +781,7 @@ struct ScavaView: View {
         leggo = true
         defer { leggo = false }
         guard let r = await seller.scheda(id), !Task.isCancelled else { return }
-        await ascolto.prepara(r)
+        await seller.preparaAscolto(r)                  // V90 · B: se la stampa è muta, le tracce della principale
         guard !Task.isCancelled, ascolto.releaseID == id else { return }
         if let i = ascolto.brani.firstIndex(where: { ascolto.fonteDi($0) != .nessuna }) { ascolto.metti(i) }
     }

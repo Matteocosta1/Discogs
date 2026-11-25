@@ -24,6 +24,11 @@ struct Pagination: Codable {
     var items: Int?                 // V79 · Cerca: quanti risultati in tutto
 }
 
+/// V90 · Del master (GET /masters/{id}) serve solo la stampa principale.
+struct MasterPrincipale: Codable {
+    var mainRelease: Int?
+}
+
 /// Una stampa dello stesso album (GET /masters/{id}/versions).
 struct MasterVersion: Codable, Hashable {
     var id: Int
