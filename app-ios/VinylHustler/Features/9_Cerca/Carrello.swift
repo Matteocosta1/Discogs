@@ -64,7 +64,11 @@ final class Carrello {
     }
     private func salva() { Self.scrivi(voci) }
 
-    func contiene(_ id: Int) -> Bool { voci.contains { $0.id == id && $0.copia == nil } }
+    func contiene(_ id: Int) -> Bool {
+        // programmino acceso: il disco nel carrello è la copia scelta per lui (o quella che sta scegliendo)
+        if CarrelloDiscogs.acceso { return voci.contains { $0.id == id } || CarrelloDiscogs.shared.dischiInCorso.contains(id) }
+        return voci.contains { $0.id == id && $0.copia == nil }
+    }
     func contieneCopia(_ copia: Int) -> Bool { voci.contains { $0.copia == copia } }
 
     /// V83: la copia scelta in COPIE, con prezzo, condizioni, venditore e paese.
@@ -142,13 +146,26 @@ final class Carrello {
 
     func metti(_ v: VoceCerca, prezzo: PrezzoCerca?, valuta: String) {
         guard !contiene(v.id) else { return }
+        // programmino acceso: il carrello Discogs vuole una copia precisa: la sceglie lui (qualità-prezzo) e la mette in tutti e due
+        if CarrelloDiscogs.acceso { CarrelloDiscogs.shared.aggiungiDisco(v.id, nome: v.nome, valuta: valuta); return }
         voci.insert(VoceCarrello(id: v.id, nome: v.nome, annoPaese: [v.anno, v.paese].filter { !$0.isEmpty }.joined(separator: " "),
                                  miniatura: v.miniatura?.absoluteString, da: prezzo?.da, inVendita: prezzo?.inVendita ?? 0,
                                  valuta: prezzo?.valuta ?? valuta, avviso: nil, avvisato: nil), at: 0)
         salva()
     }
 
-    func togli(_ id: Int) { voci.removeAll { $0.id == id && $0.copia == nil }; salva() }
+    func togli(_ id: Int) {
+        if CarrelloDiscogs.acceso {
+            // programmino: via il disco con la sua copia, da tutti e due i carrelli
+            for v in voci where v.id == id {
+                if let c = v.copia, v.nelCarrelloDiscogs == true { CarrelloDiscogs.shared.togli(c, nome: v.nome) }
+            }
+            voci.removeAll { $0.id == id }
+            salva()
+            return
+        }
+        voci.removeAll { $0.id == id && $0.copia == nil }; salva()
+    }
 
     func avviso(_ id: Int, _ valore: Double?) {
         guard let i = voci.firstIndex(where: { $0.id == id && $0.copia == nil }) else { return }
@@ -276,9 +293,11 @@ struct CarrelloView: View {
             .sheet(item: $web) { p in PaginaWebView(pagina: p) }
             .onDisappear { carrello.avvisoVisto() }
             .task {
+                // programmino (solo se acceso): prima si allinea con il carrello Discogs, anche se il nostro è vuoto
+                // (le copie messe nel carrello dal sito Discogs entrano anche qui)
+                if CarrelloDiscogs.acceso { leggo = true; await CarrelloDiscogs.shared.allinea(client: seller.client); leggo = false }
                 guard !carrello.voci.isEmpty else { return }
                 leggo = true
-                await CarrelloDiscogs.shared.allinea(client: seller.client)      // programmino: solo se acceso
                 await carrello.aggiorna(client: seller.client, valuta: seller.currency)
                 leggo = false
                 _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])

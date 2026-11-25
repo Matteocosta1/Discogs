@@ -48,6 +48,8 @@ final class CarrelloDiscogs {
     private(set) var ultimoAllineo: Date?
     /// Le copie che il programmino sta mettendo o togliendo adesso (per «Aggiungo al carrello Discogs…»).
     private(set) var inCorso: Set<Int> = []
+    /// I dischi (release) per cui sta scegliendo la copia da mettere nei due carrelli.
+    private(set) var dischiInCorso: Set<Int> = []
 
     private let robot = RobotDiscogs()
     private var coda: Task<Void, Never>?
@@ -75,6 +77,43 @@ final class CarrelloDiscogs {
             }
             self.stato = self.stato == .serveAccesso ? .serveAccesso : .fermo
         }
+    }
+
+    /// Aggiunto un disco (non una copia): il carrello Discogs vuole una copia precisa. Il programmino legge le copie in vendita
+    /// di quel disco, sceglie la migliore per qualità-prezzo, la mette nel nostro carrello (con prezzo, condizioni e venditore)
+    /// e nel carrello Discogs.
+    func aggiungiDisco(_ release: Int, nome: String, valuta: String) {
+        guard Self.acceso else { return }
+        dischiInCorso.insert(release)
+        inFila { [weak self] in
+            guard let self else { return }
+            defer { self.dischiInCorso.remove(release) }
+            self.stato = .lavoro("Scelgo la copia migliore…")
+            do {
+                let copie = try await self.robot.copieInVendita(release)
+                guard let scelta = Self.migliore(copie) else {
+                    self.scrivi("Nessuna copia in vendita da mettere nel carrello: \(nome)", ok: false)
+                    self.stato = .fermo
+                    return
+                }
+                let c = try await DiscogsClient().copia(scelta.id, currency: valuta)   // i dati esatti della copia (API ufficiale)
+                Carrello.shared.mettiCopia(c, valuta: valuta)
+                let esito = try await self.robot.aggiungi(scelta.id)
+                Carrello.shared.segnaNelCarrelloDiscogs(scelta.id, true)
+                self.scrivi("\(esito == .gia ? "Era già nel carrello Discogs" : "Messa nei due carrelli") la copia migliore per qualità-prezzo: \(nome) · \(scelta.descrizione)", ok: true)
+            } catch let e as RobotDiscogs.Errore {
+                self.fallito(e, "Non sono riuscito a mettere nel carrello: \(nome)")
+            } catch {
+                self.scrivi("Non sono riuscito a mettere nel carrello: \(nome)", ok: false)
+            }
+            self.stato = self.stato == .serveAccesso ? .serveAccesso : .fermo
+        }
+    }
+
+    /// Qualità-prezzo: il prezzo diviso il valore delle condizioni (disco 75%, copertina 25%); vince il più basso.
+    /// Così una copia quasi nuova vince su una rovinata se costa poco di più, e a parità di condizioni vince la più economica.
+    static func migliore(_ copie: [RobotDiscogs.CopiaPagina]) -> RobotDiscogs.CopiaPagina? {
+        copie.filter { $0.prezzo > 0 }.min { $0.punteggio < $1.punteggio }
     }
 
     /// La copia è uscita dal nostro carrello: la toglie dal carrello Discogs.
@@ -116,7 +155,6 @@ final class CarrelloDiscogs {
     private func allineaOra(client: DiscogsClient) async {
         let mie = Carrello.shared.voci.filter { $0.copia != nil && $0.nelCarrelloDiscogs == true }
         ultimoAllineo = Date()
-        guard !mie.isEmpty else { return }
         stato = .lavoro("Allineo con il carrello Discogs…")
         defer { if stato != .serveAccesso { stato = .fermo } }
         let suDiscogs: Set<Int>
@@ -128,6 +166,15 @@ final class CarrelloDiscogs {
         } catch {
             scrivi("Non sono riuscito a leggere il carrello Discogs", ok: false)
             return
+        }
+        // Discogs → app: le copie messe nel carrello Discogs dal sito o dall'app Discogs entrano anche nel nostro
+        let nostre = Set(Carrello.shared.voci.compactMap(\.copia))
+        for copia in suDiscogs.subtracting(nostre) {
+            guard let c = try? await client.copia(copia, currency: Carrello.shared.voci.first?.valuta ?? "EUR", bassa: true), c.inVendita else { continue }
+            Carrello.shared.mettiCopia(c, valuta: c.price?.currency ?? "EUR")
+            Carrello.shared.segnaNelCarrelloDiscogs(copia, true)
+            let nome = (c.release.description ?? "").replacingOccurrences(of: #"\s*\([^()]*\)\s*$"#, with: "", options: .regularExpression)
+            scrivi("Aggiunta su Discogs: \(nome) · aggiunta anche qui", ok: true)
         }
         // gli acquisti servono solo se qualcosa è sparito dal carrello Discogs
         var comprate: Set<Int>?
@@ -230,6 +277,33 @@ final class RobotDiscogs: NSObject, WKNavigationDelegate {
 
     enum Esito { case fatto, gia }
 
+    /// Una copia letta dalla pagina For Sale del disco.
+    struct CopiaPagina: Decodable {
+        var id: Int
+        var prezzo: Double
+        var media: String
+        var sleeve: String
+
+        /// Il valore delle condizioni, da Mint (1) a Poor.
+        static func valore(_ grado: String) -> Double {
+            let g = grado.lowercased()
+            if g.hasPrefix("mint") { return 1 }
+            if g.hasPrefix("near mint") { return 0.95 }
+            if g.hasPrefix("very good plus") { return 0.8 }
+            if g.hasPrefix("very good") { return 0.6 }
+            if g.hasPrefix("good plus") { return 0.4 }
+            if g.hasPrefix("good") { return 0.25 }
+            if g.hasPrefix("fair") { return 0.15 }
+            return 0.1
+        }
+        /// Prezzo diviso qualità (disco 75%, copertina 25%; senza copertina conta solo il disco): più basso = conviene di più.
+        var punteggio: Double {
+            let q = sleeve.isEmpty ? Self.valore(media) : Self.valore(media) * 0.75 + Self.valore(sleeve) * 0.25
+            return prezzo / max(0.05, q)
+        }
+        var descrizione: String { [media, sleeve].filter { !$0.isEmpty }.joined(separator: " / ") }
+    }
+
     // Indirizzi del sito (da verificare il giorno in cui si accende)
     private static let base = "https://www.discogs.com"
     private static func pagina(_ copia: Int) -> URL { URL(string: "\(base)/sell/item/\(copia)")! }
@@ -268,6 +342,15 @@ final class RobotDiscogs: NSObject, WKNavigationDelegate {
             let ancora = try await self.idsNelCarrello().contains(copia)
             guard !ancora else { throw Errore.tastoNonTrovato }
             return .fatto
+        }
+    }
+
+    /// Le copie in vendita di un disco (la pagina For Sale, la prima: le copie dalla più economica).
+    func copieInVendita(_ release: Int) async throws -> [CopiaPagina] {
+        try await tentativi {
+            try await self.apri(URL(string: "\(Self.base)/sell/release/\(release)?sort=price%2Casc")!)
+            let testo = try await self.esegui(Self.jsCopieInVendita) as? String ?? "[]"
+            return (try? JSONDecoder().decode([CopiaPagina].self, from: Data(testo.utf8))) ?? []
         }
     }
 
@@ -399,6 +482,26 @@ final class RobotDiscogs: NSObject, WKNavigationDelegate {
         })();
         """
     }
+
+    /// Le copie della pagina For Sale: numero, prezzo, condizioni del disco e della copertina (lette dalla scritta), come JSON.
+    private static let jsCopieInVendita = """
+    (function () {
+      var gradi = /(Mint \\(M\\)|Near Mint \\(NM or M-\\)|Very Good Plus \\(VG\\+\\)|Very Good \\(VG\\)|Good Plus \\(G\\+\\)|Good \\(G\\)|Fair \\(F\\)|Poor \\(P\\))/g;
+      var visti = {}, out = [];
+      Array.prototype.slice.call(document.querySelectorAll('a[href*="/sell/item/"]')).forEach(function (a) {
+        var m = a.href.match(/\\/sell\\/item\\/(\\d+)/); if (!m || visti[m[1]]) return;
+        var riga = a.closest('tr, li, article, [class*="item"], [class*="Item"]') || a.parentElement;
+        var t = (riga && riga.innerText) || '';
+        var g = t.match(gradi) || [];
+        var p = t.match(/[€$£]\\s?([\\d.,]+)|([\\d.,]+)\\s?€/);
+        if (!g.length || !p) return;
+        var n = (p[1] || p[2]).replace(/\\.(?=\\d{3}\\b)/g, '').replace(',', '.');
+        visti[m[1]] = 1;
+        out.push({ id: +m[1], prezzo: parseFloat(n) || 0, media: g[0] || '', sleeve: g[1] || '' });
+      });
+      return JSON.stringify(out);
+    })();
+    """
 
     /// I numeri delle copie («/sell/item/123») presenti sulla pagina, come testo JSON.
     private static let jsCopie = """
