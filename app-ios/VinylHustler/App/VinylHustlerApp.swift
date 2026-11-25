@@ -132,7 +132,7 @@ struct BarraSezioni: View {
     let badge: [Int: Int]
 
     private static let nomi = ["Foto", "Bozze", "Inventario", "Ordini", "Cerca", "Chat", "Settings"]
-    private static let simboli = ["camera.fill", "tray.full", "square.stack.3d.up", "shippingbox", "magnifyingglass", "bubble.left.and.text.bubble.right", "gearshape"]
+    private static let simboli = ["camera", "tray.full", "square.stack.3d.up", "shippingbox", "magnifyingglass", "bubble.left.and.text.bubble.right", "gearshape"]
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 120, paused: avvio == nil)) { ctx in

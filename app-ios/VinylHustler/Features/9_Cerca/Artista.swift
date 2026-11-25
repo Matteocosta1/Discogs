@@ -172,10 +172,8 @@ struct TastoDigging: View {
 
     var body: some View {
         Button(action: azione) {
-            HStack(spacing: 8) {
-                Image(systemName: "play.fill").font(.system(size: 13, weight: .bold))
-                Text(numero.map { "Digging · \(RigaCerca.numero($0))" } ?? "Digging").font(.system(size: 15, weight: .semibold))
-            }
+            // V86: niente simbolo del play, solo la scritta
+            Text(numero.map { "Digging · \(RigaCerca.numero($0))" } ?? "Digging").font(.system(size: 15, weight: .semibold))
             .foregroundStyle(Theme.accent)
             .frame(maxWidth: .infinity, minHeight: 44)
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Theme.accent.opacity(0.4), lineWidth: 1))

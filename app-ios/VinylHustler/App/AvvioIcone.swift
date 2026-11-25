@@ -10,7 +10,7 @@ struct AvvioIcone: View {
 
     static let durata = 2.4                       // secondi: poi RootView toglie questa vista
     private static let nomi = ["Foto", "Bozze", "Inventario", "Ordini", "Settings"]
-    private static let simboli = ["camera.fill", "tray.full", "square.stack.3d.up", "shippingbox", "gearshape"]
+    private static let simboli = ["camera", "tray.full", "square.stack.3d.up", "shippingbox", "gearshape"]
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 120)) { ctx in

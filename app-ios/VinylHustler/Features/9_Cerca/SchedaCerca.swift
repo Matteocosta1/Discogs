@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import QuartzCore
 import UIKit
 
 // V79 — Cerca › la scheda del disco, Scansiona e Scava (come nel mock-up approvato).
@@ -374,9 +375,17 @@ struct ScavaView: View {
     @State private var fermo = false                // la pagina dopo non è arrivata (rete): la fila finisce qui
     @Environment(Seller.self) private var seller
     @Environment(\.dismiss) private var dismiss
+    /// Il disco fermo al centro: quello che suona (cambia quando una copertina si ferma, non mentre scorrono).
     @State private var pos = 0
-    @State private var spinta: CGFloat = 0
     @State private var scheda: VoceCerca?
+    // V86 · il Cover Flow (come la tab PAGINE di JARVIS): `off` è la copertina al centro (anche a metà fra due)
+    @State private var off: Double = 0
+    @State private var corsa: CorsaFlusso?
+    @State private var off0: Double = 0
+    @State private var asse: AsseDito = .nessuno
+    @State private var cartaSu: Int?
+    @State private var alzata: CGFloat = 0
+    @State private var vola: Int?
     @State private var leggo = true
     private let ascolto = Ascolto.shared
     private let carrello = Carrello.shared
@@ -394,31 +403,55 @@ struct ScavaView: View {
     /// Cambia quando cambia il disco davanti (anche se arriva dopo, a fine fila).
     private var discoDavanti: Int { pos < voci.count ? voci[pos].id : 0 }
 
+    private enum AsseDito { case nessuno, lato, su, giu }
+
+    /// Il viaggio verso una copertina (inerzia del dito, un tocco di lato, ✕, il carrello): rallenta arrivando.
+    private struct CorsaFlusso: Equatable {
+        let id = UUID()
+        let da: Double, a: Double
+        let inizio: Date
+        let durata: Double
+        func off(_ t: Date) -> Double {
+            let u = min(1, max(0, t.timeIntervalSince(inizio) / durata))
+            return da + (a - da) * (1 - pow(1 - u, 3))
+        }
+    }
+
+    private func offAdesso(_ t: Date) -> Double { corsa?.off(t) ?? off }
+    private func indice(_ o: Double) -> Int { min(max(0, Int(o.rounded())), max(0, voci.count - 1)) }
+
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Text("DIGGING").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
-                Text(pos < voci.count ? "\(RigaCerca.numero(pos + 1)) / \(RigaCerca.numero(quanti))" : "").font(Theme.mono(10)).tracking(1).foregroundStyle(Theme.muted)
-                Spacer()
-                Button("Chiudi") { Suoni.testa(); ascolto.chiudi(); dismiss() }
-                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: corsa == nil)) { tl in
+            let o = offAdesso(tl.date)
+            let k = indice(o)
+            VStack(spacing: 12) {
+                HStack(spacing: 10) {
+                    Text("DIGGING").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
+                    Text(voci.isEmpty ? "" : "\(RigaCerca.numero(k + 1)) / \(RigaCerca.numero(quanti))").font(Theme.mono(10)).tracking(1).foregroundStyle(Theme.muted)
+                    Spacer()
+                    Button("Chiudi") { Suoni.testa(); ascolto.chiudi(); dismiss() }
+                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
+                }
+                if !voci.isEmpty {
+                    flusso(o)
+                    info(voci[k])
+                    brano
+                    comandi
+                    Text("Scorri le copertine. Tocca quella al centro per la scheda, tirala su per il carrello.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
+                } else if !finiti {
+                    Spacer()
+                    ProgressView().tint(Theme.accent)
+                    Spacer()
+                } else {
+                    Spacer()
+                    Text("FINITI").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
+                    Text("Hai sfogliato tutti i dischi").font(.system(size: 15)).foregroundStyle(Theme.muted)
+                    Spacer()
+                }
             }
-            if pos < voci.count {
-                carta(voci[pos])
-                brano
-                comandi
-                Text("Scorri: a sinistra salti, a destra nel carrello. Tocca la copertina per la scheda.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
-            } else if !finiti {
-                Spacer()
-                ProgressView().tint(Theme.accent)
-                Spacer()
-            } else {
-                Spacer()
-                Text("FINITI").font(Theme.mono(11, .bold)).tracking(2).foregroundStyle(Theme.glow)
-                Text("Hai sfogliato tutti i dischi").font(.system(size: 15)).foregroundStyle(Theme.muted)
-                Spacer()
-            }
+            // lo scatto quando una copertina passa al centro (col dito o mentre corre)
+            .onChange(of: k) { _, _ in if asse == .lato || corsa != nil { Suoni.tocco() } }
         }
         .padding(.horizontal, 18).padding(.top, 12).padding(.bottom, 16)
         .background(Color.black.ignoresSafeArea())
@@ -429,47 +462,205 @@ struct ScavaView: View {
             Suoni.chatPronta()
         }
         .task(id: discoDavanti) { await suonaDisco() }
+        .task(id: discoDavanti) {
+            // il prezzo solo della copertina ferma al centro: scorrendo non parte una richiesta per ogni disco
+            guard pos < voci.count else { return }
+            await prezzi.carica(voci[pos].id, client: seller.client, valuta: seller.currency)
+        }
         .task(id: pos) { await rifornisci() }
         .onDisappear { ascolto.chiudi() }
         .sheet(item: $scheda) { v in SchedaCerca(voce: v).environment(seller) }
     }
 
-    private func carta(_ v: VoceCerca) -> some View {
+    // MARK: Cover Flow
+
+    /// Il lato della copertina al centro e dove sta, nello spazio che c'è.
+    private static func misure(_ W: Double, _ H: Double) -> (cw: Double, top: Double) {
+        let cw = max(120, min(W * 0.6, H - 34, 330))
+        return (cw, max(4, (H - 30 - cw) / 2))
+    }
+
+    /// Le copertine a dischi: quella al centro guarda te, le altre ai lati girate di 62° e impilate, più scure; sotto la riga
+    /// di luce verde e il riflesso, come il Cover Flow di Apple.
+    private func flusso(_ o: Double) -> some View {
         GeometryReader { g in
-            let lato = max(120, min(g.size.width, g.size.height - 96, 520))
-            VStack(alignment: .leading, spacing: 8) {
-                AsyncImage(url: v.copertina ?? v.miniatura) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
-                    .frame(width: lato, height: lato)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .shadow(color: .black.opacity(0.6), radius: 20, y: 10)
-                    .frame(maxWidth: .infinity)
-                    .onTapGesture { Suoni.tocco(); scheda = v }
-                Text(v.nome).font(.system(size: 20, weight: .bold)).lineLimit(1)
-                Text(v.meta).font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
-                let p = prezzi.prezzo(v.id)
-                (Text(PrezziCerca.testo(p)).foregroundColor(Theme.money).fontWeight(.bold)
-                    + Text((p.map { $0.da == nil ? "" : " · \($0.inVendita) in vendita" } ?? "") + (carrello.contiene(v.id) ? " · nel carrello" : "")))
-                    .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
+            let W = Double(g.size.width), H = Double(g.size.height)
+            let (cw, top) = Self.misure(W, H)
+            ZStack(alignment: .topLeading) {
+                LinearGradient(stops: [.init(color: Theme.glow.opacity(0), location: 0), .init(color: Theme.glow.opacity(0.75), location: 0.3),
+                                       .init(color: Theme.glow.opacity(0.75), location: 0.7), .init(color: Theme.glow.opacity(0), location: 1)],
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(width: max(0, W - 36), height: 1)
+                    .shadow(color: Theme.glow, radius: 3)
+                    .offset(x: 18, y: top + cw + 6)
+                    .zIndex(300)
+                    .allowsHitTesting(false)
+                ForEach(Array(voci.enumerated()), id: \.element.id) { i, v in
+                    let d = Double(i) - o, ad = abs(d)
+                    if ad <= 3.6 {
+                        let su = cartaSu == i ? alzata : 0
+                        let u = min(1, max(0, Double(-su) / (cw * 1.1)))
+                        copertina(v, lato: cw, scuro: 0.45 * min(1, ad))
+                            .modifier(FlussoCoverFlow(d: d, cw: cw))
+                            .scaleEffect(CGFloat(vola == i ? 0.82 : 1 - 0.18 * u))
+                            .offset(y: vola == i ? CGFloat(-cw * 1.4) : su)
+                            .opacity(vola == i ? 0 : (ad > 3.2 ? 0 : min(1, 3.6 - ad)) * (1 - 0.75 * u))
+                            .offset(x: W / 2 - cw / 2, y: top)
+                            .zIndex(200 - (ad * 10).rounded())
+                            .allowsHitTesting(false)
+                    }
+                }
             }
-            .overlay(alignment: .topLeading) { etichetta("CARRELLO", Theme.glow).opacity(Double(max(0, spinta / 90))).padding(18) }
-            .overlay(alignment: .topTrailing) { etichetta("SALTA", Theme.text).opacity(Double(max(0, -spinta / 90))).padding(18) }
-            .offset(x: spinta)
-            .rotationEffect(.degrees(Double(spinta / 22)))
-            .gesture(DragGesture(minimumDistance: 8)
-                .onChanged { spinta = $0.translation.width }
-                .onEnded { e in
-                    if e.translation.width > 90 { vai(tieni: true) }
-                    else if e.translation.width < -90 { vai(tieni: false) }
-                    else { withAnimation(.spring(duration: 0.3)) { spinta = 0 } }
-                })
-            .task { await prezzi.carica(v.id, client: seller.client, valuta: seller.currency) }
+            .frame(width: W, height: H, alignment: .topLeading)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { segue($0, W: W, cw: cw) }
+                    .onEnded { fine($0, W: W, cw: cw) }
+            )
+        }
+        .padding(.horizontal, -18)                                         // le copertine di lato arrivano ai bordi dello schermo
+        .clipped()
+    }
+
+    private func copertina(_ v: VoceCerca, lato: Double, scuro: Double) -> some View {
+        let forma = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        let foto = AsyncImage(url: v.copertina ?? v.miniatura) { $0.resizable().scaledToFill() } placeholder: { Theme.panelHigh }
+        return foto
+            .frame(width: lato, height: lato)
+            .overlay(Color.black.opacity(scuro))
+            .clipShape(forma)
+            .shadow(color: .black.opacity(0.65), radius: 18, y: 9)
+            // il riflesso sotto, che sfuma (si gira con la copertina)
+            .overlay(alignment: .top) {
+                foto
+                    .frame(width: lato, height: lato)
+                    .overlay(Color.black.opacity(scuro))
+                    .clipShape(forma)
+                    .scaleEffect(x: 1, y: -1)
+                    .mask(LinearGradient(stops: [.init(color: .black.opacity(0.22), location: 0), .init(color: .clear, location: 0.28)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .offset(y: lato + 3)
+                    .allowsHitTesting(false)
+            }
+    }
+
+    /// La copertina sotto il dito (la più davanti fra quelle che lo contengono), con la stessa prospettiva.
+    private func cartaSotto(_ x: Double, W: Double, cw: Double) -> Int? {
+        let o = offAdesso(Date())
+        var meglio: (i: Int, z: Double)?
+        let P = cw * 2.3
+        for i in voci.indices {
+            let d = Double(i) - o, ad = abs(d)
+            guard ad <= 3.2 else { continue }
+            let a = min(1, ad), sg: Double = d < 0 ? -1 : (d > 0 ? 1 : 0)
+            let px = sg * (a * cw * 0.64 + max(0, ad - 1) * cw * 0.26), z = -(a * 0.34 + max(0, ad - 1) * 0.06) * cw
+            let k = P / (P - z), centro = W / 2 + px * k, mezzo = cw / 2 * cos(a * 62 * .pi / 180) * k
+            if abs(x - centro) <= max(6, mezzo), meglio.map({ 200 - ad * 10 > $0.z }) ?? true { meglio = (i, 200 - ad * 10) }
+        }
+        return meglio?.i
+    }
+
+    private func segue(_ v: DragGesture.Value, W: Double, cw: Double) {
+        guard vola == nil, !voci.isEmpty else { return }
+        let dx = Double(v.translation.width), dy = Double(v.translation.height)
+        if asse == .nessuno {
+            guard hypot(dx, dy) >= 6 else { return }
+            off = offAdesso(Date())
+            corsa = nil
+            off0 = off
+            let carta = cartaSotto(Double(v.startLocation.x), W: W, cw: cw)
+            asse = abs(dx) >= abs(dy) ? .lato : (dy < 0 && carta != nil && carta == indice(off) ? .su : .giu)
+            cartaSu = asse == .su ? carta : nil
+        }
+        switch asse {
+        case .lato:
+            let n = Double(voci.count - 1), o = off0 - dx / (cw * 0.32)
+            off = o < 0 ? o * 0.35 : (o > n ? n + (o - n) * 0.35 : o)          // ai capi si allunga appena e torna
+        case .su:
+            alzata = CGFloat(min(0, dy))
+        default:
+            break
         }
     }
 
-    private func etichetta(_ t: String, _ c: Color) -> some View {
-        Text(t).font(Theme.mono(13, .bold)).tracking(2).foregroundStyle(c)
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(c, lineWidth: 2))
+    private func fine(_ v: DragGesture.Value, W: Double, cw: Double) {
+        defer { asse = .nessuno }
+        guard vola == nil, !voci.isEmpty else { return }
+        switch asse {
+        case .lato:
+            let lancio = -Double(v.velocity.width) / 1000 * 9 * 18 / (cw * 0.32)   // inerzia come JARVIS: più veloce, più copertine
+            vaiA(Int((off + lancio).rounded()))
+        case .su:
+            if -Double(v.translation.height) > cw * 0.45 || v.velocity.height < -500 {
+                nelCarrello()
+            } else {
+                withAnimation(.spring(duration: 0.26, bounce: 0.35)) { alzata = 0 }
+                Task { @MainActor in try? await Task.sleep(for: .milliseconds(270)); if alzata == 0 { cartaSu = nil } }
+            }
+        case .giu:
+            break
+        case .nessuno:
+            // un tocco: di lato la porta al centro, al centro apre la scheda
+            guard let i = cartaSotto(Double(v.startLocation.x), W: W, cw: cw), voci.indices.contains(i) else { return }
+            if i != indice(offAdesso(Date())) { Suoni.tocco(); vaiA(i) }
+            else { Suoni.tocco(); scheda = voci[i] }
+        }
+    }
+
+    /// Porta la copertina `k` al centro; quando si ferma, suona.
+    private func vaiA(_ k: Int) {
+        guard !voci.isEmpty else { return }
+        let a = Double(min(max(0, k), voci.count - 1))
+        let da = offAdesso(Date())
+        let c = CorsaFlusso(da: da, a: a, inizio: Date(), durata: min(0.7, 0.26 + abs(a - da) * 0.07))
+        corsa = c
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(c.durata))
+            guard corsa?.id == c.id else { return }
+            off = c.a
+            corsa = nil
+            pos = Int(c.a)
+        }
+    }
+
+    /// Nel carrello (il tasto o la copertina tirata su): sale e sparisce, poi passa alla prossima.
+    private func nelCarrello() {
+        let k = indice(offAdesso(Date()))
+        guard voci.indices.contains(k) else { return }
+        let v = voci[k]
+        if !carrello.contiene(v.id) {
+            carrello.metti(v, prezzo: prezzi.prezzo(v.id), valuta: seller.currency)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+        Suoni.tocco()
+        cartaSu = k
+        withAnimation(.timingCurve(0.4, 0, 0.6, 1, duration: 0.28)) { vola = k }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { vola = nil; alzata = 0; cartaSu = nil }
+            if k < voci.count - 1 { vaiA(k + 1) }
+        }
+    }
+
+    /// ✕: la prossima.
+    private func salta() {
+        Suoni.tocco()
+        let k = indice(offAdesso(Date()))
+        if k < voci.count - 1 { vaiA(k + 1) }
+    }
+
+    private func info(_ v: VoceCerca) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(v.nome).font(.system(size: 20, weight: .bold)).lineLimit(1)
+            Text(v.meta).font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
+            let p = prezzi.prezzo(v.id)
+            (Text(PrezziCerca.testo(p)).foregroundColor(Theme.money).fontWeight(.bold)
+                + Text((p.map { $0.da == nil ? "" : " · \($0.inVendita) in vendita" } ?? "") + (carrello.contiene(v.id) ? " · nel carrello" : "")))
+                .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var brano: some View {
@@ -494,14 +685,14 @@ struct ScavaView: View {
 
     private var comandi: some View {
         HStack(spacing: 30) {
-            tondo("xmark", "Salta") { vai(tieni: false) }
+            tondo("xmark", "Salta") { salta() }
             Button { Suoni.tocco(); ascolto.playPausa() } label: {
                 Image(systemName: ascolto.suona ? "pause.fill" : "play.fill").font(.system(size: 24, weight: .bold)).foregroundStyle(Color.black)
                     .frame(width: 68, height: 68).background(Theme.accent, in: Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(ascolto.suona ? "Pausa" : "Riproduci")
-            tondo("cart.badge.plus", "Nel carrello") { vai(tieni: true) }
+            tondo("cart.badge.plus", "Nel carrello") { nelCarrello() }
         }
     }
 
@@ -514,22 +705,6 @@ struct ScavaView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(nome)
-    }
-
-    private func vai(tieni: Bool) {
-        guard pos < voci.count else { return }
-        let v = voci[pos]
-        if tieni && !carrello.contiene(v.id) {
-            carrello.metti(v, prezzo: prezzi.prezzo(v.id), valuta: seller.currency)
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        }
-        Suoni.tocco()
-        withAnimation(.easeIn(duration: 0.3)) { spinta = tieni ? 480 : -480 }
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(300))
-            var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { spinta = 0; pos += 1 }
-        }
     }
 
     /// Quando mancano pochi dischi alla fine della fila, legge la pagina dopo.
@@ -552,5 +727,34 @@ struct ScavaView: View {
         await ascolto.prepara(r)
         guard !Task.isCancelled, ascolto.releaseID == id else { return }
         if let i = ascolto.brani.firstIndex(where: { ascolto.fonteDi($0) != .nessuna }) { ascolto.metti(i) }
+    }
+}
+
+
+/// V86 · Il Cover Flow di Digging (come la tab PAGINE di JARVIS): la copertina `d` posti dal centro si sposta di lato, va
+/// indietro e gira di 62° attorno al suo asse, con la prospettiva centrata sulla copertina.
+private struct FlussoCoverFlow: GeometryEffect {
+    let d: Double
+    let cw: Double
+
+    var animatableData: EmptyAnimatableData {
+        get { EmptyAnimatableData() }
+        set {}
+    }
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        let ad = abs(d), a = min(1, ad), sg: Double = d < 0 ? -1 : (d > 0 ? 1 : 0)
+        let x = sg * (a * cw * 0.64 + max(0, ad - 1) * cw * 0.26)
+        let rot = -sg * a * 62 * .pi / 180
+        let z = -(a * 0.34 + max(0, ad - 1) * 0.06) * cw
+        let mx = Double(size.width) / 2, my = Double(size.height) / 2
+        var m = CATransform3DMakeTranslation(-mx, -my, 0)
+        m = CATransform3DConcat(m, CATransform3DMakeRotation(rot, 0, 1, 0))
+        m = CATransform3DConcat(m, CATransform3DMakeTranslation(x, 0, z))
+        var prospettiva = CATransform3DIdentity
+        prospettiva.m34 = -1 / (cw * 2.3)
+        m = CATransform3DConcat(m, prospettiva)
+        m = CATransform3DConcat(m, CATransform3DMakeTranslation(mx, my, 0))
+        return ProjectionTransform(m)
     }
 }
