@@ -13,6 +13,8 @@ struct BersaglioAscolto: Identifiable {
     let releaseID: Int
     let titolo: String
     let origine: CGPoint
+    /// V87 · aperta da Digging (giù sulla copertina): riprende la traccia che sta suonando e, chiusa, la musica continua.
+    var continua = false
 }
 
 /// Il tasto ▶ sopra la copertina tonda: tutta la copertina è il bersaglio del tocco.
@@ -111,7 +113,7 @@ struct FinestraAscolto: View {
         }
         .ignoresSafeArea()
         .task { await apri() }
-        .onDisappear { ascolto.chiudi() }               // comunque si chiuda, la musica si ferma
+        .onDisappear { if !bersaglio.continua { ascolto.chiudi() } }   // comunque si chiuda, la musica si ferma (da Digging no)
     }
 
     // MARK: - Apertura e chiusura
@@ -127,6 +129,8 @@ struct FinestraAscolto: View {
                 Suoni.chatPronta()
             }
         }
+        // V87: da Digging il disco è già nel lettore: si vede la traccia che suona, senza ricaricarlo
+        if bersaglio.continua, ascolto.releaseID == bersaglio.releaseID, !ascolto.brani.isEmpty { leggo = false; return }
         let letta = await seller.scheda(bersaglio.releaseID)
         defer { leggo = false }
         if let r = letta, !Task.isCancelled {
@@ -139,7 +143,7 @@ struct FinestraAscolto: View {
         if case .chiude(_) = fase { return }
         Suoni.tocco()
         Suoni.chatPronta()
-        ascolto.chiudi()
+        if !bersaglio.continua { ascolto.chiudi() }      // V87: da Digging la traccia scelta continua
         fase = .chiude(Date())
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(Int(durataChiude * 1000) + 20))

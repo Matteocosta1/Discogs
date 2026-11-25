@@ -386,6 +386,8 @@ struct ScavaView: View {
     @State private var cartaSu: Int?
     @State private var alzata: CGFloat = 0
     @State private var vola: Int?
+    /// V87 · giù sulla copertina al centro: la finestra ASCOLTO con le tracce del disco.
+    @State private var tracce: BersaglioAscolto?
     @State private var leggo = true
     private let ascolto = Ascolto.shared
     private let carrello = Carrello.shared
@@ -403,7 +405,7 @@ struct ScavaView: View {
     /// Cambia quando cambia il disco davanti (anche se arriva dopo, a fine fila).
     private var discoDavanti: Int { pos < voci.count ? voci[pos].id : 0 }
 
-    private enum AsseDito { case nessuno, lato, su, giu }
+    private enum AsseDito { case nessuno, lato, su, giu, nulla }
 
     /// Il viaggio verso una copertina (inerzia del dito, un tocco di lato, ✕, il carrello): rallenta arrivando.
     private struct CorsaFlusso: Equatable {
@@ -437,7 +439,7 @@ struct ScavaView: View {
                     info(voci[k])
                     brano
                     comandi
-                    Text("Scorri le copertine. Tocca quella al centro per la scheda, tirala su per il carrello.")
+                    Text("Scorri le copertine. Tocca quella al centro per la scheda; su: nel carrello; giù: le tracce.")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
                 } else if !finiti {
                     Spacer()
@@ -468,8 +470,9 @@ struct ScavaView: View {
             await prezzi.carica(voci[pos].id, client: seller.client, valuta: seller.currency)
         }
         .task(id: pos) { await rifornisci() }
-        .onDisappear { ascolto.chiudi() }
+        .onDisappear { if tracce == nil { ascolto.chiudi() } }           // V87: con le tracce aperte sopra la musica continua
         .sheet(item: $scheda) { v in SchedaCerca(voce: v).environment(seller) }
+        .finestraAscolto($tracce, seller: seller)
     }
 
     // MARK: Cover Flow
@@ -486,6 +489,8 @@ struct ScavaView: View {
         GeometryReader { g in
             let W = Double(g.size.width), H = Double(g.size.height)
             let (cw, top) = Self.misure(W, H)
+            let fuori = g.frame(in: .global)
+            let centroCopertina = CGPoint(x: fuori.minX + W / 2, y: fuori.minY + top + cw / 2)
             ZStack(alignment: .topLeading) {
                 LinearGradient(stops: [.init(color: Theme.glow.opacity(0), location: 0), .init(color: Theme.glow.opacity(0.75), location: 0.3),
                                        .init(color: Theme.glow.opacity(0.75), location: 0.7), .init(color: Theme.glow.opacity(0), location: 1)],
@@ -516,7 +521,7 @@ struct ScavaView: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { segue($0, W: W, cw: cw) }
-                    .onEnded { fine($0, W: W, cw: cw) }
+                    .onEnded { fine($0, W: W, cw: cw, origine: centroCopertina) }
             )
         }
         .padding(.horizontal, -18)                                         // le copertine di lato arrivano ai bordi dello schermo
@@ -570,8 +575,9 @@ struct ScavaView: View {
             corsa = nil
             off0 = off
             let carta = cartaSotto(Double(v.startLocation.x), W: W, cw: cw)
-            asse = abs(dx) >= abs(dy) ? .lato : (dy < 0 && carta != nil && carta == indice(off) ? .su : .giu)
-            cartaSu = asse == .su ? carta : nil
+            let alCentro = carta != nil && carta == indice(off)
+            asse = abs(dx) >= abs(dy) ? .lato : (alCentro ? (dy < 0 ? .su : .giu) : .nulla)
+            cartaSu = asse == .su || asse == .giu ? carta : nil
         }
         switch asse {
         case .lato:
@@ -579,12 +585,14 @@ struct ScavaView: View {
             off = o < 0 ? o * 0.35 : (o > n ? n + (o - n) * 0.35 : o)          // ai capi si allunga appena e torna
         case .su:
             alzata = CGFloat(min(0, dy))
+        case .giu:
+            alzata = CGFloat(max(0, dy) * 0.45)                                // V87: scende poco, con resistenza
         default:
             break
         }
     }
 
-    private func fine(_ v: DragGesture.Value, W: Double, cw: Double) {
+    private func fine(_ v: DragGesture.Value, W: Double, cw: Double, origine: CGPoint) {
         defer { asse = .nessuno }
         guard vola == nil, !voci.isEmpty else { return }
         switch asse {
@@ -599,6 +607,15 @@ struct ScavaView: View {
                 Task { @MainActor in try? await Task.sleep(for: .milliseconds(270)); if alzata == 0 { cartaSu = nil } }
             }
         case .giu:
+            // V87: giù sulla copertina al centro: la finestra ASCOLTO con le tracce; la traccia scelta continua in Digging
+            let apre = Double(alzata) > cw * 0.1
+            withAnimation(.spring(duration: 0.26, bounce: 0.35)) { alzata = 0 }
+            Task { @MainActor in try? await Task.sleep(for: .milliseconds(270)); if alzata == 0 { cartaSu = nil } }
+            let k = indice(offAdesso(Date()))
+            if apre, voci.indices.contains(k) {
+                apriFinestraAscolto(BersaglioAscolto(releaseID: voci[k].id, titolo: voci[k].nome, origine: origine, continua: true), in: $tracce)
+            }
+        case .nulla:
             break
         case .nessuno:
             // un tocco: di lato la porta al centro, al centro apre la scheda
