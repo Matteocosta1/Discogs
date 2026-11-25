@@ -27,7 +27,7 @@ struct VinylHustlerApp: App {
         .modelContainer(for: Disc.self)
         .onChange(of: phase) { _, newPhase in
             if newPhase == .background { OrderWatcher.schedule() }
-            // V91: entrando la musica di fuori si abbassa; uscendo torna alle altre app
+            // V92: entrando la musica di fuori si ferma; uscendo l'audio torna alle altre app
             if newPhase == .active { SessioneAudio.inApp() }
             if newPhase == .background { SessioneAudio.fuori() }
         }

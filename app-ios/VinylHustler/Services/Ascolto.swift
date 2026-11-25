@@ -456,16 +456,16 @@ final class Ascolto {
     }
 }
 
-/// V91 · Chi comanda l'audio (entrando nell'app la musica di fuori si abbassa).
-///   · nell'app: i suoni dell'interfaccia stanno sopra la musica delle altre app, che iOS abbassa sfumando;
-///   · parte una nostra traccia (anteprima, brano intero, video): la musica di fuori si ferma;
-///   · fuori dall'app: l'audio torna alle altre app, la loro musica risale (o riparte, se l'app lo fa).
+/// V91 · Chi comanda l'audio (V92, deciso da Alessandro: entrando nell'app la musica di fuori si ferma).
+///   · nell'app: l'audio è dell'app, la musica delle altre app si ferma (la ferma iOS);
+///   · parte una nostra traccia (anteprima, brano intero, video): l'audio resta nostro;
+///   · fuori dall'app: l'audio torna alle altre app (Musica di Apple riparte da sola; altre app, se lo fanno).
 /// Le chiamate vincono sempre: lo decide iOS.
 @MainActor
 enum SessioneAudio {
     static func inApp() {
         let s = AVAudioSession.sharedInstance()
-        try? s.setCategory(.playback, mode: .default, options: [.mixWithOthers, .duckOthers])
+        try? s.setCategory(.playback, mode: .default, options: [])
         try? s.setActive(true)
     }
 
