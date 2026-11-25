@@ -5,7 +5,7 @@ import UserNotifications
 
 // V79 — 05 / CERCA (come nel mock-up approvato): cercare dischi su Discogs, ascoltarli, metterli nel Carrello
 // e comprarli su Discogs. Discogs non ha un'API per comprare: l'acquisto si chiude sempre su Discogs
-// («Compra su Discogs» apre la pagina del disco con le copie in vendita). Per ogni disco Discogs dà solo
+// (V84: «For Sale · N» apre COPIE, la pagina del disco con le copie in vendita, dentro l'app). Per ogni disco Discogs dà solo
 // «da X € · N in vendita» (/marketplace/stats), non l'elenco delle copie.
 // Regole delle API di Discogs: accanto ai dati la frase in inglese, ogni dato porta alla sua pagina Discogs,
 // i prezzi non restano più di 6 ore (il Carrello li rilegge).

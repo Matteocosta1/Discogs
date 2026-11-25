@@ -3,7 +3,7 @@ import UIKit
 import WebKit
 
 // V83 — COPIE e COPIA (come nel mock-up approvato).
-// FOR SALE ↗ nella scheda del disco apre, dentro l'app, la pagina di Discogs con tutte le copie in vendita di quella
+// «For Sale · N» (V84, al posto di «Compra su Discogs») nella scheda del disco apre, dentro l'app, la pagina di Discogs con tutte le copie in vendita di quella
 // stampa (si ordinano e si filtrano con gli strumenti di Discogs). Quando si tocca una copia, la pagina non va avanti:
 // si apre la nostra scheda COPIA con i dati di quella copia, chiesti a Discogs uno per volta (GET /marketplace/listings,
 // nelle regole), e «Aggiungi al carrello». La pagina non viene mai letta né copiata: l'app guarda solo il link toccato.

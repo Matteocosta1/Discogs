@@ -99,10 +99,12 @@ struct SchedaCerca: View {
                             .buttonStyle(.plain)
                         }
                         .frame(height: 44)
-                        if let url = URL(string: "https://www.discogs.com/sell/release/\(id)?ev=rb") {
-                            Link(destination: url) { tastoBordo("Compra su Discogs", acceso: false) }
-                                .simultaneousGesture(TapGesture().onEnded { Suoni.tocco() })
+                        // V84: For Sale prende il posto di «Compra su Discogs»: apre COPIE, tutte le copie in vendita dentro l'app
+                        Button { Suoni.tocco(); copie = true } label: {
+                            tastoBordo(prezzi.prezzo(id).map { "For Sale · \($0.inVendita)" } ?? "For Sale", acceso: false)
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Apre tutte le copie in vendita")
                     }
                     if !versioni.isEmpty {
                         Text("VERSIONI · \(versioni.count)").font(Theme.mono(10, .bold)).tracking(2).foregroundStyle(Theme.glow)
@@ -141,14 +143,8 @@ struct SchedaCerca: View {
     private var numeri: some View {
         let p = prezzi.prezzo(id)
         return HStack(spacing: 6) {
-            // V83: le voci di Discogs («from», «For Sale»); FOR SALE apre COPIE: tutte le copie in vendita, dentro l'app
+            // V84: le voci di Discogs; For Sale ora è il tasto sotto, accanto ad Ascolta
             numero("FROM", p?.da.map { soldiIT($0, p?.valuta ?? seller.currency) } ?? (p == nil ? "…" : "—"), Theme.money)
-            Button { Suoni.tocco(); copie = true } label: {
-                numero("FOR SALE ↗", p.map { "\($0.inVendita)" } ?? "…", Theme.text, titoloAcceso: true)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityHint("Apre tutte le copie in vendita")
             // V81: i termini di Discogs, nello stesso ordine della pagina del disco: Have, poi Want
             numero("HAVE", (release?.community?.have ?? voce.have).formatted(.number.locale(Locale(identifier: "it_IT"))), Theme.text)
             numero("WANT", (release?.community?.want ?? voce.want).formatted(.number.locale(Locale(identifier: "it_IT"))), Theme.text)
