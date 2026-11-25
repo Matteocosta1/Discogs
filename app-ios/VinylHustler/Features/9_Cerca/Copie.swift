@@ -342,16 +342,22 @@ struct CopiaSheet: View {
         HStack(spacing: 10) {
             Button {
                 if dentro {
-                    let suDiscogs = carrello.suDiscogs(c.id)
+                    let suDiscogs = carrello.suDiscogs(c.id), nelDiscogs = carrello.nelCarrelloDiscogs(c.id)
                     Suoni.svuota(); carrello.togliCopia(c.id)
-                    if suDiscogs { web = .carrelloDiscogs }                 // V91: e dal carrello Discogs, con «Remove»
+                    if CarrelloDiscogs.acceso {
+                        if nelDiscogs { CarrelloDiscogs.shared.togli(c.id, nome: nomeDisco) }     // programmino: «Remove» da solo
+                    } else if suDiscogs { web = .carrelloDiscogs }          // V91: e dal carrello Discogs, con «Remove»
                 } else {
                     Suoni.tocco()
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     carrello.mettiCopia(c, valuta: seller.currency)
-                    // V91: subito la pagina di questa copia su Discogs, per metterla anche nel carrello Discogs («Add to Cart»)
-                    carrello.segnaSuDiscogs(c.id)
-                    web = .copia(c.id)
+                    if CarrelloDiscogs.acceso {
+                        CarrelloDiscogs.shared.aggiungi(c.id, nome: nomeDisco)              // programmino: «Add to Cart» da solo
+                    } else {
+                        // V91: subito la pagina di questa copia su Discogs, per metterla anche nel carrello Discogs («Add to Cart»)
+                        carrello.segnaSuDiscogs(c.id)
+                        web = .copia(c.id)
+                    }
                 }
             } label: {
                 // V91: come gli altri tasti (dentro nero, bordo verde); nel carrello si accende
@@ -376,6 +382,7 @@ struct CopiaSheet: View {
                 .simultaneousGesture(TapGesture().onEnded { Suoni.tocco() })
             }
         }
+        StatoCopiaDiscogs(copia: c.id)                      // programmino «Carrello Discogs»: solo se acceso
     }
 
     private func casella(_ t: String, _ v: String, _ colore: Color) -> some View {

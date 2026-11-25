@@ -28,6 +28,10 @@ struct VoceCarrello: Codable, Identifiable, Hashable {
     var venduta: Bool?
     /// V91: la sua pagina Discogs è stata aperta per «Add to Cart» (togliendola da qui si apre il carrello Discogs).
     var suDiscogs: Bool?
+    /// Programmino «Carrello Discogs» (spento): il programmino l'ha messa nel carrello Discogs.
+    var nelCarrelloDiscogs: Bool?
+    /// Programmino: quando è stata comprata (negli ACQUISTI).
+    var compratoIl: Date?
 
     /// Una riga del carrello: la copia o il disco (lo stesso disco può esserci in tutti e due i modi).
     var chiave: String { copia.map { "c\($0)" } ?? "r\(id)" }
@@ -48,6 +52,8 @@ final class Carrello {
     private(set) var aggiornato: Date?
     /// V91: le copie tolte perché su Discogs non sono più in vendita (comprate da te o da un altro), per l'avviso nel Carrello.
     private(set) var tolte: [String] = UserDefaults.standard.stringArray(forKey: "vh.copieTolte") ?? []
+    /// Programmino «Carrello Discogs» (spento): le copie comprate, dalla più recente.
+    private(set) var acquisti: [VoceCarrello] = Carrello.leggiAcquisti()
 
     nonisolated static func leggi() -> [VoceCarrello] {
         guard let d = UserDefaults.standard.data(forKey: chiave) else { return [] }
@@ -84,6 +90,29 @@ final class Carrello {
         salva()
     }
     func suDiscogs(_ copia: Int) -> Bool { voci.first { $0.copia == copia }?.suDiscogs == true }
+
+    // MARK: Programmino «Carrello Discogs» (spento)
+
+    func nelCarrelloDiscogs(_ copia: Int) -> Bool { voci.first { $0.copia == copia }?.nelCarrelloDiscogs == true }
+    func segnaNelCarrelloDiscogs(_ copia: Int, _ si: Bool) {
+        guard let i = voci.firstIndex(where: { $0.copia == copia }) else { return }
+        voci[i].nelCarrelloDiscogs = si
+        salva()
+    }
+    /// La copia esce dal nostro carrello perché su Discogs è stata tolta o comprata; se l'ho comprata io va negli ACQUISTI.
+    func esceDalCarrello(_ copia: Int, comprata: Bool) {
+        guard let i = voci.firstIndex(where: { $0.copia == copia }) else { return }
+        var v = voci.remove(at: i)
+        salva()
+        guard comprata else { return }
+        v.compratoIl = Date()
+        acquisti.insert(v, at: 0)
+        if let d = try? JSONEncoder().encode(acquisti) { UserDefaults.standard.set(d, forKey: "vh.acquisti") }
+    }
+    nonisolated static func leggiAcquisti() -> [VoceCarrello] {
+        guard let d = UserDefaults.standard.data(forKey: "vh.acquisti") else { return [] }
+        return (try? JSONDecoder().decode([VoceCarrello].self, from: d)) ?? []
+    }
     /// L'avviso delle copie tolte è stato visto.
     func avvisoVisto() { tolte = []; UserDefaults.standard.removeObject(forKey: "vh.copieTolte") }
 
@@ -222,6 +251,7 @@ struct CarrelloView: View {
                             .frame(maxWidth: .infinity).padding(.vertical, 30)
                     }
                     ForEach(carrello.voci, id: \.chiave) { v in RigaCarrello(voce: v, apriScheda: apriScheda, apriWeb: { web = $0 }) }
+                    SezioniCarrelloDiscogs(apriWeb: { web = $0 })     // programmino «Carrello Discogs»: solo se acceso
                     Text("Si compra su Discogs: ogni venditore spedisce il suo ordine. L'avviso arriva quando il prezzo più basso scende sotto la cifra che scrivi.")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
                 }
@@ -248,6 +278,7 @@ struct CarrelloView: View {
             .task {
                 guard !carrello.voci.isEmpty else { return }
                 leggo = true
+                await CarrelloDiscogs.shared.allinea(client: seller.client)      // programmino: solo se acceso
                 await carrello.aggiorna(client: seller.client, valuta: seller.currency)
                 leggo = false
                 _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
@@ -284,6 +315,9 @@ private struct RigaCarrello: View {
                         Text(voce.venduta == true ? "Non più in vendita su Discogs"
                              : [voce.venditore, voce.paese].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                             .font(.system(size: 12)).foregroundStyle(voce.venduta == true ? Theme.warn : Theme.muted).lineLimit(1)
+                        if CarrelloDiscogs.acceso && voce.nelCarrelloDiscogs == true {     // programmino
+                            Text("Anche nel carrello Discogs ✓").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.glow)
+                        }
                     } else {
                         (Text(voce.da.map { "da " + soldiIT($0, voce.valuta) } ?? "nessuno in vendita").foregroundColor(Theme.money).fontWeight(.bold)
                             + Text(" · \(voce.inVendita) in vendita" + (voce.annoPaese.isEmpty ? "" : " · \(voce.annoPaese)")))
@@ -295,7 +329,9 @@ private struct RigaCarrello: View {
                     Suoni.svuota()
                     if let c = voce.copia {
                         carrello.togliCopia(c)
-                        if voce.suDiscogs == true { apriWeb(.carrelloDiscogs) }
+                        if CarrelloDiscogs.acceso {
+                            if voce.nelCarrelloDiscogs == true { CarrelloDiscogs.shared.togli(c, nome: voce.nome) }   // programmino
+                        } else if voce.suDiscogs == true { apriWeb(.carrelloDiscogs) }
                     } else { carrello.togli(voce.id) }
                 } label: {
                     Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Color(white: 0.78))

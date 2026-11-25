@@ -28,7 +28,10 @@ struct VinylHustlerApp: App {
         .onChange(of: phase) { _, newPhase in
             if newPhase == .background { OrderWatcher.schedule() }
             // V92: entrando la musica di fuori si ferma; uscendo l'audio torna alle altre app
-            if newPhase == .active { SessioneAudio.inApp() }
+            if newPhase == .active {
+                SessioneAudio.inApp()
+                CarrelloDiscogs.shared.allineaSeServe(client: seller.client)    // programmino: solo se acceso, max ogni 30 min
+            }
             if newPhase == .background { SessioneAudio.fuori() }
         }
     }
