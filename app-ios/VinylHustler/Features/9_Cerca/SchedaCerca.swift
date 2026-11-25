@@ -581,7 +581,9 @@ struct ScavaView: View {
         }
         switch asse {
         case .lato:
-            let n = Double(voci.count - 1), o = off0 - dx / (cw * 0.32)
+            // V88: un disco alla volta («tac, tac, tac»): il dito sposta al massimo di una copertina, qualunque sia la spinta
+            let n = Double(voci.count - 1), k0 = off0.rounded()
+            let o = min(k0 + 1, max(k0 - 1, off0 - dx / (cw * 0.32)))
             off = o < 0 ? o * 0.35 : (o > n ? n + (o - n) * 0.35 : o)          // ai capi si allunga appena e torna
         case .su:
             alzata = CGFloat(min(0, dy))
@@ -597,8 +599,12 @@ struct ScavaView: View {
         guard vola == nil, !voci.isEmpty else { return }
         switch asse {
         case .lato:
-            let lancio = -Double(v.velocity.width) / 1000 * 9 * 18 / (cw * 0.32)   // inerzia come JARVIS: più veloce, più copertine
-            vaiA(Int((off + lancio).rounded()))
+            // V88: sempre una copertina alla volta: conta solo il verso del dito, non la velocità né la forza
+            let k0 = Int(off0.rounded()), dx = Double(v.translation.width), vx = Double(v.velocity.width)
+            let colpo = abs(dx) > 10 && abs(vx) > 300                            // un colpetto breve vale come uno lungo
+            if dx < -cw * 0.12 || (colpo && vx < 0) { vaiA(k0 + 1) }
+            else if dx > cw * 0.12 || (colpo && vx > 0) { vaiA(k0 - 1) }
+            else { vaiA(k0) }
         case .su:
             if -Double(v.translation.height) > cw * 0.45 || v.velocity.height < -500 {
                 nelCarrello()
