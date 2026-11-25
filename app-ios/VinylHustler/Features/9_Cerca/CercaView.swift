@@ -168,6 +168,11 @@ struct CercaView: View {
     @State private var artistaAperto: ArtistaTrovato?
     @State private var filtriDa: PuntoFiltri?
     @State private var ascolta: BersaglioAscolto?
+    // V89 · all'apertura la lista si stampa come in Bozze e Inventario (dall'alto, dietro la riga verde, «ACQUISIZIONE DATI»)
+    @Environment(\.sezioneVisibile) private var visibile
+    @State private var stampaT: Date?
+    @State private var stampando = false
+    @State private var stampaInAttesa = false
     private let carrello = Carrello.shared
     private let prezzi = PrezziCerca.shared
 
@@ -203,7 +208,7 @@ struct CercaView: View {
                         RigaArtista(artista: artista)
                             .onTapGesture { Suoni.tocco(); artistaAperto = artista }
                     }
-                    TestoDecodifica(testo: intestazione, da: cercaT, durata: 0.38)
+                    TestoDecodifica(testo: stampando ? "ACQUISIZIONE DATI" : intestazione, da: cercaT, durata: 0.38)
                         .font(Theme.mono(10, .bold)).tracking(2).foregroundStyle(Theme.glow)
                         .padding(.horizontal, 2).padding(.top, 2)
                     if let errore {
@@ -213,7 +218,7 @@ struct CercaView: View {
                             .font(.system(size: 14)).foregroundStyle(Theme.muted)
                             .frame(maxWidth: .infinity).padding(.vertical, 30)
                     }
-                    ForEach(mostrate) { v in
+                    ForEach(Array(mostrate.enumerated()), id: \.element.id) { i, v in
                         RigaCerca(voce: v, prezzo: prezzi.prezzo(v.id), nelCarrello: carrello.contiene(v.id),
                                   ascolta: { punto in
                                       apriFinestraAscolto(BersaglioAscolto(releaseID: v.id, titolo: v.nome, origine: punto), in: $ascolta)
@@ -222,6 +227,7 @@ struct CercaView: View {
                             .onTapGesture { Suoni.tocco(); scheda = v }
                             .task { await prezzi.carica(v.id, client: seller.client, valuta: seller.currency) }
                             .onAppear { if v.id == voci.last?.id { Task { await altre() } } }
+                            .stampa(stampaT, ritardo: ritardoStampa(i), durata: 0.45)
                     }
                     if carico { ProgressView().tint(Theme.accent).frame(maxWidth: .infinity).padding() }
                     Text("Dati e prezzi di Discogs. This application uses Discogs’ API but is not affiliated with, sponsored or endorsed by Discogs.")
@@ -250,6 +256,10 @@ struct CercaView: View {
             .fullScreenCover(item: $digging) { d in ScavaView(voci: d.voci, totale: d.totale, sorgente: d.sorgente).environment(seller) }
             .sheet(item: $artistaAperto) { a in ArtistaView(artista: a).environment(seller) }
             .task(id: testo) { await cercaArtista() }
+            .onChange(of: visibile, initial: true) { _, v in
+                guard v else { return }
+                if voci.isEmpty { stampaInAttesa = true } else { stampaLista() }
+            }
             .fullScreenCover(item: $filtriDa) { p in
                 FinestraFiltri(filtri: $filtri, testo: testo, origine: p.punto) {
                     var t = Transaction(); t.disablesAnimations = true
@@ -349,6 +359,7 @@ struct CercaView: View {
             if Task.isCancelled { return }
             let nuove = Self.unaPerAlbum(r.results.map(VoceCerca.init), gia: daCapo ? [] : voci)
             if daCapo { voci = nuove; cercaT = Date() } else { voci += nuove }
+            if stampaInAttesa && !voci.isEmpty { stampaInAttesa = false; stampaLista() }   // V89: la prima apertura, appena arrivano
             totale = r.pagination?.items ?? voci.count
             pagine = r.pagination?.pages ?? 1
             // con «Prezzo più basso» servono i prezzi di tutti i dischi letti
@@ -359,6 +370,26 @@ struct CercaView: View {
             if error.isCancellation { return }
             if suona { Suoni.errore() }
             errore = error.localizedDescription
+        }
+    }
+
+    /// V89 · come Bozze: quando parte la stampa di ogni riga (oltre la decima partono insieme, sono fuori schermo).
+    private func ritardoStampa(_ indice: Int) -> Double {
+        0.1 + Double(min(indice, 10)) * 0.12
+    }
+
+    /// V89 · come Bozze: all'apertura di Cerca la lista si stampa, col suono del caricamento che sfuma alla fine.
+    private func stampaLista() {
+        let righe = min(mostrate.count, 11)
+        guard righe > 0 else { stampaT = nil; return }
+        stampaT = Date()
+        stampando = true
+        Suoni.chatCarica()
+        let durata = ritardoStampa(righe - 1) + 0.45
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(Int(durata * 1000)))
+            stampando = false
+            Suoni.chatPronta()
         }
     }
 
