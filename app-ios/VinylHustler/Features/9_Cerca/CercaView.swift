@@ -324,7 +324,7 @@ struct CercaView: View {
 
     @ToolbarContentBuilder private var strumenti: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
-            Button { Suoni.camera(); scansiona = true } label: { Image(systemName: "viewfinder.circle") }
+            Button { Suoni.camera(); scansiona = true } label: { Image(systemName: "camera") }      // V92: la macchina fotografica della barra (era nel mock-up dalla V91)
                 .accessibilityLabel("Scansiona un disco")
         }
         ToolbarItem(placement: .topBarTrailing) {
